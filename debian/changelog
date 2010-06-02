@@ -1,3 +1,23 @@
+tor (0.2.1.26-1~lennyvolatile1) lenny-volatile; urgency=low
+
+  * Upload to lenny-volatile.
+    The 0.2.0.x tree in debian stable (lenny) is end-of-lifed by upstream.
+
+    These versions still work for now as we have updated the list of
+    authority keys that come with Tor to keep our packages functional.
+    However, there are significant benefits to running a more current
+    version.
+
+    If servers that currently run our 0.2.0.x package upgrade to a newer
+    version the network as a whole should become faster.  If clients
+    upgrade they should pick smarter paths through the network.
+
+    Access to hidden services might be completely broken or at least
+    unreliable for old clients;  Updating to the 0.2.1.x tree restores
+    that functionality.
+
+ -- Peter Palfrader <weasel@debian.org>  Wed, 02 Jun 2010 16:40:16 +0200
+
 tor (0.2.1.26-1) unstable; urgency=low
 
   * New upstream version.
