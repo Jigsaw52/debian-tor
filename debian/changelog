@@ -1,8 +1,9 @@
 tor (0.2.2.14-alpha-dev-1) experimental; urgency=low
 
   * development build.
+  * Forward port patches/06_add_compile_time_defaults.
 
- -- Peter Palfrader <weasel@debian.org>  Wed, 18 Aug 2010 15:21:22 +0200
+ -- Peter Palfrader <weasel@debian.org>  Wed, 18 Aug 2010 15:31:34 +0200
 
 tor (0.2.2.14-alpha-1) experimental; urgency=low
 
