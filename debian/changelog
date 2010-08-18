@@ -1,8 +1,194 @@
-tor (0.2.1.20-1) unstable; urgency=low
+tor (0.2.2.14-alpha-1) experimental; urgency=low
+
+  * New upstream version.
+    Among many other things:
+    - New config option "WarnUnsafeSocks 0" disables the warning that
+      occurs whenever Tor receives only an IP address instead of a
+      hostname. Setups that do DNS locally over Tor are fine, and we
+      shouldn't spam the logs in that case. (Closes: #497466)
+
+ -- Peter Palfrader <weasel@debian.org>  Thu, 15 Jul 2010 14:41:10 +0200
+
+tor (0.2.2.13-alpha-1) experimental; urgency=low
 
   * New upstream version.
 
- -- Peter Palfrader <weasel@debian.org>  Fri, 13 Nov 2009 19:02:47 +0100
+ -- Peter Palfrader <weasel@debian.org>  Sat, 24 Apr 2010 12:12:11 +0200
+
+tor (0.2.2.12-alpha-1) experimental; urgency=low
+
+  * New upstream version.
+
+ -- Peter Palfrader <weasel@debian.org>  Tue, 20 Apr 2010 12:23:00 +0200
+
+tor (0.2.2.11-alpha-1) experimental; urgency=low
+
+  * New upstream version.
+
+ -- Peter Palfrader <weasel@debian.org>  Sat, 17 Apr 2010 21:49:19 +0200
+
+tor (0.2.2.10-alpha-2) experimental; urgency=low
+
+  * In /etc/default/tor also source /etc/default/tor.vidalia if it exists
+    and if vidalia is installed.  We do this so that the vidalia package
+    can override some of our settings: People who have vidalia installed might
+    not want to run Tor as a system service. The vidalia .deb can ask them
+    that and then set run-daemon to no.
+
+ -- Peter Palfrader <weasel@debian.org>  Sat, 03 Apr 2010 15:24:11 +0200
+
+tor (0.2.2.10-alpha-1) experimental; urgency=low
+
+  * New upstream version.
+  * debian/rules:
+    - make manpage building properly depend on patch-stamp,
+    - Fix building in the absence of a debian/micro-revision.i file.
+
+ -- Peter Palfrader <weasel@debian.org>  Tue, 09 Mar 2010 14:06:48 +0100
+
+tor (0.2.2.9-alpha-1) experimental; urgency=low
+
+  * New upstream version.
+    - We no longer need to build-depend on a recent libssl-dev because
+      Tor now detects whether we need to explicitly turn on
+      autonegotiation at run-time rather than compile time.  Good.
+      (This also means we no longer need to conflict with newer
+       libssls when we built against an old one on backports.)
+    - The manpages are now built with asciidoc.  While the upstream
+      tarball already ships with the output of asciidoc, we instead
+      build the manpages during package build time so we can patch them.
+      + Therefore build-depend on asciidoc (>= 8.2), docbook-xml,
+        docbook-xsl, and xmlto.
+      + update 03_tor_manpage_in_section_8 to patch the .txt files now.
+      + Remove tor.1.in torify.1.in tor-gencert.1.in tor-resolve.1.in in
+        the doc directory during clean.
+      + And try to work around missing (and if it wasn't, broken)
+        build-system for the manpages.
+      + The torify.1 manpage gets installed by upstream, no longer need
+        to do it manually in debian/rules.
+    - The original design paper is no longer shipped with Tor.
+      + Remove debian/hexdump-*.pdf (which we used to work around
+        fig2dev bugs).
+      + No longer build the paper in debian/rules, and remove it from
+        debian/tor.docs.
+      + No longer build-depend on texlive-base-bin, texlive-latex-base,
+        texlive-fonts-recommended, transfig and ghostscript.
+    - Upstream tarballs no longer ship an AUTHORS file, or the website,
+      Removed these from debian/tor.docs.  No longer shipping parts of
+      the website also closes: #443560.
+    - Also no longer distribute doc/TODO and doc/HACKING in the debian
+      package.
+  * Move from comm to section net, where it might fit slightly better
+    (closes: #482801).
+  * Ship contrib/tor-exit-notice.html in the tor package (put it into
+    usr/share/doc/tor; closes: #568934).
+  * Add stark README.polipo with the instructions from Juliusz Chroboczek.
+    (closes: #413730)
+  * 0.2.2.4-alpha failed to ship test.h so we had included it in the
+    debian diff.  The upstream bug has long since been fixed so we should
+    probably stop shipping our own copy of test.h.
+  * Finally apply Peter Eisentraut's patch for tor's init script to support
+    status as an argument (closes: #526371).
+
+ -- Peter Palfrader <weasel@debian.org>  Sun, 28 Feb 2010 10:58:10 +0100
+
+tor (0.2.2.8-alpha-1) experimental; urgency=low
+
+  * New upstream version.
+
+ -- Peter Palfrader <weasel@debian.org>  Fri, 29 Jan 2010 23:22:35 +0100
+
+tor (0.2.2.7-alpha-2) experimental; urgency=low
+
+  * debian/rules: Minor cleanup (use a single variable for making up our
+    configure flags, not two).
+  * debian/rules: Remove logic that ignores the result of unit tests if
+    localhost does not resolve (or not to 127.0.0.1).  This should no
+    longer be necessary as our build chroots have gotten a lot better.
+  * Depend on and enable hardening-includes for building.
+
+ -- Peter Palfrader <weasel@debian.org>  Sun, 24 Jan 2010 13:22:26 +0100
+
+tor (0.2.2.7-alpha-1) experimental; urgency=medium
+
+  * New upstream version.
+    - Rotate keys (both v3 identity and relay identity) for moria1
+      and gabelmoo.
+    [and more]
+
+ -- Peter Palfrader <weasel@debian.org>  Wed, 20 Jan 2010 19:29:08 +0100
+
+tor (0.2.2.6-alpha-1) experimental; urgency=low
+
+  * New upstream version.
+    - Drop debian/patches/0a58567c-work-with-reneg-ssl.dpatch
+      (part of upstream).
+
+ -- Peter Palfrader <weasel@debian.org>  Mon, 23 Nov 2009 18:52:04 +0100
+
+tor (0.2.2.5-alpha-1) experimental; urgency=low
+
+  * New upstream version.
+  * Pick 0a58567ce3418f410cf1dd0143dd3e56b4a4bd1f from master git tree:
+    - work with libssl that has renegotiation disabled by default.
+    (debian/patches/0a58567c-work-with-reneg-ssl.dpatch)
+  * Therefore build-depend on libssl-dev >= 0.9.8k-6.  If we build against
+    earlier versions we will not work once libssl gets upgraded to a version
+    that disabled renegotiations.
+  * Change order of recommends from privoxy | polipo to polipo | privoxy.
+  * Allegedly echo -e is a bashism.  Remove it from debian/rules, we don't
+    need it anyways (closes: #478631).
+  * Change the dependency on tsocks to torsocks | tsocks (see: #554717).
+
+ -- Peter Palfrader <weasel@debian.org>  Sun, 15 Nov 2009 11:04:02 +0100
+
+tor (0.2.2.4-alpha-1) experimental; urgency=low
+
+  * New upstream version.
+  * The testsuite moved from src/or/test to src/test/test,
+    but let's call it using "make check" now.
+  * Upstream failed to ship src/test/test.h.  Ship it in debian/ and
+    manually copy it in place during configure and clean up in clean.
+    Let's not use the patch system as this will most likely be rectified
+    by next release.
+
+ -- Peter Palfrader <weasel@debian.org>  Sun, 11 Oct 2009 10:38:55 +0200
+
+tor (0.2.2.3-alpha-1) experimental; urgency=low
+
+  * New upstream version.
+
+ -- Peter Palfrader <weasel@debian.org>  Wed, 23 Sep 2009 10:27:40 +0200
+
+tor (0.2.2.2-alpha-1) experimental; urgency=low
+
+  * New upstream version.
+  * The files src/common/common_sha1.i src/or/or_sha1.i get changed
+    during the build - they contain the checksums of the individual
+    files that end up in the binary.  Of couse changes only end up
+    in the debian diff.gz after building a second time in the same
+    directory.  So, remove those files in clean to get both a cleaner
+    diff.gz and idempotent builds.
+  * If we have a debian/micro-revision.i, replace the one in src/or
+    with our copy so that this will be the revision that ends up in
+    the binary.  This is an informational only version string, but
+    it'd be kinda nice if it was (more) accurate nonetheless.
+    .
+    Of course this won't help if people manually patch around but
+    it's still preferable to claiming we are exactly upstream's source.
+    .
+    If we are building directly out of a git tree, update
+    debian/micro-revision.i in the clean target.
+
+ -- Peter Palfrader <weasel@debian.org>  Mon, 21 Sep 2009 14:51:20 +0200
+
+tor (0.2.2.1-alpha-1) experimental; urgency=low
+
+  * New upstream version.
+  * Forward port patches/03_tor_manpage_in_section_8.dpatch.
+  * Forward port patches/06_add_compile_time_defaults.dpatch.
+
+ -- Peter Palfrader <weasel@debian.org>  Thu, 03 Sep 2009 15:10:26 +0200
 
 tor (0.2.1.19-1) unstable; urgency=low
 
