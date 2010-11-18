@@ -1,3 +1,18 @@
+tor (0.2.1.26-2) unstable; urgency=medium
+
+  * No longer set ulimit -c to unlimited:
+    Up until now the init script (or actually /etc/default/tor) raised
+    the ulimit for coredumps to unlimited, so that Tor would produce
+    coredumps on assert errors or segfaults.  Coredumps however can
+    leak sensitive information, like cryptographic session keys and
+    clients' data should the core files get into the wrong hands.  As
+    such it seems prudent to only enable coredumps if the user or
+    operator explicitly asks for them, and knows what to do with them.
+  * Also include a cron.weekly job that removes old coredumps from
+    /var/lib/tor.  This action can be disabled in /etc/default/tor.
+
+ -- Peter Palfrader <weasel@debian.org>  Thu, 18 Nov 2010 12:11:33 +0100
+
 tor (0.2.1.26-1) unstable; urgency=low
 
   * New upstream version.
