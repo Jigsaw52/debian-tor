@@ -1,3 +1,22 @@
+tor (0.2.1.26-1~lenny+1) stable; urgency=low
+
+  * Upload to stable, since a potential future security upload
+    for openssl will break Tor 0.2.0.35, the version currently in
+    stable.
+    .
+    This libssl update will change how openssl does renegotiation,
+    and Tor 0.2.0.x relies on the old behaviour but does not yet
+    know how to tell openssl to stick to it.  The 0.2.1.x tree
+    has special support for newer openssls and sets the proper, new
+    flags so libssl continues to provide the old renegotiation
+    features.
+    .
+    The old-style renegotiation feature is potentially dangerous
+    in some cases, but it is believed that Tor does everything
+    correctly and thus can use it safely.
+
+ -- Peter Palfrader <weasel@debian.org>  Sat, 20 Nov 2010 11:24:32 +0100
+
 tor (0.2.1.26-1~lennyvolatile1) lenny-volatile; urgency=low
 
   * Upload to lenny-volatile.
