@@ -1,3 +1,11 @@
+tor (0.2.1.26-3) unstable; urgency=low
+
+  * Make sure the cronjob does not try to access a /var/lib/tor
+    that has already been removed (due to for instance package removal).
+    Thanks to Holger and piuparts for catching this.
+
+ -- Peter Palfrader <weasel@debian.org>  Sat, 20 Nov 2010 15:15:10 +0100
+
 tor (0.2.1.26-2) unstable; urgency=medium
 
   * No longer set ulimit -c to unlimited:
