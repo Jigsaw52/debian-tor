@@ -1,3 +1,11 @@
+tor (0.2.1.26-X)unstable; urgency=low
+
+  * Change section from comm to net.  This change was done in the
+    0.2.2.x tree in experimental during 0.2.2.9 (April 2010) in response
+    to bug #482801.
+
+ -- Peter Palfrader <weasel@debian.org>  Sat, 20 Nov 2010 15:59:44 +0100
+
 tor (0.2.1.26-3) unstable; urgency=low
 
   * Make sure the cronjob does not try to access a /var/lib/tor
