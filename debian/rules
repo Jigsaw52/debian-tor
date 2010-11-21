@@ -82,6 +82,7 @@ build: build-stamp
 
 build-stamp:  config.status
 	dh_testdir
+	! [ -e debian/micro-revision.i ] || cp debian/micro-revision.i src/or/micro-revision.i
 
 	$(MAKE)
 	@echo
@@ -131,6 +132,7 @@ clean: unpatch
 	rm -f build-stamp
 
 	[ ! -f Makefile ] || $(MAKE) distclean
+	! [ -e debian/micro-revision.i ] || rm -f src/or/micro-revision.i
 
 	dh_clean
 

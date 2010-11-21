@@ -1,10 +1,15 @@
-tor (0.2.1.26-X)unstable; urgency=low
+tor (0.2.1.26-X) unstable; urgency=low
 
   * Change section from comm to net.  This change was done in the
     0.2.2.x tree in experimental during 0.2.2.9 (April 2010) in response
     to bug #482801.
+  * If we have a debian/micro-revision.i, replace the one in src/or
+    with our copy so that this will be the revision that ends up in
+    the binary.  This is an informational only version string, but
+    it'd be kinda nice if it was (more) accurate nonetheless.
+    (Backported from 0.2.2.2-alpha-1 from September 2009.)
 
- -- Peter Palfrader <weasel@debian.org>  Sat, 20 Nov 2010 15:59:44 +0100
+ -- Peter Palfrader <weasel@debian.org>  Sun, 21 Nov 2010 14:54:42 +0100
 
 tor (0.2.1.26-3) unstable; urgency=low
 
