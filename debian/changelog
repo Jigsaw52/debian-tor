@@ -7,13 +7,17 @@ tor (0.2.1.26-1~lenny+X) Xtable; urgency=low
     client SSL objects.  We set it to immitate a browser, not a vhosting
     server. This resolves an incompatibility with openssl 0.9.8p and openssl
     1.0.0b.  Fixes bug 2204; bugfix on 0.2.1.1-alpha.
+  * Also from 0.2.1.27: Add maatuska as eighth v3 directory authority.
+    The directory authority servers are the trusted nodes that sign the
+    directory of all Tor servers.  This adds an 8th authority to the
+    existing list, improving robustness.
   * If we have a debian/micro-revision.i, replace the one in src/or
     with our copy so that this will be the revision that ends up in
     the binary.  This is an informational only version string, but
     it'd be kinda nice if it was (more) accurate nonetheless.
     (Backported from 0.2.2.2-alpha-1 from September 2009.)
 
- -- Peter Palfrader <weasel@debian.org>  Sun, 21 Nov 2010 15:33:19 +0100
+ -- Peter Palfrader <weasel@debian.org>  Sun, 21 Nov 2010 20:58:08 +0100
 
 tor (0.2.1.26-1~lenny+1) stable; urgency=low
 
