@@ -1,5 +1,12 @@
 tor (0.2.1.26-1~lenny+X) Xtable; urgency=low
 
+  * Add debian/patches/15_tlsext_host_name: Work around change in libssl0.9.8
+    (0.9.8g-15+lenny9 and 0.9.8o-3), taken from 0.2.1.27 (closes: #604198):
+    .
+    Do not set the tlsext_host_name extension on server SSL objects; only on
+    client SSL objects.  We set it to immitate a browser, not a vhosting
+    server. This resolves an incompatibility with openssl 0.9.8p and openssl
+    1.0.0b.  Fixes bug 2204; bugfix on 0.2.1.1-alpha.
   * If we have a debian/micro-revision.i, replace the one in src/or
     with our copy so that this will be the revision that ends up in
     the binary.  This is an informational only version string, but
