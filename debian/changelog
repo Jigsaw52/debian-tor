@@ -1,4 +1,4 @@
-tor (0.2.1.26-1~lenny+2) stable; urgency=low
+tor (0.2.1.26-1~lennyvolatile2) lenny-volatile; urgency=low
 
   * Add debian/patches/15_tlsext_host_name: Work around change in libssl0.9.8
     (0.9.8g-15+lenny9 and 0.9.8o-3), taken from 0.2.1.27 (closes: #604198):
@@ -18,25 +18,6 @@ tor (0.2.1.26-1~lenny+2) stable; urgency=low
     (Backported from 0.2.2.2-alpha-1 from September 2009.)
 
  -- Peter Palfrader <weasel@debian.org>  Sun, 21 Nov 2010 21:33:40 +0100
-
-tor (0.2.1.26-1~lenny+1) stable; urgency=low
-
-  * Upload to stable, since a potential future security upload
-    for openssl will break Tor 0.2.0.35, the version currently in
-    stable.
-    .
-    This libssl update will change how openssl does renegotiation,
-    and Tor 0.2.0.x relies on the old behaviour but does not yet
-    know how to tell openssl to stick to it.  The 0.2.1.x tree
-    has special support for newer openssls and sets the proper, new
-    flags so libssl continues to provide the old renegotiation
-    features.
-    .
-    The old-style renegotiation feature is potentially dangerous
-    in some cases, but it is believed that Tor does everything
-    correctly and thus can use it safely.
-
- -- Peter Palfrader <weasel@debian.org>  Sat, 20 Nov 2010 11:24:32 +0100
 
 tor (0.2.1.26-1~lennyvolatile1) lenny-volatile; urgency=low
 
