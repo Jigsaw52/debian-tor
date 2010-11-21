@@ -1,5 +1,12 @@
-tor (0.2.1.26-X) unstable; urgency=low
+tor (0.2.1.26-4) unstable; urgency=high
 
+  * Add debian/patches/15_tlsext_host_name: Work around change in libssl0.9.8
+    (0.9.8g-15+lenny9 and 0.9.8o-3), taken from 0.2.1.27 (closes: #604198):
+    .
+    Do not set the tlsext_host_name extension on server SSL objects; only on
+    client SSL objects.  We set it to immitate a browser, not a vhosting
+    server. This resolves an incompatibility with openssl 0.9.8p and openssl
+    1.0.0b.  Fixes bug 2204; bugfix on 0.2.1.1-alpha.
   * Change section from comm to net.  This change was done in the
     0.2.2.x tree in experimental during 0.2.2.9 (April 2010) in response
     to bug #482801.
@@ -9,7 +16,7 @@ tor (0.2.1.26-X) unstable; urgency=low
     it'd be kinda nice if it was (more) accurate nonetheless.
     (Backported from 0.2.2.2-alpha-1 from September 2009.)
 
- -- Peter Palfrader <weasel@debian.org>  Sun, 21 Nov 2010 14:54:42 +0100
+ -- Peter Palfrader <weasel@debian.org>  Sun, 21 Nov 2010 20:50:08 +0100
 
 tor (0.2.1.26-3) unstable; urgency=low
 
