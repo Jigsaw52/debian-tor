@@ -1,3 +1,9 @@
+tor (0.2.1.27-1) unstable; urgency=low
+
+  * New upstream version.
+
+ -- Peter Palfrader <weasel@debian.org>  Mon, 29 Nov 2010 16:26:10 +0100
+
 tor (0.2.1.26-4) unstable; urgency=high
 
   * Add debian/patches/15_tlsext_host_name: Work around change in libssl0.9.8
