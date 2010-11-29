@@ -1,8 +1,11 @@
 tor (0.2.1.27-1) unstable; urgency=low
 
   * New upstream version.
+    - remove debian/patches/15_tlsext_host_name (already included in new
+      upstream version).
+    - remove debian/patches/16_add_maatuska (ditto).
 
- -- Peter Palfrader <weasel@debian.org>  Mon, 29 Nov 2010 16:26:10 +0100
+ -- Peter Palfrader <weasel@debian.org>  Mon, 29 Nov 2010 16:34:25 +0100
 
 tor (0.2.1.26-4) unstable; urgency=high
 
