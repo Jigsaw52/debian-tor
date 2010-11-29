@@ -5,5 +5,3 @@ doc/HACKING
 doc/TODO
 doc/design-paper/tor-design.pdf
 doc/design-paper/tor-design.ps
-doc/website/stylesheet.css
-doc/website/tor-*
