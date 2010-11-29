@@ -17,6 +17,17 @@
 #include "orconfig.h"
 
 #include <assert.h>
+#ifdef MS_WINDOWS /*wrkard for dtls1.h >= 0.9.8m of "#include <winsock.h>"*/
+ #define WIN32_WINNT 0x400
+ #define _WIN32_WINNT 0x400
+ #define WIN32_LEAN_AND_MEAN
+ #if defined(_MSC_VER) && (_MSC_VER < 1300)
+    #include <winsock.h>
+ #else
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+ #endif
+#endif
 #include <openssl/ssl.h>
 #include <openssl/ssl3.h>
 #include <openssl/err.h>
@@ -898,7 +909,7 @@ tor_tls_new(int sock, int isServer)
 
 #ifdef SSL_set_tlsext_host_name
   /* Browsers use the TLS hostname extension, so we should too. */
-  {
+  if (!isServer) {
     char *fake_hostname = crypto_random_hostname(4,25, "www.",".com");
     SSL_set_tlsext_host_name(result->ssl, fake_hostname);
     tor_free(fake_hostname);
