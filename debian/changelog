@@ -1,4 +1,4 @@
-tor (0.2.1.27-2) unstable; urgency=low
+tor (0.2.1.27-X) Xnstable; urgency=low
 
   * Since the dawn of time (0.0.2pre19-1, January 2004, initial release
     of the debian package), the postinst script has changed ownership and
