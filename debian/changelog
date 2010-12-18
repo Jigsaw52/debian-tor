@@ -1,5 +1,7 @@
 tor (0.2.1.26-1~lenny+3) stable-security; urgency=low
 
+  * Housekeeping: Update IP address and port of directory authority gabelmoo
+    with data shipped in 0.2.1.28.
   * Since the dawn of time (0.0.2pre19-1, January 2004, initial release
     of the debian package), the postinst script has changed ownership and
     permissions of various trees like /var/lib/tor, /var/run/tor, and
