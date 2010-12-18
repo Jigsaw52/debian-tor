@@ -1,0 +1,28 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+
+@DPATCH@
+From 649ee99846966c87350cd3282639326f8b4ee4af Mon Sep 17 00:00:00 2001
+From: Nick Mathewson <nickm@torproject.org>
+Date: Mon, 13 Dec 2010 18:40:15 -0500
+Subject: [PATCH] Base SIZE_T_CEILING on SSIZE_T_MAX.
+
+---
+ src/common/torint.h |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/src/common/torint.h b/src/common/torint.h
+index d972286..665b0b4 100644
+--- a/src/common/torint.h
++++ b/src/common/torint.h
+@@ -331,7 +331,7 @@ typedef uint32_t uintptr_t;
+ #endif
+ 
+ /* Any size_t larger than this amount is likely to be an underflow. */
+-#define SIZE_T_CEILING (sizeof(char)<<(sizeof(size_t)*8 - 1))
++#define SIZE_T_CEILING (SSIZE_T_MAX-16)
+ 
+ #endif /* __TORINT_H */
+ 
+-- 
+1.7.1
+

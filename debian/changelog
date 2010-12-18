@@ -1,9 +1,12 @@
-tor (0.2.1.26-6) unstable; urgency=low
+tor (0.2.1.26-6) unstable; urgency=high
 
+  * Fix a remotely exploitable bug that could be used to crash instances
+    of Tor remotely by overflowing on the heap. Remote-code execution
+    hasn't been confirmed, but can't be ruled out (CVE-2010-1676).
   * Housekeeping: Update IP address and port of directory authority gabelmoo
     with data shipped in 0.2.1.28.
 
- -- Peter Palfrader <weasel@debian.org>  Sat, 18 Dec 2010 10:50:08 +0100
+ -- Peter Palfrader <weasel@debian.org>  Sat, 18 Dec 2010 10:54:34 +0100
 
 tor (0.2.1.26-5) unstable; urgency=low
 

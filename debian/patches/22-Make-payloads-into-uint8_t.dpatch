@@ -1,0 +1,912 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+
+@DPATCH@
+From b8a7bad7995fceee83e61f2f403685d42d8759ce Mon Sep 17 00:00:00 2001
+From: Nick Mathewson <nickm@torproject.org>
+Date: Mon, 13 Dec 2010 19:34:01 -0500
+Subject: [PATCH] Make payloads into uint8_t.
+
+This will avoid some signed/unsigned assignment-related bugs.
+---
+ src/common/compat.c      |   12 +++++-----
+ src/common/compat.h      |   16 ++++++------
+ src/or/buffers.c         |    2 +-
+ src/or/circuitbuild.c    |   13 +++++-----
+ src/or/command.c         |   17 +++++++------
+ src/or/connection_edge.c |   26 ++++++++++++++-------
+ src/or/connection_or.c   |    5 ++-
+ src/or/onion.c           |   14 +++++-----
+ src/or/or.h              |   56 ++++++++++++++++++++++++---------------------
+ src/or/relay.c           |   34 +++++++++++++--------------
+ src/or/rendclient.c      |    9 ++++---
+ src/or/rendcommon.c      |    2 +-
+ src/or/rendmid.c         |   30 ++++++++++++------------
+ src/or/rendservice.c     |    9 ++++---
+ 14 files changed, 130 insertions(+), 115 deletions(-)
+
+diff --git a/src/common/compat.c b/src/common/compat.c
+index e853bc7..4cc8d99 100644
+--- a/src/common/compat.c
++++ b/src/common/compat.c
+@@ -431,7 +431,7 @@ tor_fix_source_file(const char *fname)
+  * unaligned memory access.
+  */
+ uint16_t
+-get_uint16(const char *cp)
++get_uint16(const void *cp)
+ {
+   uint16_t v;
+   memcpy(&v,cp,2);
+@@ -443,7 +443,7 @@ get_uint16(const char *cp)
+  * unaligned memory access.
+  */
+ uint32_t
+-get_uint32(const char *cp)
++get_uint32(const void *cp)
+ {
+   uint32_t v;
+   memcpy(&v,cp,4);
+@@ -455,7 +455,7 @@ get_uint32(const char *cp)
+  * unaligned memory access.
+  */
+ uint64_t
+-get_uint64(const char *cp)
++get_uint64(const void *cp)
+ {
+   uint64_t v;
+   memcpy(&v,cp,8);
+@@ -467,7 +467,7 @@ get_uint64(const char *cp)
+  * *(uint16_t*)(cp) = v, but will not cause segfaults on platforms that forbid
+  * unaligned memory access. */
+ void
+-set_uint16(char *cp, uint16_t v)
++set_uint16(void *cp, uint16_t v)
+ {
+   memcpy(cp,&v,2);
+ }
+@@ -476,7 +476,7 @@ set_uint16(char *cp, uint16_t v)
+  * *(uint32_t*)(cp) = v, but will not cause segfaults on platforms that forbid
+  * unaligned memory access. */
+ void
+-set_uint32(char *cp, uint32_t v)
++set_uint32(void *cp, uint32_t v)
+ {
+   memcpy(cp,&v,4);
+ }
+@@ -485,7 +485,7 @@ set_uint32(char *cp, uint32_t v)
+  * *(uint64_t*)(cp) = v, but will not cause segfaults on platforms that forbid
+  * unaligned memory access. */
+ void
+-set_uint64(char *cp, uint64_t v)
++set_uint64(void *cp, uint64_t v)
+ {
+   memcpy(cp,&v,8);
+ }
+diff --git a/src/common/compat.h b/src/common/compat.h
+index fbbbb3f..209d9fc 100644
+--- a/src/common/compat.h
++++ b/src/common/compat.h
+@@ -448,18 +448,18 @@ typedef enum {
+ /* ===== OS compatibility */
+ const char *get_uname(void);
+ 
+-uint16_t get_uint16(const char *cp) ATTR_PURE ATTR_NONNULL((1));
+-uint32_t get_uint32(const char *cp) ATTR_PURE ATTR_NONNULL((1));
+-uint64_t get_uint64(const char *cp) ATTR_PURE ATTR_NONNULL((1));
+-void set_uint16(char *cp, uint16_t v) ATTR_NONNULL((1));
+-void set_uint32(char *cp, uint32_t v) ATTR_NONNULL((1));
+-void set_uint64(char *cp, uint64_t v) ATTR_NONNULL((1));
++uint16_t get_uint16(const void *cp) ATTR_PURE ATTR_NONNULL((1));
++uint32_t get_uint32(const void *cp) ATTR_PURE ATTR_NONNULL((1));
++uint64_t get_uint64(const void *cp) ATTR_PURE ATTR_NONNULL((1));
++void set_uint16(void *cp, uint16_t v) ATTR_NONNULL((1));
++void set_uint32(void *cp, uint32_t v) ATTR_NONNULL((1));
++void set_uint64(void *cp, uint64_t v) ATTR_NONNULL((1));
+ 
+ /* These uint8 variants are defined to make the code more uniform. */
+ #define get_uint8(cp) (*(const uint8_t*)(cp))
+-static void set_uint8(char *cp, uint8_t v);
++static void set_uint8(void *cp, uint8_t v);
+ static INLINE void
+-set_uint8(char *cp, uint8_t v)
++set_uint8(void *cp, uint8_t v)
+ {
+   *(uint8_t*)cp = v;
+ }
+diff --git a/src/or/buffers.c b/src/or/buffers.c
+index b96b82d..f26c202 100644
+--- a/src/or/buffers.c
++++ b/src/or/buffers.c
+@@ -1024,7 +1024,7 @@ fetch_var_cell_from_buf(buf_t *buf, var_cell_t **out, int linkproto)
+   result->circ_id = ntohs(get_uint16(hdr));
+ 
+   buf_remove_from_front(buf, VAR_CELL_HEADER_SIZE);
+-  peek_from_buf(result->payload, length, buf);
++  peek_from_buf((char*) result->payload, length, buf);
+   buf_remove_from_front(buf, length);
+   check();
+ 
+diff --git a/src/or/circuitbuild.c b/src/or/circuitbuild.c
+index 94057c3..0ec5aae 100644
+--- a/src/or/circuitbuild.c
++++ b/src/or/circuitbuild.c
+@@ -619,7 +619,7 @@ circuit_send_next_onion_skin(origin_circuit_t *circ)
+        * and a DH operation. */
+       cell_type = CELL_CREATE_FAST;
+       memset(payload, 0, sizeof(payload));
+-      crypto_rand(circ->cpath->fast_handshake_state,
++      crypto_rand((char*) circ->cpath->fast_handshake_state,
+                   sizeof(circ->cpath->fast_handshake_state));
+       memcpy(payload, circ->cpath->fast_handshake_state,
+              sizeof(circ->cpath->fast_handshake_state));
+@@ -767,8 +767,8 @@ circuit_extend(cell_t *cell, circuit_t *circ)
+ 
+   n_addr32 = ntohl(get_uint32(cell->payload+RELAY_HEADER_SIZE));
+   n_port = ntohs(get_uint16(cell->payload+RELAY_HEADER_SIZE+4));
+-  onionskin = cell->payload+RELAY_HEADER_SIZE+4+2;
+-  id_digest = cell->payload+RELAY_HEADER_SIZE+4+2+ONIONSKIN_CHALLENGE_LEN;
++  onionskin = (char*) cell->payload+RELAY_HEADER_SIZE+4+2;
++  id_digest = (char*) cell->payload+RELAY_HEADER_SIZE+4+2+ONIONSKIN_CHALLENGE_LEN;
+   tor_addr_from_ipv4h(&n_addr, n_addr32);
+ 
+   if (!n_port || !n_addr32) {
+@@ -906,7 +906,7 @@ circuit_init_cpath_crypto(crypt_path_t *cpath, const char *key_data,
+  */
+ int
+ circuit_finish_handshake(origin_circuit_t *circ, uint8_t reply_type,
+-                         const char *reply)
++                         const uint8_t *reply)
+ {
+   char keys[CPATH_KEY_MATERIAL_LEN];
+   crypt_path_t *hop;
+@@ -923,7 +923,7 @@ circuit_finish_handshake(origin_circuit_t *circ, uint8_t reply_type,
+   tor_assert(hop->state == CPATH_STATE_AWAITING_KEYS);
+ 
+   if (reply_type == CELL_CREATED && hop->dh_handshake_state) {
+-    if (onion_skin_client_handshake(hop->dh_handshake_state, reply, keys,
++    if (onion_skin_client_handshake(hop->dh_handshake_state, (char*)reply, keys,
+                                     DIGEST_LEN*2+CIPHER_KEY_LEN*2) < 0) {
+       log_warn(LD_CIRC,"onion_skin_client_handshake failed.");
+       return -END_CIRC_REASON_TORPROTOCOL;
+@@ -931,7 +931,8 @@ circuit_finish_handshake(origin_circuit_t *circ, uint8_t reply_type,
+     /* Remember hash of g^xy */
+     memcpy(hop->handshake_digest, reply+DH_KEY_LEN, DIGEST_LEN);
+   } else if (reply_type == CELL_CREATED_FAST && !hop->dh_handshake_state) {
+-    if (fast_client_handshake(hop->fast_handshake_state, reply, keys,
++    if (fast_client_handshake(hop->fast_handshake_state, reply,
++                              (uint8_t*)keys,
+                               DIGEST_LEN*2+CIPHER_KEY_LEN*2) < 0) {
+       log_warn(LD_CIRC,"fast_client_handshake failed.");
+       return -END_CIRC_REASON_TORPROTOCOL;
+diff --git a/src/or/command.c b/src/or/command.c
+index 181bad8..011cc5a 100644
+--- a/src/or/command.c
++++ b/src/or/command.c
+@@ -286,7 +286,8 @@ command_process_create_cell(cell_t *cell, or_connection_t *conn)
+     char keys[CPATH_KEY_MATERIAL_LEN];
+     char reply[DIGEST_LEN*2];
+     tor_assert(cell->command == CELL_CREATE_FAST);
+-    if (fast_server_handshake(cell->payload, reply, keys, sizeof(keys))<0) {
++    if (fast_server_handshake(cell->payload, (uint8_t*)reply,
++                              (uint8_t*)keys, sizeof(keys))<0) {
+       log_warn(LD_OR,"Failed to generate key material. Closing.");
+       circuit_mark_for_close(TO_CIRCUIT(circ), END_CIRC_REASON_INTERNAL);
+       return;
+@@ -333,7 +334,7 @@ command_process_created_cell(cell_t *cell, or_connection_t *conn)
+     int err_reason = 0;
+     log_debug(LD_OR,"at OP. Finishing handshake.");
+     if ((err_reason = circuit_finish_handshake(origin_circ, cell->command,
+-                                 cell->payload)) < 0) {
++                                               cell->payload)) < 0) {
+       log_warn(LD_OR,"circuit_finish_handshake failed.");
+       circuit_mark_for_close(circ, -err_reason);
+       return;
+@@ -349,7 +350,7 @@ command_process_created_cell(cell_t *cell, or_connection_t *conn)
+     log_debug(LD_OR,
+               "Converting created cell to extended relay cell, sending.");
+     relay_send_command_from_edge(0, circ, RELAY_COMMAND_EXTENDED,
+-                                 cell->payload, ONIONSKIN_REPLY_LEN,
++                                 (char*)cell->payload, ONIONSKIN_REPLY_LEN,
+                                  NULL);
+   }
+ }
+@@ -476,7 +477,7 @@ static void
+ command_process_versions_cell(var_cell_t *cell, or_connection_t *conn)
+ {
+   int highest_supported_version = 0;
+-  const char *cp, *end;
++  const uint8_t *cp, *end;
+   if (conn->link_proto != 0 ||
+       conn->_base.state != OR_CONN_STATE_OR_HANDSHAKING ||
+       (conn->handshake_state && conn->handshake_state->received_versions)) {
+@@ -529,8 +530,8 @@ command_process_netinfo_cell(cell_t *cell, or_connection_t *conn)
+   time_t timestamp;
+   uint8_t my_addr_type;
+   uint8_t my_addr_len;
+-  const char *my_addr_ptr;
+-  const char *cp, *end;
++  const uint8_t *my_addr_ptr;
++  const uint8_t *cp, *end;
+   uint8_t n_other_addrs;
+   time_t now = time(NULL);
+ 
+@@ -558,7 +559,7 @@ command_process_netinfo_cell(cell_t *cell, or_connection_t *conn)
+ 
+   my_addr_type = (uint8_t) cell->payload[4];
+   my_addr_len = (uint8_t) cell->payload[5];
+-  my_addr_ptr = cell->payload + 6;
++  my_addr_ptr = (uint8_t*) cell->payload + 6;
+   end = cell->payload + CELL_PAYLOAD_SIZE;
+   cp = cell->payload + 6 + my_addr_len;
+   if (cp >= end) {
+@@ -575,7 +576,7 @@ command_process_netinfo_cell(cell_t *cell, or_connection_t *conn)
+     /* Consider all the other addresses; if any matches, this connection is
+      * "canonical." */
+     tor_addr_t addr;
+-    const char *next = decode_address_from_payload(&addr, cp, (int)(end-cp));
++    const uint8_t *next = decode_address_from_payload(&addr, cp, (int)(end-cp));
+     if (next == NULL) {
+       log_fn(LOG_PROTOCOL_WARN,  LD_OR,
+              "Bad address in netinfo cell; closing connection.");
+diff --git a/src/or/connection_edge.c b/src/or/connection_edge.c
+index ded02e9..9ecdf5c 100644
+--- a/src/or/connection_edge.c
++++ b/src/or/connection_edge.c
+@@ -1430,7 +1430,8 @@ connection_ap_handshake_rewrite_and_attach(edge_connection_t *conn,
+       tor_snprintf(socks->address, sizeof(socks->address), "REVERSE[%s]",
+                   orig_address);
+       connection_ap_handshake_socks_resolved(conn, RESOLVED_TYPE_HOSTNAME,
+-                                             strlen(result), result, -1,
++                                             strlen(result), (uint8_t*)result,
++                                             -1,
+                                              map_expires);
+       connection_mark_unattached_ap(conn,
+                                 END_STREAM_REASON_DONE |
+@@ -1562,7 +1563,8 @@ connection_ap_handshake_rewrite_and_attach(edge_connection_t *conn,
+         /* remember _what_ is supposed to have been resolved. */
+         strlcpy(socks->address, orig_address, sizeof(socks->address));
+         connection_ap_handshake_socks_resolved(conn,RESOLVED_TYPE_IPV4,4,
+-                                               (char*)&answer,-1,map_expires);
++                                               (uint8_t*)&answer,
++                                               -1,map_expires);
+         connection_mark_unattached_ap(conn,
+                                 END_STREAM_REASON_DONE |
+                                 END_STREAM_REASON_FLAG_ALREADY_SOCKS_REPLIED);
+@@ -2311,7 +2313,7 @@ void
+ connection_ap_handshake_socks_resolved(edge_connection_t *conn,
+                                        int answer_type,
+                                        size_t answer_len,
+-                                       const char *answer,
++                                       const uint8_t *answer,
+                                        int ttl,
+                                        time_t expires)
+ {
+@@ -2325,7 +2327,7 @@ connection_ap_handshake_socks_resolved(edge_connection_t *conn,
+         client_dns_set_addressmap(conn->socks_request->address, a,
+                                   conn->chosen_exit_name, ttl);
+     } else if (answer_type == RESOLVED_TYPE_HOSTNAME && answer_len < 256) {
+-      char *cp = tor_strndup(answer, answer_len);
++      char *cp = tor_strndup((char*)answer, answer_len);
+       client_dns_set_reverse_addressmap(conn->socks_request->address,
+                                         cp,
+                                         conn->chosen_exit_name, ttl);
+@@ -2336,14 +2338,14 @@ connection_ap_handshake_socks_resolved(edge_connection_t *conn,
+   if (conn->is_dns_request) {
+     if (conn->dns_server_request) {
+       /* We had a request on our DNS port: answer it. */
+-      dnsserv_resolved(conn, answer_type, answer_len, answer, ttl);
++      dnsserv_resolved(conn, answer_type, answer_len, (char*)answer, ttl);
+       conn->socks_request->has_finished = 1;
+       return;
+     } else {
+       /* This must be a request from the controller. We already sent
+        * a mapaddress if there's a ttl. */
+       tell_controller_about_resolved_result(conn, answer_type, answer_len,
+-                                            answer, ttl, expires);
++                                            (char*)answer, ttl, expires);
+       conn->socks_request->has_finished = 1;
+       return;
+     }
+@@ -2487,6 +2489,8 @@ connection_exit_begin_conn(cell_t *cell, circuit_t *circ)
+     or_circ = TO_OR_CIRCUIT(circ);
+ 
+   relay_header_unpack(&rh, cell->payload);
++  if (rh.length > RELAY_PAYLOAD_SIZE)
++    return -1;
+ 
+   /* Note: we have to use relay_send_command_from_edge here, not
+    * connection_edge_end or connection_edge_send_command, since those require
+@@ -2510,7 +2514,8 @@ connection_exit_begin_conn(cell_t *cell, circuit_t *circ)
+                                     END_STREAM_REASON_TORPROTOCOL, NULL);
+       return 0;
+     }
+-    if (parse_addr_port(LOG_PROTOCOL_WARN, cell->payload+RELAY_HEADER_SIZE,
++    if (parse_addr_port(LOG_PROTOCOL_WARN,
++                        (char*)(cell->payload+RELAY_HEADER_SIZE),
+                         &address,NULL,&port)<0) {
+       log_fn(LOG_PROTOCOL_WARN, LD_PROTOCOL,
+              "Unable to parse addr:port in relay begin cell. Closing.");
+@@ -2661,6 +2666,8 @@ connection_exit_begin_resolve(cell_t *cell, or_circuit_t *circ)
+ 
+   assert_circuit_ok(TO_CIRCUIT(circ));
+   relay_header_unpack(&rh, cell->payload);
++  if (rh.length > RELAY_PAYLOAD_SIZE)
++    return -1;
+ 
+   /* This 'dummy_conn' only exists to remember the stream ID
+    * associated with the resolve request; and to make the
+@@ -2671,8 +2678,9 @@ connection_exit_begin_resolve(cell_t *cell, or_circuit_t *circ)
+    */
+   dummy_conn = edge_connection_new(CONN_TYPE_EXIT, AF_INET);
+   dummy_conn->stream_id = rh.stream_id;
+-  dummy_conn->_base.address = tor_strndup(cell->payload+RELAY_HEADER_SIZE,
+-                                          rh.length);
++  dummy_conn->_base.address = tor_strndup(
++                                       (char*)cell->payload+RELAY_HEADER_SIZE,
++                                       rh.length);
+   dummy_conn->_base.port = 0;
+   dummy_conn->_base.state = EXIT_CONN_STATE_RESOLVEFAILED;
+   dummy_conn->_base.purpose = EXIT_PURPOSE_RESOLVE;
+diff --git a/src/or/connection_or.c b/src/or/connection_or.c
+index 3ac0bf5..ab0d561 100644
+--- a/src/or/connection_or.c
++++ b/src/or/connection_or.c
+@@ -1201,7 +1201,8 @@ connection_or_write_var_cell_to_buf(const var_cell_t *cell,
+   tor_assert(conn);
+   var_cell_pack_header(cell, hdr);
+   connection_write_to_buf(hdr, sizeof(hdr), TO_CONN(conn));
+-  connection_write_to_buf(cell->payload, cell->payload_len, TO_CONN(conn));
++  connection_write_to_buf((char*)cell->payload,
++                          cell->payload_len, TO_CONN(conn));
+   if (cell->command != CELL_PADDING)
+     conn->timestamp_last_added_nonpadding = approx_time();
+ }
+@@ -1332,7 +1333,7 @@ connection_or_send_netinfo(or_connection_t *conn)
+   time_t now = time(NULL);
+   routerinfo_t *me;
+   int len;
+-  char *out;
++  uint8_t *out;
+ 
+   memset(&cell, 0, sizeof(cell_t));
+   cell.command = CELL_NETINFO;
+diff --git a/src/or/onion.c b/src/or/onion.c
+index 8ee59f2..42e02c6 100644
+--- a/src/or/onion.c
++++ b/src/or/onion.c
+@@ -336,9 +336,9 @@ onion_skin_client_handshake(crypto_dh_env_t *handshake_state,
+  * Return 0 on success, &lt;0 on failure.
+  **/
+ int
+-fast_server_handshake(const char *key_in, /* DIGEST_LEN bytes */
+-                      char *handshake_reply_out, /* DIGEST_LEN*2 bytes */
+-                      char *key_out,
++fast_server_handshake(const uint8_t *key_in, /* DIGEST_LEN bytes */
++                      uint8_t *handshake_reply_out, /* DIGEST_LEN*2 bytes */
++                      uint8_t *key_out,
+                       size_t key_out_len)
+ {
+   char tmp[DIGEST_LEN+DIGEST_LEN];
+@@ -346,7 +346,7 @@ fast_server_handshake(const char *key_in, /* DIGEST_LEN bytes */
+   size_t out_len;
+   int r = -1;
+ 
+-  if (crypto_rand(handshake_reply_out, DIGEST_LEN)<0)
++  if (crypto_rand((char*)handshake_reply_out, DIGEST_LEN)<0)
+     return -1;
+ 
+   memcpy(tmp, key_in, DIGEST_LEN);
+@@ -379,9 +379,9 @@ fast_server_handshake(const char *key_in, /* DIGEST_LEN bytes */
+  * and protected by TLS).
+  */
+ int
+-fast_client_handshake(const char *handshake_state, /* DIGEST_LEN bytes */
+-                      const char *handshake_reply_out, /* DIGEST_LEN*2 bytes */
+-                      char *key_out,
++fast_client_handshake(const uint8_t *handshake_state, /* DIGEST_LEN bytes */
++                      const uint8_t *handshake_reply_out, /* DIGEST_LEN*2 bytes */
++                      uint8_t *key_out,
+                       size_t key_out_len)
+ {
+   char tmp[DIGEST_LEN+DIGEST_LEN];
+diff --git a/src/or/or.h b/src/or/or.h
+index 910e612..2a25118 100644
+--- a/src/or/or.h
++++ b/src/or/or.h
+@@ -834,7 +834,7 @@ typedef struct cell_t {
+   circid_t circ_id; /**< Circuit which received the cell. */
+   uint8_t command; /**< Type of the cell: one of CELL_PADDING, CELL_CREATE,
+                     * CELL_DESTROY, etc */
+-  char payload[CELL_PAYLOAD_SIZE]; /**< Cell body. */
++  uint8_t payload[CELL_PAYLOAD_SIZE]; /**< Cell body. */
+ } cell_t;
+ 
+ /** Parsed variable-length onion routing cell. */
+@@ -842,7 +842,7 @@ typedef struct var_cell_t {
+   uint8_t command;
+   circid_t circ_id;
+   uint16_t payload_len;
+-  char payload[1];
++  uint8_t payload[1];
+ } var_cell_t;
+ 
+ /** A cell as packed for writing to the network. */
+@@ -1831,7 +1831,7 @@ typedef struct crypt_path_t {
+    * authentication, secrecy, and integrity we need, and we're already
+    * distinguishable from an OR.
+    */
+-  char fast_handshake_state[DIGEST_LEN];
++  uint8_t fast_handshake_state[DIGEST_LEN];
+   /** Negotiated key material shared with the OR at this step. */
+   char handshake_digest[DIGEST_LEN];/* KH in tor-spec.txt */
+ 
+@@ -2733,7 +2733,7 @@ int circuit_extend(cell_t *cell, circuit_t *circ);
+ int circuit_init_cpath_crypto(crypt_path_t *cpath, const char *key_data,
+                               int reverse);
+ int circuit_finish_handshake(origin_circuit_t *circ, uint8_t cell_type,
+-                             const char *reply);
++                             const uint8_t *reply);
+ int circuit_truncated(origin_circuit_t *circ, crypt_path_t *layer);
+ int onionskin_answer(or_circuit_t *circ, uint8_t cell_type,
+                      const char *payload, const char *keys);
+@@ -3053,7 +3053,7 @@ void connection_ap_handshake_socks_reply(edge_connection_t *conn, char *reply,
+ void connection_ap_handshake_socks_resolved(edge_connection_t *conn,
+                                             int answer_type,
+                                             size_t answer_len,
+-                                            const char *answer,
++                                            const uint8_t *answer,
+                                             int ttl,
+                                             time_t expires);
+ 
+@@ -3835,14 +3835,14 @@ int onion_skin_client_handshake(crypto_dh_env_t *handshake_state,
+                                 char *key_out,
+                                 size_t key_out_len);
+ 
+-int fast_server_handshake(const char *key_in,
+-                          char *handshake_reply_out,
+-                          char *key_out,
++int fast_server_handshake(const uint8_t *key_in,
++                          uint8_t *handshake_reply_out,
++                          uint8_t *key_out,
+                           size_t key_out_len);
+ 
+-int fast_client_handshake(const char *handshake_state,
+-                          const char *handshake_reply_out,
+-                          char *key_out,
++int fast_client_handshake(const uint8_t *handshake_state,
++                          const uint8_t *handshake_reply_out,
++                          uint8_t *key_out,
+                           size_t key_out_len);
+ 
+ void clear_pending_onions(void);
+@@ -3926,8 +3926,8 @@ extern uint64_t stats_n_relay_cells_delivered;
+ int circuit_receive_relay_cell(cell_t *cell, circuit_t *circ,
+                                cell_direction_t cell_direction);
+ 
+-void relay_header_pack(char *dest, const relay_header_t *src);
+-void relay_header_unpack(relay_header_t *dest, const char *src);
++void relay_header_pack(uint8_t *dest, const relay_header_t *src);
++void relay_header_unpack(relay_header_t *dest, const uint8_t *src);
+ int relay_send_command_from_edge(streamid_t stream_id, circuit_t *circ,
+                                uint8_t relay_command, const char *payload,
+                                size_t payload_len, crypt_path_t *cpath_layer);
+@@ -3961,9 +3961,9 @@ void assert_active_circuits_ok(or_connection_t *orconn);
+ void make_circuit_inactive_on_conn(circuit_t *circ, or_connection_t *conn);
+ void make_circuit_active_on_conn(circuit_t *circ, or_connection_t *conn);
+ 
+-int append_address_to_payload(char *payload_out, const tor_addr_t *addr);
+-const char *decode_address_from_payload(tor_addr_t *addr_out,
+-                                        const char *payload,
++int append_address_to_payload(uint8_t *payload_out, const tor_addr_t *addr);
++const uint8_t *decode_address_from_payload(tor_addr_t *addr_out,
++                                        const uint8_t *payload,
+                                         int payload_len);
+ 
+ /********************************* rephist.c ***************************/
+@@ -4034,15 +4034,18 @@ void hs_usage_free_all(void);
+ 
+ void rend_client_introcirc_has_opened(origin_circuit_t *circ);
+ void rend_client_rendcirc_has_opened(origin_circuit_t *circ);
+-int rend_client_introduction_acked(origin_circuit_t *circ, const char *request,
++int rend_client_introduction_acked(origin_circuit_t *circ,
++                                   const uint8_t *request,
+                                    size_t request_len);
+ void rend_client_refetch_renddesc(const char *query);
+ void rend_client_refetch_v2_renddesc(const rend_data_t *rend_query);
+ int rend_client_remove_intro_point(extend_info_t *failed_intro,
+                                    const rend_data_t *rend_query);
+-int rend_client_rendezvous_acked(origin_circuit_t *circ, const char *request,
++int rend_client_rendezvous_acked(origin_circuit_t *circ,
++                                 const uint8_t *request,
+                                  size_t request_len);
+-int rend_client_receive_rendezvous(origin_circuit_t *circ, const char *request,
++int rend_client_receive_rendezvous(origin_circuit_t *circ,
++                                   const uint8_t *request,
+                                    size_t request_len);
+ void rend_client_desc_trynow(const char *query, int rend_version);
+ 
+@@ -4108,7 +4111,8 @@ rend_data_free(rend_data_t *data)
+ int rend_cmp_service_ids(const char *one, const char *two);
+ 
+ void rend_process_relay_cell(circuit_t *circ, const crypt_path_t *layer_hint,
+-                             int command, size_t length, const char *payload);
++                             int command, size_t length,
++                             const uint8_t *payload);
+ 
+ void rend_service_descriptor_free(rend_service_descriptor_t *desc);
+ int rend_encode_service_descriptor(rend_service_descriptor_t *desc,
+@@ -4171,10 +4175,10 @@ void rend_consider_descriptor_republication(void);
+ 
+ void rend_service_intro_has_opened(origin_circuit_t *circuit);
+ int rend_service_intro_established(origin_circuit_t *circuit,
+-                                   const char *request,
++                                   const uint8_t *request,
+                                    size_t request_len);
+ void rend_service_rendezvous_has_opened(origin_circuit_t *circuit);
+-int rend_service_introduce(origin_circuit_t *circuit, const char *request,
++int rend_service_introduce(origin_circuit_t *circuit, const uint8_t *request,
+                            size_t request_len);
+ void rend_service_relaunch_rendezvous(origin_circuit_t *oldcirc);
+ int rend_service_set_connection_addr_port(edge_connection_t *conn,
+@@ -4183,13 +4187,13 @@ void rend_service_dump_stats(int severity);
+ void rend_service_free_all(void);
+ 
+ /********************************* rendmid.c *******************************/
+-int rend_mid_establish_intro(or_circuit_t *circ, const char *request,
++int rend_mid_establish_intro(or_circuit_t *circ, const uint8_t *request,
+                              size_t request_len);
+-int rend_mid_introduce(or_circuit_t *circ, const char *request,
++int rend_mid_introduce(or_circuit_t *circ, const uint8_t *request,
+                        size_t request_len);
+-int rend_mid_establish_rendezvous(or_circuit_t *circ, const char *request,
++int rend_mid_establish_rendezvous(or_circuit_t *circ, const uint8_t *request,
+                                   size_t request_len);
+-int rend_mid_rendezvous(or_circuit_t *circ, const char *request,
++int rend_mid_rendezvous(or_circuit_t *circ, const uint8_t *request,
+                         size_t request_len);
+ 
+ /********************************* router.c ***************************/
+diff --git a/src/or/relay.c b/src/or/relay.c
+index b3d2fbb..0267147 100644
+--- a/src/or/relay.c
++++ b/src/or/relay.c
+@@ -53,7 +53,7 @@ relay_set_digest(crypto_digest_env_t *digest, cell_t *cell)
+   char integrity[4];
+   relay_header_t rh;
+ 
+-  crypto_digest_add_bytes(digest, cell->payload, CELL_PAYLOAD_SIZE);
++  crypto_digest_add_bytes(digest, (char*)cell->payload, CELL_PAYLOAD_SIZE);
+   crypto_digest_get_digest(digest, integrity, 4);
+ //  log_fn(LOG_DEBUG,"Putting digest of %u %u %u %u into relay cell.",
+ //    integrity[0], integrity[1], integrity[2], integrity[3]);
+@@ -86,7 +86,7 @@ relay_digest_matches(crypto_digest_env_t *digest, cell_t *cell)
+ //    received_integrity[0], received_integrity[1],
+ //    received_integrity[2], received_integrity[3]);
+ 
+-  crypto_digest_add_bytes(digest, cell->payload, CELL_PAYLOAD_SIZE);
++  crypto_digest_add_bytes(digest, (char*) cell->payload, CELL_PAYLOAD_SIZE);
+   crypto_digest_get_digest(digest, calculated_integrity, 4);
+ 
+   if (memcmp(received_integrity, calculated_integrity, 4)) {
+@@ -112,12 +112,12 @@ relay_digest_matches(crypto_digest_env_t *digest, cell_t *cell)
+  * Return -1 if the crypto fails, else return 0.
+  */
+ static int
+-relay_crypt_one_payload(crypto_cipher_env_t *cipher, char *in,
++relay_crypt_one_payload(crypto_cipher_env_t *cipher, uint8_t *in,
+                         int encrypt_mode)
+ {
+   int r;
+   (void)encrypt_mode;
+-  r = crypto_cipher_crypt_inplace(cipher, in, CELL_PAYLOAD_SIZE);
++  r = crypto_cipher_crypt_inplace(cipher, (char*) in, CELL_PAYLOAD_SIZE);
+ 
+   if (r) {
+     log_warn(LD_BUG,"Error during relay encryption");
+@@ -432,10 +432,9 @@ relay_lookup_conn(circuit_t *circ, cell_t *cell,
+  * about the wire format.
+  */
+ void
+-relay_header_pack(char *dest, const relay_header_t *src)
++relay_header_pack(uint8_t *dest, const relay_header_t *src)
+ {
+-  *(uint8_t*)(dest) = src->command;
+-
++  set_uint8(dest, src->command);
+   set_uint16(dest+1, htons(src->recognized));
+   set_uint16(dest+3, htons(src->stream_id));
+   memcpy(dest+5, src->integrity, 4);
+@@ -446,10 +445,9 @@ relay_header_pack(char *dest, const relay_header_t *src)
+  * relay_header_t structure <b>dest</b>.
+  */
+ void
+-relay_header_unpack(relay_header_t *dest, const char *src)
++relay_header_unpack(relay_header_t *dest, const uint8_t *src)
+ {
+-  dest->command = *(uint8_t*)(src);
+-
++  dest->command = get_uint8(src);
+   dest->recognized = ntohs(get_uint16(src+1));
+   dest->stream_id = ntohs(get_uint16(src+3));
+   memcpy(dest->integrity, src+5, 4);
+@@ -1069,13 +1067,13 @@ connection_edge_process_relay_cell(cell_t *cell, circuit_t *circ,
+       }
+ 
+       stats_n_data_bytes_received += rh.length;
+-      connection_write_to_buf(cell->payload + RELAY_HEADER_SIZE,
++      connection_write_to_buf((char*)(cell->payload + RELAY_HEADER_SIZE),
+                               rh.length, TO_CONN(conn));
+       connection_edge_consider_sending_sendme(conn);
+       return 0;
+     case RELAY_COMMAND_END:
+       reason = rh.length > 0 ?
+-        *(uint8_t *)(cell->payload+RELAY_HEADER_SIZE) : END_STREAM_REASON_MISC;
++        get_uint8(cell->payload+RELAY_HEADER_SIZE) : END_STREAM_REASON_MISC;
+       if (!conn) {
+         log_info(domain,"end cell (%s) dropped, unknown stream.",
+                  stream_end_reason_to_string(reason));
+@@ -1897,7 +1895,7 @@ append_cell_to_circuit_queue(circuit_t *circ, or_connection_t *orconn,
+  *   ADDRESS                                   [length bytes]
+  * Return the number of bytes added, or -1 on error */
+ int
+-append_address_to_payload(char *payload_out, const tor_addr_t *addr)
++append_address_to_payload(uint8_t *payload_out, const tor_addr_t *addr)
+ {
+   uint32_t a;
+   switch (tor_addr_family(addr)) {
+@@ -1922,13 +1920,13 @@ append_address_to_payload(char *payload_out, const tor_addr_t *addr)
+  * encoded as by append_address_to_payload(), try to decode the address into
+  * *<b>addr_out</b>.  Return the next byte in the payload after the address on
+  * success, or NULL on failure. */
+-const char *
+-decode_address_from_payload(tor_addr_t *addr_out, const char *payload,
++const uint8_t *
++decode_address_from_payload(tor_addr_t *addr_out, const uint8_t *payload,
+                             int payload_len)
+ {
+   if (payload_len < 2)
+     return NULL;
+-  if (payload_len < 2+(uint8_t)payload[1])
++  if (payload_len < 2+payload[1])
+     return NULL;
+ 
+   switch (payload[0]) {
+@@ -1940,13 +1938,13 @@ decode_address_from_payload(tor_addr_t *addr_out, const char *payload,
+   case RESOLVED_TYPE_IPV6:
+     if (payload[1] != 16)
+       return NULL;
+-    tor_addr_from_ipv6_bytes(addr_out, payload+2);
++    tor_addr_from_ipv6_bytes(addr_out, (char*)(payload+2));
+     break;
+   default:
+     tor_addr_make_unspec(addr_out);
+     break;
+   }
+-  return payload + 2 + (uint8_t)payload[1];
++  return payload + 2 + payload[1];
+ }
+ 
+ /** Fail with an assert if the active circuits ring on <b>orconn</b> is
+diff --git a/src/or/rendclient.c b/src/or/rendclient.c
+index 7023b7f..feecf23 100644
+--- a/src/or/rendclient.c
++++ b/src/or/rendclient.c
+@@ -243,7 +243,7 @@ rend_client_rendcirc_has_opened(origin_circuit_t *circ)
+  */
+ int
+ rend_client_introduction_acked(origin_circuit_t *circ,
+-                               const char *request, size_t request_len)
++                               const uint8_t *request, size_t request_len)
+ {
+   origin_circuit_t *rendcirc;
+   (void) request; // XXXX Use this.
+@@ -628,7 +628,7 @@ rend_client_remove_intro_point(extend_info_t *failed_intro,
+  * the circuit to C_REND_READY.
+  */
+ int
+-rend_client_rendezvous_acked(origin_circuit_t *circ, const char *request,
++rend_client_rendezvous_acked(origin_circuit_t *circ, const uint8_t *request,
+                              size_t request_len)
+ {
+   (void) request;
+@@ -654,7 +654,7 @@ rend_client_rendezvous_acked(origin_circuit_t *circ, const char *request,
+ 
+ /** Bob sent us a rendezvous cell; join the circuits. */
+ int
+-rend_client_receive_rendezvous(origin_circuit_t *circ, const char *request,
++rend_client_receive_rendezvous(origin_circuit_t *circ, const uint8_t *request,
+                                size_t request_len)
+ {
+   crypt_path_t *hop;
+@@ -682,7 +682,8 @@ rend_client_receive_rendezvous(origin_circuit_t *circ, const char *request,
+   tor_assert(circ->build_state->pending_final_cpath);
+   hop = circ->build_state->pending_final_cpath;
+   tor_assert(hop->dh_handshake_state);
+-  if (crypto_dh_compute_secret(hop->dh_handshake_state, request, DH_KEY_LEN,
++  if (crypto_dh_compute_secret(hop->dh_handshake_state, (char*)request,
++                               DH_KEY_LEN,
+                                keys, DIGEST_LEN+CPATH_KEY_MATERIAL_LEN)<0) {
+     log_warn(LD_GENERAL, "Couldn't complete DH handshake.");
+     goto err;
+diff --git a/src/or/rendcommon.c b/src/or/rendcommon.c
+index 1f9596d..9ee86f6 100644
+--- a/src/or/rendcommon.c
++++ b/src/or/rendcommon.c
+@@ -1394,7 +1394,7 @@ rend_cache_store_v2_desc_as_client(const char *desc,
+ void
+ rend_process_relay_cell(circuit_t *circ, const crypt_path_t *layer_hint,
+                         int command, size_t length,
+-                        const char *payload)
++                        const uint8_t *payload)
+ {
+   or_circuit_t *or_circ = NULL;
+   origin_circuit_t *origin_circ = NULL;
+diff --git a/src/or/rendmid.c b/src/or/rendmid.c
+index c9f4bf8..23add31 100644
+--- a/src/or/rendmid.c
++++ b/src/or/rendmid.c
+@@ -13,7 +13,7 @@
+  * setting the circuit's purpose and service pk digest.
+  */
+ int
+-rend_mid_establish_intro(or_circuit_t *circ, const char *request,
++rend_mid_establish_intro(or_circuit_t *circ, const uint8_t *request,
+                          size_t request_len)
+ {
+   crypto_pk_env_t *pk = NULL;
+@@ -43,7 +43,7 @@ rend_mid_establish_intro(or_circuit_t *circ, const char *request,
+   /* Next asn1len bytes: asn1-encoded key. */
+   if (request_len < 2+DIGEST_LEN+asn1len)
+     goto truncated;
+-  pk = crypto_pk_asn1_decode(request+2, asn1len);
++  pk = crypto_pk_asn1_decode((char*)(request+2), asn1len);
+   if (!pk) {
+     reason = END_CIRC_REASON_TORPROTOCOL;
+     log_warn(LD_PROTOCOL, "Couldn't decode public key.");
+@@ -64,8 +64,8 @@ rend_mid_establish_intro(or_circuit_t *circ, const char *request,
+   }
+   /* Rest of body: signature of previous data */
+   note_crypto_pk_op(REND_MID);
+-  if (crypto_pk_public_checksig_digest(pk, request, 2+asn1len+DIGEST_LEN,
+-                                       request+2+DIGEST_LEN+asn1len,
++  if (crypto_pk_public_checksig_digest(pk, (char*)request, 2+asn1len+DIGEST_LEN,
++                                       (char*)(request+2+DIGEST_LEN+asn1len),
+                                        request_len-(2+DIGEST_LEN+asn1len))<0) {
+     log_warn(LD_PROTOCOL,
+              "Incorrect signature on ESTABLISH_INTRO cell; rejecting.");
+@@ -125,7 +125,7 @@ rend_mid_establish_intro(or_circuit_t *circ, const char *request,
+  * INTRODUCE2 cell.
+  */
+ int
+-rend_mid_introduce(or_circuit_t *circ, const char *request, size_t request_len)
++rend_mid_introduce(or_circuit_t *circ, const uint8_t *request, size_t request_len)
+ {
+   or_circuit_t *intro_circ;
+   char serviceid[REND_SERVICE_ID_LEN_BASE32+1];
+@@ -154,10 +154,10 @@ rend_mid_introduce(or_circuit_t *circ, const char *request, size_t request_len)
+   }
+ 
+   base32_encode(serviceid, REND_SERVICE_ID_LEN_BASE32+1,
+-                request, REND_SERVICE_ID_LEN);
++                (char*)request, REND_SERVICE_ID_LEN);
+ 
+   /* The first 20 bytes are all we look at: they have a hash of Bob's PK. */
+-  intro_circ = circuit_get_intro_point(request);
++  intro_circ = circuit_get_intro_point((char*)request);
+   if (!intro_circ) {
+     log_info(LD_REND,
+              "No intro circ found for INTRODUCE1 cell (%s) from circuit %d; "
+@@ -175,7 +175,7 @@ rend_mid_introduce(or_circuit_t *circ, const char *request, size_t request_len)
+   /* Great.  Now we just relay the cell down the circuit. */
+   if (relay_send_command_from_edge(0, TO_CIRCUIT(intro_circ),
+                                    RELAY_COMMAND_INTRODUCE2,
+-                                   request, request_len, NULL)) {
++                                   (char*)request, request_len, NULL)) {
+     log_warn(LD_GENERAL,
+              "Unable to send INTRODUCE2 cell to Tor client.");
+     goto err;
+@@ -207,7 +207,7 @@ rend_mid_introduce(or_circuit_t *circ, const char *request, size_t request_len)
+  * rendezvous cookie.
+  */
+ int
+-rend_mid_establish_rendezvous(or_circuit_t *circ, const char *request,
++rend_mid_establish_rendezvous(or_circuit_t *circ, const uint8_t *request,
+                               size_t request_len)
+ {
+   char hexid[9];
+@@ -227,7 +227,7 @@ rend_mid_establish_rendezvous(or_circuit_t *circ, const char *request,
+     goto err;
+   }
+ 
+-  if (circuit_get_rendezvous(request)) {
++  if (circuit_get_rendezvous((char*)request)) {
+     log_warn(LD_PROTOCOL,
+              "Duplicate rendezvous cookie in ESTABLISH_RENDEZVOUS.");
+     goto err;
+@@ -245,7 +245,7 @@ rend_mid_establish_rendezvous(or_circuit_t *circ, const char *request,
+   circ->_base.purpose = CIRCUIT_PURPOSE_REND_POINT_WAITING;
+   memcpy(circ->rend_token, request, REND_COOKIE_LEN);
+ 
+-  base16_encode(hexid,9,request,4);
++  base16_encode(hexid,9,(char*)request,4);
+ 
+   log_info(LD_REND,
+            "Established rendezvous point on circuit %d for cookie %s",
+@@ -262,13 +262,13 @@ rend_mid_establish_rendezvous(or_circuit_t *circ, const char *request,
+  * connecting the two circuits.
+  */
+ int
+-rend_mid_rendezvous(or_circuit_t *circ, const char *request,
++rend_mid_rendezvous(or_circuit_t *circ, const uint8_t *request,
+                     size_t request_len)
+ {
+   or_circuit_t *rend_circ;
+   char hexid[9];
+   int reason = END_CIRC_REASON_INTERNAL;
+-  base16_encode(hexid,9,request,request_len<4?request_len:4);
++  base16_encode(hexid,9,(char*)request,request_len<4?request_len:4);
+ 
+   if (request_len>=4) {
+     log_info(LD_REND,
+@@ -292,7 +292,7 @@ rend_mid_rendezvous(or_circuit_t *circ, const char *request,
+     goto err;
+   }
+ 
+-  rend_circ = circuit_get_rendezvous(request);
++  rend_circ = circuit_get_rendezvous((char*)request);
+   if (!rend_circ) {
+     log_fn(LOG_PROTOCOL_WARN, LD_PROTOCOL,
+          "Rejecting RENDEZVOUS1 cell with unrecognized rendezvous cookie %s.",
+@@ -304,7 +304,7 @@ rend_mid_rendezvous(or_circuit_t *circ, const char *request,
+   /* Send the RENDEZVOUS2 cell to Alice. */
+   if (relay_send_command_from_edge(0, TO_CIRCUIT(rend_circ),
+                                    RELAY_COMMAND_RENDEZVOUS2,
+-                                   request+REND_COOKIE_LEN,
++                                   (char*)(request+REND_COOKIE_LEN),
+                                    request_len-REND_COOKIE_LEN, NULL)) {
+     log_warn(LD_GENERAL,
+              "Unable to send RENDEZVOUS2 cell to client on circuit %d.",
+diff --git a/src/or/rendservice.c b/src/or/rendservice.c
+index 289d64d..f5917bc 100644
+--- a/src/or/rendservice.c
++++ b/src/or/rendservice.c
+@@ -895,7 +895,7 @@ clean_accepted_intros(rend_service_t *service, time_t now)
+  * rendezvous point.
+  */
+ int
+-rend_service_introduce(origin_circuit_t *circuit, const char *request,
++rend_service_introduce(origin_circuit_t *circuit, const uint8_t *request,
+                        size_t request_len)
+ {
+   char *ptr, *r_cookie;
+@@ -964,7 +964,7 @@ rend_service_introduce(origin_circuit_t *circuit, const char *request,
+   crypto_pk_get_digest(intro_key, intro_key_digest);
+   if (memcmp(intro_key_digest, request, DIGEST_LEN)) {
+     base32_encode(serviceid, REND_SERVICE_ID_LEN_BASE32+1,
+-                  request, REND_SERVICE_ID_LEN);
++                  (char*)request, REND_SERVICE_ID_LEN);
+     log_warn(LD_REND, "Got an INTRODUCE2 cell for the wrong service (%s).",
+              escaped(serviceid));
+     return -1;
+@@ -979,7 +979,7 @@ rend_service_introduce(origin_circuit_t *circuit, const char *request,
+   /* Next N bytes is encrypted with service key */
+   note_crypto_pk_op(REND_SERVER);
+   r = crypto_pk_private_hybrid_decrypt(
+-       intro_key,buf,request+DIGEST_LEN,request_len-DIGEST_LEN,
++       intro_key,buf,(char*)(request+DIGEST_LEN),request_len-DIGEST_LEN,
+        PK_PKCS1_OAEP_PADDING,1);
+   if (r<0) {
+     log_warn(LD_PROTOCOL, "Couldn't decrypt INTRODUCE2 cell.");
+@@ -1451,7 +1451,8 @@ rend_service_intro_has_opened(origin_circuit_t *circuit)
+  * live introduction point, and note that the service descriptor is
+  * now out-of-date.*/
+ int
+-rend_service_intro_established(origin_circuit_t *circuit, const char *request,
++rend_service_intro_established(origin_circuit_t *circuit,
++                               const uint8_t *request,
+                                size_t request_len)
+ {
+   rend_service_t *service;
+-- 
+1.7.1
+
