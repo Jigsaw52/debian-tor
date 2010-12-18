@@ -1,0 +1,215 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+
+@DPATCH@
+From 785086cfbaf15a78a921f5589a76517b1d4840b1 Mon Sep 17 00:00:00 2001
+From: Nick Mathewson <nickm@torproject.org>
+Date: Mon, 13 Dec 2010 18:40:21 -0500
+Subject: [PATCH] Have all of our allocation functions and a few others check for underflow
+
+It's all too easy in C to convert an unsigned value to a signed one,
+which will (on all modern computers) give you a huge signed value.  If
+you have a size_t value of size greater than SSIZE_T_MAX, that is way
+likelier to be an underflow than it is to be an actual request for
+more than 2gb of memory in one go.  (There's nothing in Tor that
+should be trying to allocate >2gb chunks.)
+---
+ src/common/compat.c  |    3 ++-
+ src/common/crypto.c  |   11 ++++++++++-
+ src/common/memarea.c |    3 +++
+ src/common/mempool.c |    4 ++++
+ src/common/util.c    |   11 +++++++++--
+ 5 files changed, 28 insertions(+), 4 deletions(-)
+
+diff --git a/src/common/compat.c b/src/common/compat.c
+index b2dab5c..e853bc7 100644
+--- a/src/common/compat.c
++++ b/src/common/compat.c
+@@ -126,6 +126,7 @@ tor_mmap_file(const char *filename)
+     return NULL;
+   }
+ 
++  /* XXXX why not just do fstat here? */
+   size = filesize = (size_t) lseek(fd, 0, SEEK_END);
+   lseek(fd, 0, SEEK_SET);
+   /* ensure page alignment */
+@@ -294,7 +295,7 @@ tor_vsnprintf(char *str, size_t size, const char *format, va_list args)
+   int r;
+   if (size == 0)
+     return -1; /* no place for the NUL */
+-  if (size > SSIZE_T_MAX-16)
++  if (size > SIZE_T_CEILING)
+     return -1;
+ #ifdef MS_WINDOWS
+   r = _vsnprintf(str, size, format, args);
+diff --git a/src/common/crypto.c b/src/common/crypto.c
+index 8aef477..751a5b0 100644
+--- a/src/common/crypto.c
++++ b/src/common/crypto.c
+@@ -811,6 +811,8 @@ crypto_pk_public_checksig_digest(crypto_pk_env_t *env, const char *data,
+   tor_assert(env);
+   tor_assert(data);
+   tor_assert(sig);
++  tor_assert(datalen < SIZE_T_CEILING);
++  tor_assert(siglen < SIZE_T_CEILING);
+ 
+   if (crypto_digest(digest,data,datalen)<0) {
+     log_warn(LD_BUG, "couldn't compute digest");
+@@ -911,6 +913,7 @@ crypto_pk_public_hybrid_encrypt(crypto_pk_env_t *env,
+   tor_assert(env);
+   tor_assert(from);
+   tor_assert(to);
++  tor_assert(fromlen < SIZE_T_CEILING);
+ 
+   overhead = crypto_get_rsa_padding_overhead(crypto_get_rsa_padding(padding));
+   pkeylen = crypto_pk_keysize(env);
+@@ -978,6 +981,7 @@ crypto_pk_private_hybrid_decrypt(crypto_pk_env_t *env,
+   crypto_cipher_env_t *cipher = NULL;
+   char *buf = NULL;
+ 
++  tor_assert(fromlen < SIZE_T_CEILING);
+   pkeylen = crypto_pk_keysize(env);
+ 
+   if (fromlen <= pkeylen) {
+@@ -1027,7 +1031,7 @@ crypto_pk_asn1_encode(crypto_pk_env_t *pk, char *dest, size_t dest_len)
+   int len;
+   unsigned char *buf, *cp;
+   len = i2d_RSAPublicKey(pk->key, NULL);
+-  if (len < 0 || (size_t)len > dest_len)
++  if (len < 0 || (size_t)len > dest_len || dest_len > SIZE_T_CEILING)
+     return -1;
+   cp = buf = tor_malloc(len+1);
+   len = i2d_RSAPublicKey(pk->key, &cp);
+@@ -1102,6 +1106,8 @@ add_spaces_to_fp(char *out, size_t outlen, const char *in)
+ {
+   int n = 0;
+   char *end = out+outlen;
++  tor_assert(outlen < SIZE_T_CEILING);
++
+   while (*in && out<end) {
+     *out++ = *in++;
+     if (++n == 4 && *in && out<end) {
+@@ -1252,6 +1258,7 @@ crypto_cipher_encrypt(crypto_cipher_env_t *env, char *to,
+   tor_assert(from);
+   tor_assert(fromlen);
+   tor_assert(to);
++  tor_assert(fromlen < SIZE_T_CEILING);
+ 
+   aes_crypt(env->cipher, from, fromlen, to);
+   return 0;
+@@ -1268,6 +1275,7 @@ crypto_cipher_decrypt(crypto_cipher_env_t *env, char *to,
+   tor_assert(env);
+   tor_assert(from);
+   tor_assert(to);
++  tor_assert(fromlen < SIZE_T_CEILING);
+ 
+   aes_crypt(env->cipher, from, fromlen, to);
+   return 0;
+@@ -1279,6 +1287,7 @@ crypto_cipher_decrypt(crypto_cipher_env_t *env, char *to,
+ int
+ crypto_cipher_crypt_inplace(crypto_cipher_env_t *env, char *buf, size_t len)
+ {
++  tor_assert(len < SIZE_T_CEILING);
+   aes_crypt_inplace(env->cipher, buf, len);
+   return 0;
+ }
+diff --git a/src/common/memarea.c b/src/common/memarea.c
+index 9d908ba..edd7bbe 100644
+--- a/src/common/memarea.c
++++ b/src/common/memarea.c
+@@ -73,6 +73,7 @@ static memarea_chunk_t *freelist = NULL;
+ static memarea_chunk_t *
+ alloc_chunk(size_t sz, int freelist_ok)
+ {
++  tor_assert(sz < SIZE_T_CEILING);
+   if (freelist && freelist_ok) {
+     memarea_chunk_t *res = freelist;
+     freelist = res->next_chunk;
+@@ -182,6 +183,7 @@ memarea_alloc(memarea_t *area, size_t sz)
+   memarea_chunk_t *chunk = area->first;
+   char *result;
+   tor_assert(chunk);
++  tor_assert(sz < SIZE_T_CEILING);
+   if (sz == 0)
+     sz = 1;
+   if (chunk->next_mem+sz > chunk->u.mem+chunk->mem_size) {
+@@ -240,6 +242,7 @@ memarea_strndup(memarea_t *area, const char *s, size_t n)
+   size_t ln;
+   char *result;
+   const char *cp, *end = s+n;
++  tor_assert(n < SIZE_T_CEILING);
+   for (cp = s; cp < end && *cp; ++cp)
+     ;
+   /* cp now points to s+n, or to the 0 in the string. */
+diff --git a/src/common/mempool.c b/src/common/mempool.c
+index 256388a..1f79221 100644
+--- a/src/common/mempool.c
++++ b/src/common/mempool.c
+@@ -357,6 +357,10 @@ mp_pool_new(size_t item_size, size_t chunk_capacity)
+   mp_pool_t *pool;
+   size_t alloc_size, new_chunk_cap;
+ 
++  tor_assert(item_size < SIZE_T_CEILING);
++  tor_assert(chunk_capacity < SIZE_T_CEILING);
++  tor_assert(SIZE_T_CEILING / item_size > chunk_capacity);
++
+   pool = ALLOC(sizeof(mp_pool_t));
+   CHECK_ALLOC(pool);
+   memset(pool, 0, sizeof(mp_pool_t));
+diff --git a/src/common/util.c b/src/common/util.c
+index 34bb9cc..0571a53 100644
+--- a/src/common/util.c
++++ b/src/common/util.c
+@@ -115,6 +115,8 @@ _tor_malloc(size_t size DMALLOC_PARAMS)
+ {
+   void *result;
+ 
++  tor_assert(size < SIZE_T_CEILING);
++
+ #ifndef MALLOC_ZERO_WORKS
+   /* Some libc mallocs don't work when size==0. Override them. */
+   if (size==0) {
+@@ -211,6 +213,7 @@ _tor_strndup(const char *s, size_t n DMALLOC_PARAMS)
+ {
+   char *dup;
+   tor_assert(s);
++  tor_assert(n < SIZE_T_CEILING);
+   dup = _tor_malloc((n+1) DMALLOC_FN_ARGS);
+   /* Performance note: Ordinarily we prefer strlcpy to strncpy.  But
+    * this function gets called a whole lot, and platform strncpy is
+@@ -227,6 +230,7 @@ void *
+ _tor_memdup(const void *mem, size_t len DMALLOC_PARAMS)
+ {
+   char *dup;
++  tor_assert(len < SIZE_T_CEILING);
+   tor_assert(mem);
+   dup = _tor_malloc(len DMALLOC_FN_ARGS);
+   memcpy(dup, mem, len);
+@@ -256,12 +260,15 @@ void *
+ _tor_malloc_roundup(size_t *sizep DMALLOC_PARAMS)
+ {
+ #ifdef HAVE_MALLOC_GOOD_SIZE
++  tor_assert(*sizep < SIZE_T_CEILING);
+   *sizep = malloc_good_size(*sizep);
+   return _tor_malloc(*sizep DMALLOC_FN_ARGS);
+ #elif 0 && defined(HAVE_MALLOC_USABLE_SIZE) && !defined(USE_DMALLOC)
+   /* Never use malloc_usable_size(); it makes valgrind really unhappy,
+    * and doesn't win much in terms of usable space where it exists. */
+-  void *result = _tor_malloc(*sizep DMALLOC_FN_ARGS);
++  void *result;
++  tor_assert(*sizep < SIZE_T_CEILING);
++  result = _tor_malloc(*sizep DMALLOC_FN_ARGS);
+   *sizep = malloc_usable_size(result);
+   return result;
+ #else
+@@ -1927,7 +1934,7 @@ read_file_to_str(const char *filename, int flags, struct stat *stat_out)
+     return NULL;
+   }
+ 
+-  if ((uint64_t)(statbuf.st_size)+1 > SIZE_T_MAX)
++  if ((uint64_t)(statbuf.st_size)+1 > SIZE_T_CEILING)
+     return NULL;
+ 
+   string = tor_malloc((size_t)(statbuf.st_size+1));
+-- 
+1.7.1
+
