@@ -1,3 +1,10 @@
+tor (0.2.1.26-6) unstable; urgency=low
+
+  * Housekeeping: Update IP address and port of directory authority gabelmoo
+    with data shipped in 0.2.1.28.
+
+ -- Peter Palfrader <weasel@debian.org>  Sat, 18 Dec 2010 10:50:08 +0100
+
 tor (0.2.1.26-5) unstable; urgency=low
 
   * Since the dawn of time (0.0.2pre19-1, January 2004, initial release
