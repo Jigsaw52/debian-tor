@@ -1,3 +1,17 @@
+tor (0.2.1.29-1~lenny+1) stable-security; urgency=high
+
+  * Build tor 0.2.1.29 for lenny security, rather than backport almost
+    all the patches from that version to the 0.2.1.26 currently in stable
+    (which in turn already has most of the patches in .27 and .28).
+    .
+    Tor 0.2.1.29 is a release with several security related fixes, including
+    one for CVE-2011-0427 (heap overflow bug, potential remote code
+    execution), a denial of service involving compression bombs, and
+    zeroing out of cryptographic keys after use to resist cold boot
+    attacks somewhat better.
+
+ -- Peter Palfrader <weasel@debian.org>  Sun, 16 Jan 2011 22:44:47 +0100
+
 tor (0.2.1.29-1) unstable; urgency=high
 
   * New upstream version, including several security related fixes.  See
