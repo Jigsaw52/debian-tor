@@ -1,0 +1,28 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+
+@DPATCH@
+From 31b562e10abe51cf9d520e0a3ad2ffc3277d52a4 Mon Sep 17 00:00:00 2001
+From: Nick Mathewson <nickm@torproject.org>
+Date: Sat, 15 Jan 2011 13:09:12 -0500
+Subject: [PATCH 25/33] Add missing check for hostname answer_len in dnsserv size
+
+This is checked elsewhere too, but let's be RFC-conformant.
+---
+ src/or/dnsserv.c |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
+diff --git a/src/or/dnsserv.c b/src/or/dnsserv.c
+index 57c4493..f8b5c3c 100644
+--- a/src/or/dnsserv.c
++++ b/src/or/dnsserv.c
+@@ -271,6 +271,7 @@ dnsserv_resolved(edge_connection_t *conn,
+                                      name,
+                                      1, (char*)answer, ttl);
+   } else if (answer_type == RESOLVED_TYPE_HOSTNAME &&
++             answer_len < 256 &&
+              conn->socks_request->command == SOCKS_COMMAND_RESOLVE_PTR) {
+     char *ans = tor_strndup(answer, answer_len);
+     evdns_server_request_add_ptr_reply(req, NULL,
+-- 
+1.7.1
+

@@ -1,0 +1,29 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+
+@DPATCH@
+From 1f3b4420233e83ef160ac41398827994ec7ae152 Mon Sep 17 00:00:00 2001
+From: Nick Mathewson <nickm@torproject.org>
+Date: Sat, 15 Jan 2011 10:42:11 -0500
+Subject: [PATCH 20/33] catch another overlong malloc possibility. found by cypherpunks
+
+---
+ src/or/routerparse.c |    3 ++-
+ 1 files changed, 2 insertions(+), 1 deletions(-)
+
+diff --git a/src/or/routerparse.c b/src/or/routerparse.c
+index 070c61b..3aaefec 100644
+--- a/src/or/routerparse.c
++++ b/src/or/routerparse.c
+@@ -3105,7 +3105,8 @@ get_next_token(memarea_t *area,
+ 
+   obstart = *s; /* Set obstart to start of object spec */
+   if (*s+16 >= eol || memchr(*s+11,'\0',eol-*s-16) || /* no short lines, */
+-      strcmp_len(eol-5, "-----", 5)) {          /* nuls or invalid endings */
++      strcmp_len(eol-5, "-----", 5) ||           /* nuls or invalid endings */
++      (eol-*s) > MAX_UNPARSED_OBJECT_SIZE) {     /* name too long */
+     RET_ERR("Malformed object: bad begin line");
+   }
+   tok->object_type = STRNDUP(*s+11, eol-*s-16);
+-- 
+1.7.1
+

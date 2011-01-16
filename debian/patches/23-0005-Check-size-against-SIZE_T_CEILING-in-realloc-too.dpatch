@@ -1,0 +1,41 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+
+@DPATCH@
+From e09ab69703967716b2765e062ca229e641dba53e Mon Sep 17 00:00:00 2001
+From: Nick Mathewson <nickm@torproject.org>
+Date: Mon, 3 Jan 2011 15:15:27 -0500
+Subject: [PATCH 05/33] Check size against SIZE_T_CEILING in realloc too.
+
+Fixes bug 2324.
+---
+ changes/bug2324   |    4 ++++
+ src/common/util.c |    2 ++
+ 2 files changed, 6 insertions(+), 0 deletions(-)
+ create mode 100644 changes/bug2324
+
+diff --git a/changes/bug2324 b/changes/bug2324
+new file mode 100644
+index 0000000..eefc837
+--- /dev/null
++++ b/changes/bug2324
+@@ -0,0 +1,4 @@
++  o Minor bugfixes
++    - Add a check for SIZE_T_MAX to tor_realloc to try to avoid
++      underflow errors there too.  Fixes bug 2324.
++
+diff --git a/src/common/util.c b/src/common/util.c
+index 2b1430c..7a24df8 100644
+--- a/src/common/util.c
++++ b/src/common/util.c
+@@ -167,6 +167,8 @@ _tor_realloc(void *ptr, size_t size DMALLOC_PARAMS)
+ {
+   void *result;
+ 
++  tor_assert(size < SIZE_T_CEILING);
++
+ #ifdef USE_DMALLOC
+   result = dmalloc_realloc(file, line, ptr, size, DMALLOC_FUNC_REALLOC, 0);
+ #else
+-- 
+1.7.1
+

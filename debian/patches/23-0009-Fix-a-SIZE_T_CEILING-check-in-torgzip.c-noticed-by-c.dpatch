@@ -1,0 +1,28 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+
+@DPATCH@
+From d14b0d54d2469744266769d7e61135d1aa1c9c11 Mon Sep 17 00:00:00 2001
+From: Nick Mathewson <nickm@torproject.org>
+Date: Wed, 5 Jan 2011 12:42:34 -0500
+Subject: [PATCH 09/33] Fix a SIZE_T_CEILING check in torgzip.c; noticed by cypherpunks
+
+---
+ src/common/torgzip.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/src/common/torgzip.c b/src/common/torgzip.c
+index b44b159..7678668 100644
+--- a/src/common/torgzip.c
++++ b/src/common/torgzip.c
+@@ -247,7 +247,7 @@ tor_gzip_uncompress(char **out, size_t *out_len,
+ 
+   out_size = in_len * 2;  /* guess 50% compression. */
+   if (out_size < 1024) out_size = 1024;
+-  if (out_size > SIZE_T_CEILING || out_size > UINT_MAX)
++  if (out_size >= SIZE_T_CEILING || out_size > UINT_MAX)
+     goto err;
+ 
+   *out = tor_malloc(out_size);
+-- 
+1.7.1
+

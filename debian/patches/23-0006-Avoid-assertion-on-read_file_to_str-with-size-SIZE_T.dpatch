@@ -1,0 +1,43 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+
+@DPATCH@
+From e365aee97110c6c6df6f56ca9814d88c3808a2d1 Mon Sep 17 00:00:00 2001
+From: Nick Mathewson <nickm@torproject.org>
+Date: Mon, 3 Jan 2011 15:30:11 -0500
+Subject: [PATCH 06/33] Avoid assertion on read_file_to_str() with size==SIZE_T_CEILING-1
+
+Spotted by doors, fixes bug 2326.
+---
+ changes/bug2326   |    6 ++++++
+ src/common/util.c |    2 +-
+ 2 files changed, 7 insertions(+), 1 deletions(-)
+ create mode 100644 changes/bug2326
+
+diff --git a/changes/bug2326 b/changes/bug2326
+new file mode 100644
+index 0000000..239a383
+--- /dev/null
++++ b/changes/bug2326
+@@ -0,0 +1,6 @@
++  o Minor bugfixes
++    - Fix a bug where we would assert if we ever had a
++      cached-descriptors.new file (or another file read directly into
++      memory) of exactly SIZE_T_CEILING bytes.  Found by doors; fixes
++      bug 2326; bugfix on 0.2.1.25.
++
+diff --git a/src/common/util.c b/src/common/util.c
+index 7a24df8..f206d00 100644
+--- a/src/common/util.c
++++ b/src/common/util.c
+@@ -1936,7 +1936,7 @@ read_file_to_str(const char *filename, int flags, struct stat *stat_out)
+     return NULL;
+   }
+ 
+-  if ((uint64_t)(statbuf.st_size)+1 > SIZE_T_CEILING)
++  if ((uint64_t)(statbuf.st_size)+1 >= SIZE_T_CEILING)
+     return NULL;
+ 
+   string = tor_malloc((size_t)(statbuf.st_size+1));
+-- 
+1.7.1
+

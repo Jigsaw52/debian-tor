@@ -1,0 +1,61 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+
+@DPATCH@
+From bd67b23fec5f9312769b9abf26787f074db05217 Mon Sep 17 00:00:00 2001
+From: Nick Mathewson <nickm@torproject.org>
+Date: Mon, 10 Jan 2011 16:18:32 -0500
+Subject: [PATCH 18/33] Always nul-terminate the result passed to evdns_server_add_ptr_reply
+
+In dnsserv_resolved(), we carefully made a nul-terminated copy of the
+answer in a PTR RESOLVED cell... then never used that nul-terminated
+copy.  Ouch.
+
+Surprisingly this one isn't as huge a security problem as it could be.
+The only place where the input to dnsserv_resolved wasn't necessarily
+nul-terminated was when it was called indirectly from relay.c with the
+contents of a relay cell's payload.  If the end of the payload was
+filled with junk, eventdns.c would take the strdup() of the name [This
+part is bad; we might crash there if the cell is in a bad part of the
+stack or the heap] and get a name of at least length
+495[*]. eventdns.c then rejects any name of length over 255, so the
+bogus data would be neither transmitted nor altered.
+
+  [*] If the name was less than 495 bytes long, the client wouldn't
+     actually be reading off the end of the cell.
+
+Nonetheless this is a reasonably annoying bug.  Better fix it.
+
+Found while looking at bug 2332, reported by doorss.  Bugfix on
+0.2.0.1-alpha.
+---
+ changes/bug2332  |    4 ++++
+ src/or/dnsserv.c |    2 +-
+ 2 files changed, 5 insertions(+), 1 deletions(-)
+ create mode 100644 changes/bug2332
+
+diff --git a/changes/bug2332 b/changes/bug2332
+new file mode 100644
+index 0000000..5f73ddd
+--- /dev/null
++++ b/changes/bug2332
+@@ -0,0 +1,4 @@
++  o Minor bugfixes
++    - Fix a bug with handling misformed replies to reverse DNS lookup
++      requests in DNSPort.  Bugfix on Tor 0.2.0.1-alpha.  Related to a bug
++      reported by doorss.
+diff --git a/src/or/dnsserv.c b/src/or/dnsserv.c
+index 579080b..57c4493 100644
+--- a/src/or/dnsserv.c
++++ b/src/or/dnsserv.c
+@@ -275,7 +275,7 @@ dnsserv_resolved(edge_connection_t *conn,
+     char *ans = tor_strndup(answer, answer_len);
+     evdns_server_request_add_ptr_reply(req, NULL,
+                                        name,
+-                                       (char*)answer, ttl);
++                                       ans, ttl);
+     tor_free(ans);
+   } else if (answer_type == RESOLVED_TYPE_ERROR) {
+     err = DNS_ERR_NOTEXIST;
+-- 
+1.7.1
+

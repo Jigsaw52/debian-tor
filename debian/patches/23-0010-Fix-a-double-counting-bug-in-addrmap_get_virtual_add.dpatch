@@ -1,0 +1,43 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+
+@DPATCH@
+From 31d6659d974800e972af43856405e8a7abe08f72 Mon Sep 17 00:00:00 2001
+From: Nick Mathewson <nickm@torproject.org>
+Date: Wed, 5 Jan 2011 16:02:43 -0500
+Subject: [PATCH 10/33] Fix a double-counting bug in addrmap_get_virtual_address
+
+We were decrementing "available" twice for each in-use address we ran
+across.  This would make us declare that we ran out of virtual
+addresses when the address space was only half full.
+---
+ changes/bug2328          |    4 ++++
+ src/or/connection_edge.c |    2 +-
+ 2 files changed, 5 insertions(+), 1 deletions(-)
+ create mode 100644 changes/bug2328
+
+diff --git a/changes/bug2328 b/changes/bug2328
+new file mode 100644
+index 0000000..e5ce492
+--- /dev/null
++++ b/changes/bug2328
+@@ -0,0 +1,4 @@
++  o Minor bugfixes
++    - Fix a bug where we would declare that we had run out of virtual
++      addresses when the address space was only half-exhausted.  Bugfix
++      on 0.1.1.19-rc.
+diff --git a/src/or/connection_edge.c b/src/or/connection_edge.c
+index 9ecdf5c..6c23775 100644
+--- a/src/or/connection_edge.c
++++ b/src/or/connection_edge.c
+@@ -1178,7 +1178,7 @@ addressmap_get_virtual_address(int type)
+       ++next_virtual_addr;
+       --available;
+       log_info(LD_CONFIG, "%d addrs available", (int)available);
+-      if (! --available) {
++      if (! available) {
+         log_warn(LD_CONFIG, "Ran out of virtual addresses!");
+         return NULL;
+       }
+-- 
+1.7.1
+

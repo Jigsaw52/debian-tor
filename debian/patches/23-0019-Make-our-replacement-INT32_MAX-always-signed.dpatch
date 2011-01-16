@@ -1,0 +1,32 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+
+@DPATCH@
+From 9fcc14224b689dff1be8336feeeb563199694c27 Mon Sep 17 00:00:00 2001
+From: Nick Mathewson <nickm@torproject.org>
+Date: Wed, 12 Jan 2011 14:29:38 -0500
+Subject: [PATCH 19/33] Make our replacement INT32_MAX always signed
+
+The C standard says that INT32_MAX is supposed to be a signed
+integer.  On platforms that have it, we get the correct
+platform-defined value.  Our own replacement, however, was
+unsigned.  That's going to cause a bug somewhere eventually.
+---
+ src/common/torint.h |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/src/common/torint.h b/src/common/torint.h
+index 4970dcd..2a9fba6 100644
+--- a/src/common/torint.h
++++ b/src/common/torint.h
+@@ -115,7 +115,7 @@ typedef unsigned int uint32_t;
+ #define UINT32_MAX 0xffffffffu
+ #endif
+ #ifndef INT32_MAX
+-#define INT32_MAX 0x7fffffffu
++#define INT32_MAX 0x7fffffff
+ #endif
+ #endif
+ 
+-- 
+1.7.1
+

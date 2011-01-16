@@ -1,0 +1,28 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+
+@DPATCH@
+From 045e6ebd315db635ea80796469891bab33d1d6be Mon Sep 17 00:00:00 2001
+From: Nick Mathewson <nickm@torproject.org>
+Date: Fri, 7 Jan 2011 22:03:22 -0500
+Subject: [PATCH 14/33] Remove a loud info log message
+
+---
+ src/or/connection_edge.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/src/or/connection_edge.c b/src/or/connection_edge.c
+index 05338e8..052aa37 100644
+--- a/src/or/connection_edge.c
++++ b/src/or/connection_edge.c
+@@ -1195,7 +1195,7 @@ addressmap_get_virtual_address(int type)
+ 
+       increment_virtual_addr();
+       --available;
+-      log_info(LD_CONFIG, "%d addrs available", (int)available);
++      // log_info(LD_CONFIG, "%d addrs available", (int)available);
+       if (! available) {
+         log_warn(LD_CONFIG, "Ran out of virtual addresses!");
+         return NULL;
+-- 
+1.7.1
+

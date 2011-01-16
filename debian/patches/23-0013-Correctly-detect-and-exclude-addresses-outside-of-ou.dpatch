@@ -1,0 +1,84 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+
+@DPATCH@
+From 0a35ac6a22de04748c2f078c8f1f5a166423049d Mon Sep 17 00:00:00 2001
+From: Nick Mathewson <nickm@torproject.org>
+Date: Fri, 7 Jan 2011 12:18:37 -0500
+Subject: [PATCH 13/33] Correctly detect and exclude addresses outside of our virtual address range
+
+Found by cypherpunks; fixes more of 2328.  Bug was introduced in 3623a122;
+first appeared in 0.2.0.5-alpha.
+---
+ changes/bug2328          |    3 ++-
+ src/or/connection_edge.c |   21 +++++++++++++++------
+ 2 files changed, 17 insertions(+), 7 deletions(-)
+
+diff --git a/changes/bug2328 b/changes/bug2328
+index f1a4fa8..fee80a1 100644
+--- a/changes/bug2328
++++ b/changes/bug2328
+@@ -5,4 +5,5 @@
+     - Correctly handle the case where AutomapHostsOnResolve is set but no
+       virtual addresses are available.  Fixes bug2328, bugfix on
+       0.1.2.1-alpha.  Bug found by doorss.
+-
++    - Correctly handle wrapping around to when we run out of virtual address
++      space.  Found by cypherpunks, bugfix on 0.2.0.5-alpha.
+diff --git a/src/or/connection_edge.c b/src/or/connection_edge.c
+index 4caa01c..05338e8 100644
+--- a/src/or/connection_edge.c
++++ b/src/or/connection_edge.c
+@@ -1139,6 +1139,18 @@ address_is_in_virtual_range(const char *address)
+   return 0;
+ }
+ 
++/** Increment the value of next_virtual_addr; reset it to the start of the
++ * virtual address range if it wraps around.
++ */
++static INLINE void
++increment_virtual_addr(void)
++{
++  ++next_virtual_addr;
++  if (addr_mask_cmp_bits(next_virtual_addr, virtual_addr_network,
++                         virtual_addr_netmask_bits))
++    next_virtual_addr = virtual_addr_network;
++}
++
+ /** Return a newly allocated string holding an address of <b>type</b>
+  * (one of RESOLVED_TYPE_{IPV4|HOSTNAME}) that has not yet been mapped,
+  * and that is very unlikely to be the address of any real host.
+@@ -1168,7 +1180,7 @@ addressmap_get_virtual_address(int type)
+       /* Don't hand out any .0 or .255 address. */
+       while ((next_virtual_addr & 0xff) == 0 ||
+              (next_virtual_addr & 0xff) == 0xff) {
+-        ++next_virtual_addr;
++        increment_virtual_addr();
+         if (! --available) {
+           log_warn(LD_CONFIG, "Ran out of virtual addresses!");
+           return NULL;
+@@ -1177,20 +1189,17 @@ addressmap_get_virtual_address(int type)
+       in.s_addr = htonl(next_virtual_addr);
+       tor_inet_ntoa(&in, buf, sizeof(buf));
+       if (!strmap_get(addressmap, buf)) {
+-        ++next_virtual_addr;
++        increment_virtual_addr();
+         break;
+       }
+ 
+-      ++next_virtual_addr;
++      increment_virtual_addr();
+       --available;
+       log_info(LD_CONFIG, "%d addrs available", (int)available);
+       if (! available) {
+         log_warn(LD_CONFIG, "Ran out of virtual addresses!");
+         return NULL;
+       }
+-      if (addr_mask_cmp_bits(next_virtual_addr, virtual_addr_network,
+-                             virtual_addr_netmask_bits))
+-        next_virtual_addr = virtual_addr_network;
+     }
+     return tor_strdup(buf);
+   } else {
+-- 
+1.7.1
+

@@ -1,0 +1,41 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+
+@DPATCH@
+From 2008728df70969d1868b204d4d1059541229d66f Mon Sep 17 00:00:00 2001
+From: Nick Mathewson <nickm@torproject.org>
+Date: Thu, 6 Jan 2011 13:29:36 -0500
+Subject: [PATCH 12/33] Notice a little faster if we're running out of virtual addresses
+
+We were not decrementing "available" every time we did
+++next_virtual_addr in addressmap_get_virtual_address: we left out the
+--available when we skipped .00 and .255 addresses.
+
+This didn't actually cause a bug in most cases, since the failure mode
+was to keep looping around the virtual addresses until we found one,
+or until available hit zero.  It could have given you an infinite loop
+rather than a useful message, however, if you said "VirtualAddrNetwork
+127.0.0.255/32" or something broken like that.
+
+Spotted by cypherpunks
+---
+ src/or/connection_edge.c |    4 ++++
+ 1 files changed, 4 insertions(+), 0 deletions(-)
+
+diff --git a/src/or/connection_edge.c b/src/or/connection_edge.c
+index a01a6e3..001408a 100644
+--- a/src/or/connection_edge.c
++++ b/src/or/connection_edge.c
+@@ -1169,6 +1169,10 @@ addressmap_get_virtual_address(int type)
+       while ((next_virtual_addr & 0xff) == 0 ||
+              (next_virtual_addr & 0xff) == 0xff) {
+         ++next_virtual_addr;
++        if (! --available) {
++          log_warn(LD_CONFIG, "Ran out of virtual addresses!");
++          return NULL;
++        }
+       }
+       in.s_addr = htonl(next_virtual_addr);
+       tor_inet_ntoa(&in, buf, sizeof(buf));
+-- 
+1.7.1
+

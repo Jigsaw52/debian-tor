@@ -1,0 +1,107 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+
+@DPATCH@
+From 729f404efec0795f7ed358e7b2fa08bd62cc1ae8 Mon Sep 17 00:00:00 2001
+From: Nick Mathewson <nickm@torproject.org>
+Date: Mon, 10 Jan 2011 12:07:34 -0500
+Subject: [PATCH 16/33] Add logic in routerparse to not read overlong private keys
+
+I am not at all sure that it is possible to trigger a bug here,
+but better safe than sorry.
+---
+ src/common/crypto.c  |   14 ++++++++------
+ src/common/crypto.h  |    2 +-
+ src/or/routerparse.c |    2 +-
+ src/or/test.c        |    6 +++---
+ 4 files changed, 13 insertions(+), 11 deletions(-)
+
+diff --git a/src/common/crypto.c b/src/common/crypto.c
+index 3343980..da4e03e 100644
+--- a/src/common/crypto.c
++++ b/src/common/crypto.c
+@@ -439,21 +439,23 @@ crypto_pk_generate_key(crypto_pk_env_t *env)
+   return 0;
+ }
+ 
+-/** Read a PEM-encoded private key from the string <b>s</b> into <b>env</b>.
+- * Return 0 on success, -1 on failure.
++/** Read a PEM-encoded private key from the <b>len</b>-byte string <b>s</b>
++ * into <b>env</b>.  Return 0 on success, -1 on failure.  If len is -1,
++ * the string is nul-terminated.
+  */
+ /* Used here, and used for testing. */
+ int
+ crypto_pk_read_private_key_from_string(crypto_pk_env_t *env,
+-                                       const char *s)
++                                       const char *s, ssize_t len)
+ {
+   BIO *b;
+ 
+   tor_assert(env);
+   tor_assert(s);
++  tor_assert(len < INT_MAX && len < SIZE_T_CEILING);
+ 
+-  /* Create a read-only memory BIO, backed by the NUL-terminated string 's' */
+-  b = BIO_new_mem_buf((char*)s, -1);
++  /* Create a read-only memory BIO, backed by the string 's' */
++  b = BIO_new_mem_buf((char*)s, (int)len);
+ 
+   if (env->key)
+     RSA_free(env->key);
+@@ -487,7 +489,7 @@ crypto_pk_read_private_key_from_filename(crypto_pk_env_t *env,
+   }
+ 
+   /* Try to parse it. */
+-  r = crypto_pk_read_private_key_from_string(env, contents);
++  r = crypto_pk_read_private_key_from_string(env, contents, -1);
+   tor_free(contents);
+   if (r)
+     return -1; /* read_private_key_from_string already warned, so we don't.*/
+diff --git a/src/common/crypto.h b/src/common/crypto.h
+index 4fb06be..713a988 100644
+--- a/src/common/crypto.h
++++ b/src/common/crypto.h
+@@ -82,7 +82,7 @@ int crypto_pk_write_private_key_to_string(crypto_pk_env_t *env,
+ int crypto_pk_read_public_key_from_string(crypto_pk_env_t *env,
+                                           const char *src, size_t len);
+ int crypto_pk_read_private_key_from_string(crypto_pk_env_t *env,
+-                                           const char *s);
++                                           const char *s, ssize_t len);
+ int crypto_pk_write_private_key_to_filename(crypto_pk_env_t *env,
+                                             const char *fname);
+ 
+diff --git a/src/or/routerparse.c b/src/or/routerparse.c
+index fc30c62..6ca2293 100644
+--- a/src/or/routerparse.c
++++ b/src/or/routerparse.c
+@@ -3132,7 +3132,7 @@ get_next_token(memarea_t *area,
+       RET_ERR("Couldn't parse public key.");
+   } else if (!strcmp(tok->object_type, "RSA PRIVATE KEY")) { /* private key */
+     tok->key = crypto_new_pk_env();
+-    if (crypto_pk_read_private_key_from_string(tok->key, obstart))
++    if (crypto_pk_read_private_key_from_string(tok->key, obstart, eol-obstart))
+       RET_ERR("Couldn't parse private key.");
+   } else { /* If it's something else, try to base64-decode it */
+     int r;
+diff --git a/src/or/test.c b/src/or/test.c
+index 66fa560..c4458d8 100644
+--- a/src/or/test.c
++++ b/src/or/test.c
+@@ -3361,11 +3361,11 @@ test_v3_networkstatus(void)
+   sign_skey_leg1 = pk_generate(4);
+ 
+   test_assert(!crypto_pk_read_private_key_from_string(sign_skey_1,
+-                                                      AUTHORITY_SIGNKEY_1));
++                                                      AUTHORITY_SIGNKEY_1,-1));
+   test_assert(!crypto_pk_read_private_key_from_string(sign_skey_2,
+-                                                      AUTHORITY_SIGNKEY_2));
++                                                      AUTHORITY_SIGNKEY_2,-1));
+   test_assert(!crypto_pk_read_private_key_from_string(sign_skey_3,
+-                                                      AUTHORITY_SIGNKEY_3));
++                                                      AUTHORITY_SIGNKEY_3,-1));
+ 
+   test_assert(!crypto_pk_cmp_keys(sign_skey_1, cert1->signing_key));
+   test_assert(!crypto_pk_cmp_keys(sign_skey_2, cert2->signing_key));
+-- 
+1.7.1
+
