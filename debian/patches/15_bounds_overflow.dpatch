@@ -1,0 +1,49 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+
+@DPATCH@
+
+Date: Thu, 20 Jan 2011 19:56:51 +0000 (UTC)
+From: nickm@torproject.org
+To: or-cvs@freehaven.net
+Subject: [or-cvs] [tor/maint-0.2.1] Fix bounds-checking in policy_summarize
+
+
+commit 43414eb98821d3b5c6c65181d7545ce938f82c8e
+Author: Robert Ransom <rransom.8774@gmail.com>
+Date:   Thu Jan 20 11:17:57 2011 -0800
+
+    Fix bounds-checking in policy_summarize
+
+    Found by piebeer.
+---
+ changes/policy_summarize-assert |    6 ++++++
+ src/or/policies.c               |    4 ++--
+ 2 files changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/changes/policy_summarize-assert b/changes/policy_summarize-assert
+new file mode 100644
+index 0000000..619e8e7
+--- /dev/null
++++ b/changes/policy_summarize-assert
+@@ -0,0 +1,6 @@
++  o Major bugfixes (security)
++    - Fix a bounds-checking error that could allow an attacker to
++      remotely crash a directory authority.  Found by piebeer.
++      Bugfix on 0.2.1.5-alpha.
++
++
+diff --git a/src/or/policies.c b/src/or/policies.c
+index d4b4a07..0a8fd73 100644
+--- a/src/or/policies.c
++++ b/src/or/policies.c
+@@ -1209,8 +1209,8 @@ policy_summarize(smartlist_t *policy)
+   accepts_str = smartlist_join_strings(accepts, ",", 0, &accepts_len);
+   rejects_str = smartlist_join_strings(rejects, ",", 0, &rejects_len);
+
+-  if (rejects_len > MAX_EXITPOLICY_SUMMARY_LEN &&
+-      accepts_len > MAX_EXITPOLICY_SUMMARY_LEN) {
++  if (rejects_len > MAX_EXITPOLICY_SUMMARY_LEN-strlen("reject")-1 &&
++      accepts_len > MAX_EXITPOLICY_SUMMARY_LEN-strlen("accept")-1) {
+     char *c;
+     shorter_str = accepts_str;
+     prefix = "accept";

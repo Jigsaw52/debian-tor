@@ -1,3 +1,9 @@
+tor (0.2.2.21-alpha-1.weasel.1) experimental; urgency=low
+
+  * Fix bounds-checking in policy_summarize
+
+ -- Peter Palfrader <weasel@debian.org>  Fri, 21 Jan 2011 09:49:22 +0100
+
 tor (0.2.2.21-alpha-1) experimental; urgency=high
 
   * New upstream version, including several security related fixes.  See
