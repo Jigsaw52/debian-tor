@@ -130,7 +130,7 @@ rend_client_send_introduction(origin_circuit_t *introcirc,
     cpath = rendcirc->build_state->pending_final_cpath =
       tor_malloc_zero(sizeof(crypt_path_t));
     cpath->magic = CRYPT_PATH_MAGIC;
-    if (!(cpath->dh_handshake_state = crypto_dh_new())) {
+    if (!(cpath->dh_handshake_state = crypto_dh_new(DH_TYPE_REND))) {
       log_warn(LD_BUG, "Internal error: couldn't allocate DH.");
       goto err;
     }
@@ -814,7 +814,10 @@ rend_client_get_random_intro(const rend_data_t *rend_query)
   intro = smartlist_get(entry->parsed->intro_nodes, i);
   /* Do we need to look up the router or is the extend info complete? */
   if (!intro->extend_info->onion_key) {
-    router = router_get_by_nickname(intro->extend_info->nickname, 0);
+    if (tor_digest_is_zero(intro->extend_info->identity_digest))
+      router = router_get_by_hexdigest(intro->extend_info->nickname);
+    else
+      router = router_get_by_digest(intro->extend_info->identity_digest);
     if (!router) {
       log_info(LD_REND, "Unknown router with nickname '%s'; trying another.",
                intro->extend_info->nickname);
