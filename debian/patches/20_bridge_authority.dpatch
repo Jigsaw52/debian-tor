@@ -1,0 +1,46 @@
+#! /bin/sh -e
+## 20_hidserv_authority
+##
+## All lines beginning with `## DP:' are a description of the patch.
+## DP: Fix a bridge authority bug
+
+if [ $# -lt 1 ]; then
+    echo "`basename $0`: script expects -patch|-unpatch as argument" >&2
+    exit 1
+fi
+
+[ -f debian/patches/00patch-opts ] && . debian/patches/00patch-opts
+patch_opts="${patch_opts:--f --no-backup-if-mismatch} ${2:+-d $2}"
+
+case "$1" in
+    -patch) patch -p1 ${patch_opts} < $0;;
+    -unpatch) patch -R -p1 ${patch_opts} < $0;;
+    *)
+        echo "`basename $0`: script expects -patch|-unpatch as argument" >&2
+        exit 1;;
+esac
+
+exit 0
+#From bcbc8c51cbc026e73e831f6641f5d1fd6ebebd9d Mon Sep 17 00:00:00 2001
+#From: Nick Mathewson <nickm@torproject.org>
+#Date: Thu, 3 Mar 2011 23:51:07 -0500
+#Subject: [PATCH] Do not serve encrypt-only descriptors with the "all" request. Reported by piebeer
+#
+#---
+# src/or/dirserv.c |    2 ++
+# 1 files changed, 2 insertions(+), 0 deletions(-)
+#
+@DPATCH@
+diff --git a/src/or/dirserv.c b/src/or/dirserv.c
+index 1649bd7..7db6c19 100644
+--- a/src/or/dirserv.c
++++ b/src/or/dirserv.c
+@@ -2699,6 +2699,8 @@ dirserv_get_routerdesc_fingerprints(smartlist_t *fps_out, const char *key,
+     SMARTLIST_FOREACH(rl->routers, routerinfo_t *, r,
+                       smartlist_add(fps_out,
+                       tor_memdup(r->cache_info.identity_digest, DIGEST_LEN)));
++    /* Treat "all" requests as if they were unencrypted */
++    for_unencrypted_conn = 1;
+   } else if (!strcmp(key, "authority")) {
+     routerinfo_t *ri = router_get_my_routerinfo();
+     if (ri)
