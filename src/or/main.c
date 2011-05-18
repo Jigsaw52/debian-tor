@@ -1075,6 +1075,8 @@ run_scheduled_events(time_t now)
     rep_history_clean(now - options->RephistTrackTime);
     rend_cache_clean();
     rend_cache_clean_v2_descs_as_dir();
+    if (authdir_mode_v3(options))
+      microdesc_cache_rebuild(NULL, 0);
 #define CLEAN_CACHES_INTERVAL (30*60)
     time_to_clean_caches = now + CLEAN_CACHES_INTERVAL;
   }
@@ -1415,7 +1417,6 @@ do_hup(void)
 
   router_reset_warnings();
   routerlist_reset_warnings();
-  addressmap_clear_transient();
   /* first, reload config variables, in case they've changed */
   if (options->ReloadTorrcOnSIGHUP) {
     /* no need to provide argc/v, they've been cached in init_from_config */
@@ -1585,6 +1586,7 @@ do_main_loop(void)
   }
 }
 
+#ifndef MS_WINDOWS /* Only called when we're willing to use signals */
 /** Libevent callback: invoked when we get a signal.
  */
 static void
@@ -1596,6 +1598,7 @@ signal_callback(int fd, short events, void *arg)
 
   process_signal(sig);
 }
+#endif
 
 /** Do the work of acting on a signal received in <b>sig</b> */
 void
@@ -2042,12 +2045,14 @@ void
 tor_cleanup(void)
 {
   or_options_t *options = get_options();
-  /* Remove our pid file. We don't care if there was an error when we
-   * unlink, nothing we could do about it anyways. */
   if (options->command == CMD_RUN_TOR) {
     time_t now = time(NULL);
+    /* Remove our pid file. We don't care if there was an error when we
+     * unlink, nothing we could do about it anyways. */
     if (options->PidFile)
       unlink(options->PidFile);
+    if (options->ControlPortWriteToFile)
+      unlink(options->ControlPortWriteToFile);
     if (accounting_is_enabled(options))
       accounting_record_bandwidth_usage(now, get_or_state());
     or_state_mark_dirty(get_or_state(), 0); /* force an immediate save. */

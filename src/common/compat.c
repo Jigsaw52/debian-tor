@@ -413,6 +413,8 @@ tor_vasprintf(char **strp, const char *fmt, va_list args)
  * <b>needle</b>, return a pointer to the first occurrence of the needle
  * within the haystack, or NULL if there is no such occurrence.
  *
+ * This function is <em>not</em> timing-safe.
+ *
  * Requires that nlen be greater than zero.
  */
 const void *
@@ -437,7 +439,7 @@ tor_memmem(const void *_haystack, size_t hlen,
   while ((p = memchr(p, first, end-p))) {
     if (p+nlen > end)
       return NULL;
-    if (!memcmp(p, needle, nlen))
+    if (fast_memeq(p, needle, nlen))
       return p;
     ++p;
   }
@@ -1465,6 +1467,45 @@ get_user_homedir(const char *username)
 }
 #endif
 
+/** Modify <b>fname</b> to contain the name of the directory */
+int
+get_parent_directory(char *fname)
+{
+  char *cp;
+  int at_end = 1;
+  tor_assert(fname);
+#ifdef MS_WINDOWS
+  /* If we start with, say, c:, then don't consider that the start of the path
+   */
+  if (fname[0] && fname[1] == ':') {
+    fname += 2;
+  }
+#endif
+  /* Now we want to remove all path-separators at the end of the string,
+   * and to remove the end of the string starting with the path separator
+   * before the last non-path-separator.  In perl, this would be
+   *   s#[/]*$##; s#/[^/]*$##;
+   * on a unixy platform.
+   */
+  cp = fname + strlen(fname);
+  at_end = 1;
+  while (--cp > fname) {
+    int is_sep = (*cp == '/'
+#ifdef MS_WINDOWS
+                  || *cp == '\\'
+#endif
+                  );
+    if (is_sep) {
+      *cp = '\0';
+      if (! at_end)
+        return 0;
+    } else {
+      at_end = 0;
+    }
+  }
+  return -1;
+}
+
 /** Set *addr to the IP address (in dotted-quad notation) stored in c.
  * Return 1 on success, 0 if c is badly formatted.  (Like inet_aton(c,addr),
  * but works on Windows and Solaris.)
@@ -2061,7 +2102,6 @@ correct_tm(int islocal, const time_t *timep, struct tm *resultbuf,
            outcome);
   return r;
 }
-
 
 /** @{ */
 /** As localtime_r, but defined for platforms that don't have it:

@@ -559,7 +559,9 @@ circuit_build_times_create_histogram(circuit_build_times_t *cbt,
  * Return the Pareto start-of-curve parameter Xm.
  *
  * Because we are not a true Pareto curve, we compute this as the
- * weighted average of the N=3 most frequent build time bins.
+ * weighted average of the N most frequent build time bins. N is either
+ * 1 if we don't have enough circuit build time data collected, or
+ * determined by the consensus parameter cbtnummodes (default 3).
  */
 static build_time_t
 circuit_build_times_get_xm(circuit_build_times_t *cbt)
@@ -572,6 +574,9 @@ circuit_build_times_get_xm(circuit_build_times_t *cbt)
   int n=0;
   int num_modes = circuit_build_times_default_num_xm_modes();
 
+  tor_assert(nbins > 0);
+  tor_assert(num_modes > 0);
+
   // Only use one mode if < 1000 buildtimes. Not enough data
   // for multiple.
   if (cbt->total_build_times < CBT_NCIRCUITS_TO_OBSERVE)
@@ -579,6 +584,7 @@ circuit_build_times_get_xm(circuit_build_times_t *cbt)
 
   nth_max_bin = (build_time_t*)tor_malloc_zero(num_modes*sizeof(build_time_t));
 
+  /* Determine the N most common build times */
   for (i = 0; i < nbins; i++) {
     if (histogram[i] >= histogram[nth_max_bin[0]]) {
       nth_max_bin[0] = i;
@@ -599,6 +605,10 @@ circuit_build_times_get_xm(circuit_build_times_t *cbt)
     log_info(LD_CIRC, "Xm mode #%d: %u %u", n, CBT_BIN_TO_MS(nth_max_bin[n]),
              histogram[nth_max_bin[n]]);
   }
+
+  /* The following assert is safe, because we don't get called when we
+   * haven't observed at least CBT_MIN_MIN_CIRCUITS_TO_OBSERVE circuits. */
+  tor_assert(bin_counts > 0);
 
   ret /= bin_counts;
   tor_free(histogram);
@@ -1506,7 +1516,7 @@ circuit_list_path_impl(origin_circuit_t *circ, int verbose, int verbose_names)
                  circ->build_state->is_internal ? "internal" : "exit",
                  circ->build_state->need_uptime ? " (high-uptime)" : "",
                  circ->build_state->desired_path_len,
-                 circ->_base.state == CIRCUIT_STATE_OPEN ? "" : ", exit ",
+                 circ->_base.state == CIRCUIT_STATE_OPEN ? "" : ", last hop ",
                  circ->_base.state == CIRCUIT_STATE_OPEN ? "" :
                  (nickname?nickname:"*unnamed*"));
     smartlist_add(elements, cp);
@@ -1813,7 +1823,7 @@ circuit_n_conn_done(or_connection_t *or_conn, int status)
           continue;
       } else {
         /* We expected a key. See if it's the right one. */
-        if (memcmp(or_conn->identity_digest,
+        if (tor_memneq(or_conn->identity_digest,
                    circ->n_hop->identity_digest, DIGEST_LEN))
           continue;
       }
@@ -2221,7 +2231,7 @@ circuit_extend(cell_t *cell, circuit_t *circ)
   /* Next, check if we're being asked to connect to the hop that the
    * extend cell came from. There isn't any reason for that, and it can
    * assist circular-path attacks. */
-  if (!memcmp(id_digest, TO_OR_CIRCUIT(circ)->p_conn->identity_digest,
+  if (tor_memeq(id_digest, TO_OR_CIRCUIT(circ)->p_conn->identity_digest,
               DIGEST_LEN)) {
     log_fn(LOG_PROTOCOL_WARN, LD_PROTOCOL,
            "Client asked me to extend back to the previous hop.");
@@ -3502,7 +3512,7 @@ static INLINE entry_guard_t *
 is_an_entry_guard(const char *digest)
 {
   SMARTLIST_FOREACH(entry_guards, entry_guard_t *, entry,
-                    if (!memcmp(digest, entry->identity, DIGEST_LEN))
+                    if (tor_memeq(digest, entry->identity, DIGEST_LEN))
                       return entry;
                    );
   return NULL;
@@ -3834,7 +3844,7 @@ entry_guard_register_connect_status(const char *digest, int succeeded,
 
   SMARTLIST_FOREACH(entry_guards, entry_guard_t *, e,
     {
-      if (!memcmp(e->identity, digest, DIGEST_LEN)) {
+      if (tor_memeq(e->identity, digest, DIGEST_LEN)) {
         entry = e;
         idx = e_sl_idx;
         break;
@@ -4461,6 +4471,9 @@ typedef struct {
   tor_addr_t addr;
   /** TLS port for the bridge. */
   uint16_t port;
+  /** Boolean: We are re-parsing our bridge list, and we are going to remove
+   * this one if we don't find it in the list of configured bridges. */
+  unsigned marked_for_removal : 1;
   /** Expected identity digest, or all zero bytes if we don't know what the
    * digest should be. */
   char identity[DIGEST_LEN];
@@ -4469,11 +4482,39 @@ typedef struct {
 } bridge_info_t;
 
 /** A list of configured bridges. Whenever we actually get a descriptor
- * for one, we add it as an entry guard. */
+ * for one, we add it as an entry guard.  Note that the order of bridges
+ * in this list does not necessarily correspond to the order of bridges
+ * in the torrc. */
 static smartlist_t *bridge_list = NULL;
 
-/** Initialize the bridge list to empty, creating it if needed. */
+/** Mark every entry of the bridge list to be removed on our next call to
+ * sweep_bridge_list unless it has first been un-marked. */
 void
+mark_bridge_list(void)
+{
+  if (!bridge_list)
+    bridge_list = smartlist_create();
+  SMARTLIST_FOREACH(bridge_list, bridge_info_t *, b,
+                    b->marked_for_removal = 1);
+}
+
+/** Remove every entry of the bridge list that was marked with
+ * mark_bridge_list if it has not subsequently been un-marked. */
+void
+sweep_bridge_list(void)
+{
+  if (!bridge_list)
+    bridge_list = smartlist_create();
+  SMARTLIST_FOREACH_BEGIN(bridge_list, bridge_info_t *, b) {
+    if (b->marked_for_removal) {
+      SMARTLIST_DEL_CURRENT(bridge_list, b);
+      tor_free(b);
+    }
+  } SMARTLIST_FOREACH_END(b);
+}
+
+/** Initialize the bridge list to empty, creating it if needed. */
+static void
 clear_bridge_list(void)
 {
   if (!bridge_list)
@@ -4486,7 +4527,8 @@ clear_bridge_list(void)
  * (either by comparing keys if possible, else by comparing addr/port).
  * Else return NULL. */
 static bridge_info_t *
-get_configured_bridge_by_addr_port_digest(tor_addr_t *addr, uint16_t port,
+get_configured_bridge_by_addr_port_digest(const tor_addr_t *addr,
+                                          uint16_t port,
                                           const char *digest)
 {
   if (!bridge_list)
@@ -4497,7 +4539,7 @@ get_configured_bridge_by_addr_port_digest(tor_addr_t *addr, uint16_t port,
           !tor_addr_compare(&bridge->addr, addr, CMP_EXACT) &&
           bridge->port == port)
         return bridge;
-      if (!memcmp(bridge->identity, digest, DIGEST_LEN))
+      if (tor_memeq(bridge->identity, digest, DIGEST_LEN))
         return bridge;
     }
   SMARTLIST_FOREACH_END(bridge);
@@ -4527,7 +4569,8 @@ routerinfo_is_a_configured_bridge(routerinfo_t *ri)
  * If it was a bridge, and we still don't know its digest, record it.
  */
 void
-learned_router_identity(tor_addr_t *addr, uint16_t port, const char *digest)
+learned_router_identity(const tor_addr_t *addr, uint16_t port,
+                        const char *digest)
 {
   bridge_info_t *bridge =
     get_configured_bridge_by_addr_port_digest(addr, port, digest);
@@ -4539,11 +4582,20 @@ learned_router_identity(tor_addr_t *addr, uint16_t port, const char *digest)
 }
 
 /** Remember a new bridge at <b>addr</b>:<b>port</b>. If <b>digest</b>
- * is set, it tells us the identity key too. */
+ * is set, it tells us the identity key too.  If we already had the
+ * bridge in our list, unmark it, and don't actually add anything new. */
 void
-bridge_add_from_config(const tor_addr_t *addr, uint16_t port, char *digest)
+bridge_add_from_config(const tor_addr_t *addr, uint16_t port,
+                       const char *digest)
 {
-  bridge_info_t *b = tor_malloc_zero(sizeof(bridge_info_t));
+  bridge_info_t *b;
+
+  if ((b = get_configured_bridge_by_addr_port_digest(addr, port, digest))) {
+    b->marked_for_removal = 0;
+    return;
+  }
+
+  b = tor_malloc_zero(sizeof(bridge_info_t));
   tor_addr_copy(&b->addr, addr);
   b->port = port;
   if (digest)
@@ -4551,6 +4603,7 @@ bridge_add_from_config(const tor_addr_t *addr, uint16_t port, char *digest)
   b->fetch_status.schedule = DL_SCHED_BRIDGE;
   if (!bridge_list)
     bridge_list = smartlist_create();
+
   smartlist_add(bridge_list, b);
 }
 
@@ -4578,7 +4631,7 @@ find_bridge_by_digest(const char *digest)
 {
   SMARTLIST_FOREACH(bridge_list, bridge_info_t *, bridge,
     {
-      if (!memcmp(bridge->identity, digest, DIGEST_LEN))
+      if (tor_memeq(bridge->identity, digest, DIGEST_LEN))
         return bridge;
     });
   return NULL;
