@@ -2353,6 +2353,10 @@ typedef struct config_line_t {
 
 typedef struct routerset_t routerset_t;
 
+/** A magic value for the (Socks|OR|...)Port options below, telling Tor
+ * to pick its own port. */
+#define CFG_AUTO_PORT 0xc4005e
+
 /** Configuration options for a Tor process. */
 typedef struct {
   uint32_t _magic;
@@ -2441,6 +2445,7 @@ typedef struct {
   int ControlPort; /**< Port to listen on for control connections. */
   config_line_t *ControlSocket; /**< List of Unix Domain Sockets to listen on
                                  * for control connections. */
+  int ControlSocketsGroupWritable; /**< Boolean: Are control sockets g+rw? */
   int DirPort; /**< Port to listen on for directory connections. */
   int DNSPort; /**< Port to listen on for DNS requests. */
   int AssumeReachable; /**< Whether to publish our descriptor regardless. */
@@ -2489,7 +2494,9 @@ typedef struct {
   /** Boolean: do we publish hidden service descriptors to the HS auths? */
   int PublishHidServDescriptors;
   int FetchServerDescriptors; /**< Do we fetch server descriptors as normal? */
-  int FetchHidServDescriptors; /** and hidden service descriptors? */
+  int FetchHidServDescriptors; /**< and hidden service descriptors? */
+  int FetchV2Networkstatus; /**< Do we fetch v2 networkstatus documents when
+                             * we don't need to? */
   int HidServDirectoryV2; /**< Do we participate in the HS DHT? */
 
   int MinUptimeHidServDirectoryV2; /**< As directory authority, accept hidden
@@ -2868,6 +2875,11 @@ typedef struct {
    * the defaults have changed. */
   int _UsingTestNetworkDefaults;
 
+  /** File where we should write the ControlPort. */
+  char *ControlPortWriteToFile;
+  /** Should that file be group-readable? */
+  int ControlPortFileGroupReadable;
+
 } or_options_t;
 
 /** Persistent state for an onion router, as saved to disk. */
@@ -3139,6 +3151,9 @@ typedef enum setopt_err_t {
 typedef enum {
   /** We're remapping this address because the controller told us to. */
   ADDRMAPSRC_CONTROLLER,
+  /** We're remapping this address because of an AutomapHostsOnResolve
+   * configuration. */
+  ADDRMAPSRC_AUTOMAP,
   /** We're remapping this address because our configuration (via torrc, the
    * command line, or a SETCONF command) told us to. */
   ADDRMAPSRC_TORRC,
@@ -3203,7 +3218,9 @@ typedef enum buildtimeout_set_event_t {
  */
 #define CONN_LOG_PROTECT(conn, stmt)                                    \
   STMT_BEGIN                                                            \
-    int _log_conn_is_control = (conn && conn->type == CONN_TYPE_CONTROL); \
+    int _log_conn_is_control;                                           \
+    tor_assert(conn);                                                   \
+    _log_conn_is_control = (conn->type == CONN_TYPE_CONTROL);           \
     if (_log_conn_is_control)                                           \
       disable_control_logging();                                        \
   STMT_BEGIN stmt; STMT_END;                                            \
