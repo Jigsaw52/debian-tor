@@ -1275,6 +1275,9 @@ options_act(or_options_t *old_options)
     int revise_trackexithosts = 0;
     int revise_automap_entries = 0;
     if ((options->UseEntryGuards && !old_options->UseEntryGuards) ||
+        options->UseBridges != old_options->UseBridges ||
+        (options->UseBridges &&
+         !config_lines_eq(options->Bridges, old_options->Bridges)) ||
         !routerset_equal(old_options->ExcludeNodes,options->ExcludeNodes) ||
         !routerset_equal(old_options->ExcludeExitNodes,
                          options->ExcludeExitNodes) ||
@@ -1282,8 +1285,9 @@ options_act(or_options_t *old_options)
         !routerset_equal(old_options->ExitNodes, options->ExitNodes) ||
         options->StrictNodes != old_options->StrictNodes) {
       log_info(LD_CIRC,
-               "Changed to using entry guards, or changed preferred or "
-               "excluded node lists. Abandoning previous circuits.");
+               "Changed to using entry guards or bridges, or changed "
+               "preferred or excluded node lists. "
+               "Abandoning previous circuits.");
       circuit_mark_all_unused_circs();
       circuit_expire_all_dirty_circs();
       revise_trackexithosts = 1;
@@ -3398,8 +3402,8 @@ options_validate(or_options_t *old_options, or_options_t *options,
   }
 
   if (options->HTTPProxyAuthenticator) {
-    if (strlen(options->HTTPProxyAuthenticator) >= 48)
-      REJECT("HTTPProxyAuthenticator is too long (>= 48 chars).");
+    if (strlen(options->HTTPProxyAuthenticator) >= 512)
+      REJECT("HTTPProxyAuthenticator is too long (>= 512 chars).");
   }
 
   if (options->HTTPSProxy) { /* parse it now */
@@ -3412,8 +3416,8 @@ options_validate(or_options_t *old_options, or_options_t *options,
   }
 
   if (options->HTTPSProxyAuthenticator) {
-    if (strlen(options->HTTPSProxyAuthenticator) >= 48)
-      REJECT("HTTPSProxyAuthenticator is too long (>= 48 chars).");
+    if (strlen(options->HTTPSProxyAuthenticator) >= 512)
+      REJECT("HTTPSProxyAuthenticator is too long (>= 512 chars).");
   }
 
   if (options->Socks4Proxy) { /* parse it now */
