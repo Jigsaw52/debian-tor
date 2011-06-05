@@ -525,8 +525,9 @@ directory_initiate_command_routerstatus_rend(routerstatus_t *status,
   router = router_get_by_digest(status->identity_digest);
 
   if (!router && anonymized_connection) {
-    log_info(LD_DIR, "Not sending anonymized request to directory '%s'; we "
-                     "don't have its router descriptor.", status->nickname);
+    log_info(LD_DIR, "Not sending anonymized request to directory %s; we "
+             "don't have its router descriptor.",
+             routerstatus_describe(status));
     return;
   } else if (router) {
     address = router->address;
@@ -539,10 +540,10 @@ directory_initiate_command_routerstatus_rend(routerstatus_t *status,
 
   if (options->ExcludeNodes && options->StrictNodes &&
       routerset_contains_routerstatus(options->ExcludeNodes, status)) {
-    log_warn(LD_DIR, "Wanted to contact directory mirror '%s' for %s, but "
+    log_warn(LD_DIR, "Wanted to contact directory mirror %s for %s, but "
              "it's in our ExcludedNodes list and StrictNodes is set. "
              "Skipping. This choice might make your Tor not work.",
-             status->nickname,
+             routerstatus_describe(status),
              dir_conn_purpose_to_string(dir_purpose));
     return;
   }
@@ -1900,7 +1901,6 @@ connection_dir_client_reached_eof(dir_connection_t *conn)
             router_get_trusteddirserver_by_digest(conn->identity_digest);
           char *rejected_hdr = http_get_header(headers,
                                                "X-Descriptor-Not-New: ");
-          int rejected = 0;
           if (rejected_hdr) {
             if (!strcmp(rejected_hdr, "Yes")) {
               log_info(LD_GENERAL,
@@ -1913,7 +1913,6 @@ connection_dir_client_reached_eof(dir_connection_t *conn)
                * last descriptor, not on the published time of the last
                * descriptor.  If those are different, that's a bad thing to
                * do. -NM */
-              rejected = 1;
             }
             tor_free(rejected_hdr);
           }

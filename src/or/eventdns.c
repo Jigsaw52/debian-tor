@@ -1028,6 +1028,9 @@ request_parse(u8 *packet, ssize_t length, struct evdns_server_port *port, struct
 	GET16(answers);
 	GET16(authority);
 	GET16(additional);
+	(void)additional;
+	(void)authority;
+	(void)answers;
 
 	if (flags & 0x8000) return -1; /* Must not be an answer. */
 	flags &= 0x0110; /* Only RD and CD get preserved. */
@@ -1560,7 +1563,7 @@ evdns_request_data_build(const char *const name, const size_t name_len,
 
 /* exported function */
 struct evdns_server_port *
-evdns_add_server_port(int socket, int is_tcp, evdns_request_callback_fn_type cb, void *user_data)
+evdns_add_server_port(tor_socket_t socket, int is_tcp, evdns_request_callback_fn_type cb, void *user_data)
 {
 	struct evdns_server_port *port;
 	if (!(port = mm_malloc(sizeof(struct evdns_server_port))))
@@ -2288,7 +2291,7 @@ _evdns_nameserver_add_impl(const struct sockaddr *address,
 
 	evtimer_set(&ns->timeout_event, nameserver_prod_callback, ns);
 
-	ns->socket = socket(PF_INET, SOCK_DGRAM, 0);
+	ns->socket = socket(address->sa_family, SOCK_DGRAM, 0);
 	if (ns->socket < 0) { err = 1; goto out1; }
 #ifdef WIN32
 	{

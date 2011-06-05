@@ -51,7 +51,8 @@ int authdir_mode_tests_reachability(or_options_t *options);
 int authdir_mode_bridge(or_options_t *options);
 
 uint16_t router_get_advertised_or_port(or_options_t *options);
-uint16_t router_get_advertised_dir_port(or_options_t *options);
+uint16_t router_get_advertised_dir_port(or_options_t *options,
+                                        uint16_t dirport);
 
 int server_mode(or_options_t *options);
 int public_server_mode(or_options_t *options);
@@ -62,7 +63,7 @@ int should_refuse_unknown_exits(or_options_t *options);
 
 void router_upload_dir_desc_to_dirservers(int force);
 void mark_my_descriptor_dirty_if_older_than(time_t when);
-void mark_my_descriptor_dirty(void);
+void mark_my_descriptor_dirty(const char *reason);
 void check_descriptor_bandwidth_changed(time_t now);
 void check_descriptor_ipaddress_changed(time_t now);
 void router_new_address_suggestion(const char *suggestion,
@@ -85,6 +86,28 @@ int extrainfo_dump_to_string(char **s, extrainfo_t *extrainfo,
 int is_legal_nickname(const char *s);
 int is_legal_nickname_or_hexdigest(const char *s);
 int is_legal_hexdigest(const char *s);
+
+/**
+ * Longest allowed output of format_node_description, plus 1 character for
+ * NUL.  This allows space for:
+ * "$FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF~xxxxxxxxxxxxxxxxxxx at"
+ * " [ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255]"
+ * plus a terminating NUL.
+ */
+#define NODE_DESC_BUF_LEN (MAX_VERBOSE_NICKNAME_LEN+4+TOR_ADDR_BUF_LEN)
+const char *format_node_description(char *buf,
+                                    const char *id_digest,
+                                    int is_named,
+                                    const char *nickname,
+                                    const tor_addr_t *addr,
+                                    uint32_t addr32h);
+const char *router_get_description(char *buf, const routerinfo_t *ri);
+const char *routerstatus_get_description(char *buf, const routerstatus_t *rs);
+const char *extend_info_get_description(char *buf, const extend_info_t *ei);
+const char *router_describe(const routerinfo_t *ri);
+const char *routerstatus_describe(const routerstatus_t *ri);
+const char *extend_info_describe(const extend_info_t *ei);
+
 void router_get_verbose_nickname(char *buf, const routerinfo_t *router);
 void routerstatus_get_verbose_nickname(char *buf,
                                        const routerstatus_t *router);

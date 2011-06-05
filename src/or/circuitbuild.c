@@ -262,7 +262,7 @@ circuit_build_times_test_frequency(void)
 }
 
 /**
- * Retrieve and bounds-check the cbtmintimeout consensus paramter.
+ * Retrieve and bounds-check the cbtmintimeout consensus parameter.
  *
  * Effect: This is the minimum allowed timeout value in milliseconds.
  * The minimum is to prevent rounding to 0 (we only check once
@@ -1753,10 +1753,9 @@ circuit_handle_first_hop(origin_circuit_t *circ)
 
   if (!n_conn) {
     /* not currently connected in a useful way. */
-    const char *name = strlen(firsthop->extend_info->nickname) ?
-      firsthop->extend_info->nickname : fmt_addr(&firsthop->extend_info->addr);
-    log_info(LD_CIRC, "Next router is %s: %s ",
-             safe_str_client(name), msg?msg:"???");
+    log_info(LD_CIRC, "Next router is %s: %s",
+             safe_str_client(extend_info_describe(firsthop->extend_info)),
+             msg?msg:"???");
     circ->_base.n_hop = extend_info_dup(firsthop->extend_info);
 
     if (should_launch) {
@@ -2039,7 +2038,7 @@ circuit_send_next_onion_skin(origin_circuit_t *circ)
     circuit_set_state(TO_CIRCUIT(circ), CIRCUIT_STATE_BUILDING);
     log_info(LD_CIRC,"First hop: finished sending %s cell to '%s'",
              fast ? "CREATE_FAST" : "CREATE",
-             router ? router->nickname : "<unnamed>");
+             router ? router_describe(router) : "<unnamed>");
   } else {
     tor_assert(circ->cpath->state == CPATH_STATE_OPEN);
     tor_assert(circ->_base.state == CIRCUIT_STATE_BUILDING);
@@ -2829,7 +2828,7 @@ choose_good_exit_server_general(routerlist_t *dir, int need_uptime,
 
   tor_free(n_supported);
   if (router) {
-    log_info(LD_CIRC, "Chose exit server '%s'", router->nickname);
+    log_info(LD_CIRC, "Chose exit server '%s'", router_describe(router));
     return router;
   }
   if (options->ExitNodes) {
@@ -2936,7 +2935,7 @@ warn_if_last_router_excluded(origin_circuit_t *circ, const extend_info_t *exit)
       log_warn(LD_BUG, "Using %s '%s' which is listed in ExcludeNodes%s, "
                "even though StrictNodes is set. Please report. "
                "(Circuit purpose: %s)",
-               description, exit->nickname,
+               description, extend_info_describe(exit),
                rs==options->ExcludeNodes?"":" or ExcludeExitNodes",
                circuit_purpose_to_string(purpose));
     } else {
@@ -2945,7 +2944,7 @@ warn_if_last_router_excluded(origin_circuit_t *circ, const extend_info_t *exit)
                "prevent this (and possibly break your Tor functionality), "
                "set the StrictNodes configuration option. "
                "(Circuit purpose: %s)",
-               description, exit->nickname,
+               description, extend_info_describe(exit),
                rs==options->ExcludeNodes?"":" or ExcludeExitNodes",
                circuit_purpose_to_string(purpose));
     }
@@ -2976,7 +2975,8 @@ onion_pick_cpath_exit(origin_circuit_t *circ, extend_info_t *exit)
 
   if (exit) { /* the circuit-builder pre-requested one */
     warn_if_last_router_excluded(circ, exit);
-    log_info(LD_CIRC,"Using requested exit node '%s'", exit->nickname);
+    log_info(LD_CIRC,"Using requested exit node '%s'",
+             extend_info_describe(exit));
     exit = extend_info_dup(exit);
   } else { /* we have to decide one */
     routerinfo_t *router =
@@ -3025,8 +3025,8 @@ circuit_extend_to_new_exit(origin_circuit_t *circ, extend_info_t *exit)
   circuit_append_new_exit(circ, exit);
   circuit_set_state(TO_CIRCUIT(circ), CIRCUIT_STATE_BUILDING);
   if ((err_reason = circuit_send_next_onion_skin(circ))<0) {
-    log_warn(LD_CIRC, "Couldn't extend circuit to new point '%s'.",
-             exit->nickname);
+    log_warn(LD_CIRC, "Couldn't extend circuit to new point %s.",
+             extend_info_describe(exit));
     circuit_mark_for_close(TO_CIRCUIT(circ), -err_reason);
     return -1;
   }
@@ -3250,7 +3250,8 @@ onion_extend_cpath(origin_circuit_t *circ)
   }
 
   log_debug(LD_CIRC,"Chose router %s for hop %d (exit is %s)",
-            info->nickname, cur_len+1, build_state_get_exit_nickname(state));
+            extend_info_describe(info),
+            cur_len+1, build_state_get_exit_nickname(state));
 
   onion_append_hop(&circ->cpath, info);
   extend_info_free(info);
@@ -3382,6 +3383,8 @@ entry_guard_set_status(entry_guard_t *e, routerinfo_t *ri,
     *reason = "down";
   else if (options->UseBridges && ri->purpose != ROUTER_PURPOSE_BRIDGE)
     *reason = "not a bridge";
+  else if (options->UseBridges && !routerinfo_is_a_configured_bridge(ri))
+    *reason = "not a configured bridge";
   else if (!options->UseBridges && !ri->is_possible_guard &&
            !routerset_contains_router(options->EntryNodes,ri))
     *reason = "not recommended as a guard";
@@ -3466,11 +3469,16 @@ entry_is_live(entry_guard_t *e, int need_uptime, int need_capacity,
     *msg = "no descriptor";
     return NULL;
   }
-  if (get_options()->UseBridges && r->purpose != ROUTER_PURPOSE_BRIDGE) {
-    *msg = "not a bridge";
-    return NULL;
-  }
-  if (!get_options()->UseBridges && r->purpose != ROUTER_PURPOSE_GENERAL) {
+  if (options->UseBridges) {
+    if (r->purpose != ROUTER_PURPOSE_BRIDGE) {
+      *msg = "not a bridge";
+      return NULL;
+    }
+    if (!routerinfo_is_a_configured_bridge(r)) {
+      *msg = "not a configured bridge";
+      return NULL;
+    }
+  } else if (r->purpose != ROUTER_PURPOSE_GENERAL) {
     *msg = "not general-purpose";
     return NULL;
   }
@@ -3526,20 +3534,24 @@ log_entry_guards(int severity)
   smartlist_t *elements = smartlist_create();
   char *s;
 
-  SMARTLIST_FOREACH(entry_guards, entry_guard_t *, e,
+  SMARTLIST_FOREACH_BEGIN(entry_guards, entry_guard_t *, e)
     {
       const char *msg = NULL;
       char *cp;
       if (entry_is_live(e, 0, 1, 0, &msg))
-        tor_asprintf(&cp, "%s (up %s)",
+        tor_asprintf(&cp, "%s [%s] (up %s)",
                      e->nickname,
+                     hex_str(e->identity, DIGEST_LEN),
                      e->made_contact ? "made-contact" : "never-contacted");
       else
-        tor_asprintf(&cp, "%s (%s, %s)",
-                     e->nickname, msg,
+        tor_asprintf(&cp, "%s [%s] (%s, %s)",
+                     e->nickname,
+                     hex_str(e->identity, DIGEST_LEN),
+                     msg,
                      e->made_contact ? "made-contact" : "never-contacted");
       smartlist_add(elements, cp);
-    });
+    }
+  SMARTLIST_FOREACH_END(e);
 
   s = smartlist_join_strings(elements, ",", 0, NULL);
   SMARTLIST_FOREACH(elements, char*, cp, tor_free(cp));
@@ -3607,7 +3619,8 @@ add_an_entry_guard(routerinfo_t *chosen, int reset_status)
       return NULL;
   }
   entry = tor_malloc_zero(sizeof(entry_guard_t));
-  log_info(LD_CIRC, "Chose '%s' as new entry guard.", router->nickname);
+  log_info(LD_CIRC, "Chose '%s' as new entry guard.",
+           router_describe(router));
   strlcpy(entry->nickname, router->nickname, sizeof(entry->nickname));
   memcpy(entry->identity, router->cache_info.identity_digest, DIGEST_LEN);
   /* Choose expiry time smudged over the past month. The goal here
@@ -3766,7 +3779,6 @@ void
 entry_guards_compute_status(or_options_t *options, time_t now)
 {
   int changed = 0;
-  int severity = LOG_DEBUG;
   digestmap_t *reasons;
 
   if (! entry_guards)
@@ -3793,15 +3805,14 @@ entry_guards_compute_status(or_options_t *options, time_t now)
   if (remove_dead_entry_guards(now))
     changed = 1;
 
-  severity = changed ? LOG_DEBUG : LOG_INFO;
-
   if (changed) {
     SMARTLIST_FOREACH_BEGIN(entry_guards, entry_guard_t *, entry) {
       const char *reason = digestmap_get(reasons, entry->identity);
       const char *live_msg = "";
       routerinfo_t *r = entry_is_live(entry, 0, 1, 0, &live_msg);
-      log_info(LD_CIRC, "Summary: Entry '%s' is %s, %s%s%s, and %s%s.",
+      log_info(LD_CIRC, "Summary: Entry %s [%s] is %s, %s%s%s, and %s%s.",
                entry->nickname,
+               hex_str(entry->identity, DIGEST_LEN),
                entry->unreachable_since ? "unreachable" : "reachable",
                entry->bad_since ? "unusable" : "usable",
                reason ? ", ": "",
