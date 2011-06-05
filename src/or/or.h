@@ -970,7 +970,7 @@ typedef struct connection_t {
   unsigned int proxy_state:4;
 
   /** Our socket; -1 if this connection is closed, or has no socket. */
-  evutil_socket_t s;
+  tor_socket_t s;
   int conn_array_index; /**< Index into the global connection array. */
   struct event *read_event; /**< Libevent event structure. */
   struct event *write_event; /**< Libevent event structure. */
@@ -1009,7 +1009,7 @@ typedef struct connection_t {
   /* XXXX023 move this field, and all the listener-only fields (just
      socket_family, I think), into a new listener_connection_t subtype. */
   /** If the connection is a CONN_TYPE_AP_DNS_LISTENER, this field points
-   * to the evdns_server_port is uses to listen to and answer connections. */
+   * to the evdns_server_port it uses to listen to and answer connections. */
   struct evdns_server_port *dns_server_port;
 
   /** Unique ID for measuring tunneled network status requests. */
@@ -1242,6 +1242,9 @@ typedef struct control_connection_t {
 
   /** True if we have sent a protocolinfo reply on this connection. */
   unsigned int have_sent_protocolinfo:1;
+  /** True if we have received a takeownership command on this
+   * connection. */
+  unsigned int is_owning_control_connection:1;
 
   /** Amount of space allocated in incoming_cmd. */
   uint32_t incoming_cmd_len;
@@ -2140,6 +2143,11 @@ typedef struct circuit_t {
    * in time in order to indicate that a circuit shouldn't be used for new
    * streams, but that it can stay alive as long as it has streams on it.
    * That's a kludge we should fix.
+   *
+   * XXX023 The CBT code uses this field to record when HS-related
+   * circuits entered certain states.  This usage probably won't
+   * interfere with this field's primary purpose, but we should
+   * document it more thoroughly to make sure of that.
    */
   time_t timestamp_dirty;
 
@@ -2472,7 +2480,17 @@ typedef struct {
    * when doing so. */
   char *BridgePassword;
 
-  int UseBridges; /**< Boolean: should we start all circuits with a bridge? */
+  /** Whether we should start all circuits with a bridge. "1" means strictly
+   * yes, "0" means strictly no, and "auto" means that we do iff any bridges
+   * are configured, we are not running a server and have not specified a list
+   * of entry nodes. */
+  char *UseBridges_;
+  /** Effective value of UseBridges. Will be set equally for UseBridges set to
+   * 1 or 0, but for 'auto' it will be set to 1 iff any bridges are
+   * configured, we are not running a server and have not specified a list of
+   * entry nodes. */
+  int UseBridges;
+
   config_line_t *Bridges; /**< List of bootstrap bridge addresses. */
 
   int BridgeRelay; /**< Boolean: are we acting as a bridge relay? We make
@@ -2674,6 +2692,11 @@ typedef struct {
   int DisablePredictedCircuits; /**< Boolean: does Tor preemptively
                                  * make circuits in the background (0),
                                  * or not (1)? */
+
+  /** Process specifier for a controller that ‘owns’ this Tor
+   * instance.  Tor will terminate if its owning controller does. */
+  char *OwningControllerProcess;
+
   int ShutdownWaitLength; /**< When we get a SIGINT and we're a server, how
                            * long do we wait before exiting? */
   char *SafeLogging; /**< Contains "relay", "1", "0" (meaning no scrubbing). */

@@ -38,6 +38,8 @@
 #include <shlobj.h>
 #endif
 
+#include "procmon.h"
+
 /** Enumeration of types which option values can take */
 typedef enum config_type_t {
   CONFIG_TYPE_STRING = 0,   /**< An arbitrary string. */
@@ -209,7 +211,7 @@ static config_var_t _option_vars[] = {
   V(ControlPortFileGroupReadable,BOOL,     "0"),
   V(ControlPortWriteToFile,      FILENAME, NULL),
   V(ControlSocket,               LINELIST, NULL),
-  V(ControlSocketsGroupWritable,    BOOL,     "0"),
+  V(ControlSocketsGroupWritable, BOOL,     "0"),
   V(CookieAuthentication,        BOOL,     "0"),
   V(CookieAuthFileGroupReadable, BOOL,     "0"),
   V(CookieAuthFile,              STRING,   NULL),
@@ -374,7 +376,7 @@ static config_var_t _option_vars[] = {
   V(TransPort,                   PORT,     "0"),
   V(TunnelDirConns,              BOOL,     "1"),
   V(UpdateBridgesFromAuthority,  BOOL,     "0"),
-  V(UseBridges,                  BOOL,     "0"),
+  VAR("UseBridges",              STRING,   UseBridges_, "auto"),
   V(UseEntryGuards,              BOOL,     "1"),
   V(User,                        STRING,   NULL),
   VAR("V1AuthoritativeDirectory",BOOL, V1AuthoritativeDir,   "0"),
@@ -398,6 +400,7 @@ static config_var_t _option_vars[] = {
   VAR("__LeaveStreamsUnattached",BOOL,  LeaveStreamsUnattached,   "0"),
   VAR("__HashedControlSessionPassword", LINELIST, HashedControlSessionPassword,
       NULL),
+  VAR("__OwningControllerProcess",STRING,OwningControllerProcess, NULL),
   V(MinUptimeHidServDirectoryV2, INTERVAL, "24 hours"),
   V(_UsingTestNetworkDefaults,   BOOL,     "0"),
 
@@ -1169,6 +1172,8 @@ options_act(or_options_t *old_options)
   or_options_t *options = get_options();
   int running_tor = options->command == CMD_RUN_TOR;
   char *msg;
+  const int transition_affects_workers =
+    old_options && options_transition_affects_workers(old_options, options);
 
   if (running_tor && !have_lockfile()) {
     if (try_locking(options, 1) < 0)
@@ -1220,6 +1225,17 @@ options_act(or_options_t *old_options)
     finish_daemon(options->DataDirectory);
   }
 
+  /* We want to reinit keys as needed before we do much of anything else:
+     keys are important, and other things can depend on them. */
+  if (transition_affects_workers ||
+      (options->V3AuthoritativeDir && (!old_options ||
+                                       !old_options->V3AuthoritativeDir))) {
+    if (init_keys() < 0) {
+      log_warn(LD_BUG,"Error initializing keys; exiting");
+      return -1;
+    }
+  }
+
   /* Write our PID to the PID file. If we do not have write permissions we
    * will log a warning */
   if (options->PidFile)
@@ -1240,6 +1256,8 @@ options_act(or_options_t *old_options)
     log_warn(LD_CONFIG,"Error creating cookie authentication file.");
     return -1;
   }
+
+  monitor_owning_controller_process(options->OwningControllerProcess);
 
   /* reload keys as needed for rendezvous services. */
   if (rend_service_load_keys()<0) {
@@ -1341,14 +1359,10 @@ options_act(or_options_t *old_options)
       }
     }
 
-    if (options_transition_affects_workers(old_options, options)) {
+    if (transition_affects_workers) {
       log_info(LD_GENERAL,
                "Worker-related options changed. Rotating workers.");
 
-      if (init_keys() < 0) {
-        log_warn(LD_BUG,"Error initializing keys; exiting");
-        return -1;
-      }
       if (server_mode(options) && !server_mode(old_options)) {
         ip_address_changed(0);
         if (can_complete_circuit || !any_predicted_circuits(time(NULL)))
@@ -1361,9 +1375,6 @@ options_act(or_options_t *old_options)
       if (dns_reset())
         return -1;
     }
-
-    if (options->V3AuthoritativeDir && !old_options->V3AuthoritativeDir)
-      init_keys();
 
     if (options->PerConnBWRate != old_options->PerConnBWRate ||
         options->PerConnBWBurst != old_options->PerConnBWBurst)
@@ -1459,7 +1470,7 @@ options_act(or_options_t *old_options)
    */
   if (!old_options ||
       options_transition_affects_descriptor(old_options, options))
-    mark_my_descriptor_dirty();
+    mark_my_descriptor_dirty("config change");
 
   /* We may need to reschedule some directory stuff if our status changed. */
   if (old_options) {
@@ -2052,6 +2063,7 @@ get_assigned_option(config_format_t *fmt, void *options,
         escape_val = 0;
         break;
       }
+      /* fall through */
     case CONFIG_TYPE_INTERVAL:
     case CONFIG_TYPE_UINT:
       /* This means every or_options_t uint or bool element
@@ -3220,6 +3232,19 @@ options_validate(or_options_t *old_options, or_options_t *options,
            "of the Internet, so they must not set Reachable*Addresses "
            "or FascistFirewall.");
 
+  /* XXX023 use autobool instead. */
+  if (!strcmp(options->UseBridges_, "auto")) {
+    options->UseBridges = (options->Bridges &&
+                           !server_mode(options) &&
+                           !options->EntryNodes);
+  } else if (!strcmp(options->UseBridges_, "0")) {
+    options->UseBridges = 0;
+  } else if (!strcmp(options->UseBridges_, "1")) {
+    options->UseBridges = 1;
+  } else {
+    REJECT("UseBridges must be 0, 1, or auto");
+  }
+
   if (options->UseBridges &&
       server_mode(options))
     REJECT("Servers must be able to freely connect to the rest "
@@ -3480,6 +3505,16 @@ options_validate(or_options_t *old_options, or_options_t *options,
     }
   }
 
+  if (options->OwningControllerProcess) {
+    const char *validate_pspec_msg = NULL;
+    if (tor_validate_process_specifier(options->OwningControllerProcess,
+                                       &validate_pspec_msg)) {
+      tor_asprintf(msg, "Bad OwningControllerProcess: %s",
+                   validate_pspec_msg);
+      return -1;
+    }
+  }
+
   if (options->ControlListenAddress) {
     int all_are_local = 1;
     config_line_t *ln;
@@ -3544,10 +3579,8 @@ options_validate(or_options_t *old_options, or_options_t *options,
   if (validate_dir_authorities(options, old_options) < 0)
     REJECT("Directory authority line did not parse. See logs for details.");
 
-  if (options->UseBridges && !options->Bridges)
-    REJECT("If you set UseBridges, you must specify at least one bridge.");
   if (options->UseBridges && !options->TunnelDirConns)
-    REJECT("If you set UseBridges, you must set TunnelDirConns.");
+    REJECT("TunnelDirConns set to 0 only works with UseBridges set to 0");
   if (options->Bridges) {
     for (cl = options->Bridges; cl; cl = cl->next) {
       if (parse_bridge_line(cl->value, 1)<0)
@@ -3809,7 +3842,7 @@ options_transition_affects_workers(or_options_t *old_options,
       old_options->ORPort != new_options->ORPort ||
       old_options->ServerDNSSearchDomains !=
                                        new_options->ServerDNSSearchDomains ||
-      old_options->SafeLogging != new_options->SafeLogging ||
+      old_options->_SafeLogging != new_options->_SafeLogging ||
       old_options->ClientOnly != new_options->ClientOnly ||
       public_server_mode(old_options) != public_server_mode(new_options) ||
       !config_lines_eq(old_options->Logs, new_options->Logs) ||
