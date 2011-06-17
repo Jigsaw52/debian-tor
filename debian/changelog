@@ -1,5 +1,7 @@
 tor (0.2.2.28-beta-X) XXperimental; urgency=low
 
+  * Enable Control Socket by default.  It lives in /var/run/tor/
+    (closes: #552556).
   * The postinst script changes /var/run/tor to mode 02750 if it exists,
     but the tor init script creates it with mode 02700 if it doesn't.
     Change the init script to also create the directory with a group
@@ -8,7 +10,7 @@ tor (0.2.2.28-beta-X) XXperimental; urgency=low
     This will allow users in the debian-tor group to access the control
     socket (re: #552556).
 
- -- Peter Palfrader <weasel@debian.org>  Fri, 17 Jun 2011 22:13:49 +0200
+ -- Peter Palfrader <weasel@debian.org>  Fri, 17 Jun 2011 22:33:45 +0200
 
 tor (0.2.2.28-beta-1) experimental; urgency=low
 
