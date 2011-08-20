@@ -4,7 +4,7 @@ dnl Copyright (c) 2007-2008, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
 AC_INIT
-AM_INIT_AUTOMAKE(tor, 0.2.2.30-rc)
+AM_INIT_AUTOMAKE(tor, 0.2.2.31-rc)
 AM_CONFIG_HEADER(orconfig.h)
 
 AC_CANONICAL_HOST
@@ -905,6 +905,15 @@ else
   enable_gcc_warnings=no
   enable_gcc_warnings_advisory=no
 fi
+
+# OS X Lion started deprecating the system openssl. Let's just disable
+# all deprecation warnings on OS X.
+case "$host_os" in
+
+ darwin*)
+    CFLAGS="$CFLAGS -Wno-deprecated-declarations"
+    ;;
+esac
 
 # Add some more warnings which we use in development but not in the
 # released versions.  (Some relevant gcc versions can't handle these.)
