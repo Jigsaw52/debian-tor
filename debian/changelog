@@ -1,3 +1,9 @@
+tor (0.2.2.32-1) unstable; urgency=low
+
+  * New upstream version, upload to unstable.
+
+ -- Peter Palfrader <weasel@debian.org>  Mon, 29 Aug 2011 13:30:36 +0200
+
 tor (0.2.2.31-rc-1) experimental; urgency=low
 
   * New upstream version.
