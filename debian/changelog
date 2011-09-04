@@ -1,3 +1,11 @@
+tor (0.2.2.32-XXX) unstable; urgency=low
+
+  * Make patches/06_add_compile_time_defaults build without compiler warnings:
+    - Correctly declare functions as having no arguments instead of not
+      telling the compiler which arguments it'll have.
+
+ -- Peter Palfrader <weasel@debian.org>  Sun, 04 Sep 2011 16:25:36 +0200
+
 tor (0.2.2.32-1) unstable; urgency=low
 
   * New upstream version, upload to unstable.
