@@ -38,8 +38,8 @@ diff -urNad '--exclude=CVS' '--exclude=.svn' '--exclude=.git' '--exclude=.arch' 
  static void init_libevent(void);
  static int opt_streq(const char *s1, const char *s2);
  
-+static int debian_running_as_debiantor();
-+static int debian_config_fix_defaults();
++static int debian_running_as_debiantor(void);
++static int debian_config_fix_defaults(void);
 +
  /** Magic value for or_options_t. */
  #define OR_OPTIONS_MAGIC 9090909
@@ -61,7 +61,7 @@ diff -urNad '--exclude=CVS' '--exclude=.svn' '--exclude=.git' '--exclude=.arch' 
 +/* Checks whether we are running as the debian-tor user.
 + *   Returns -1 on error, 2 if we are root, 1 if we are debian-tor, 0 if we are any normal user */
 +static int
-+debian_running_as_debiantor()
++debian_running_as_debiantor(void)
 +{
 +  struct passwd *pw = NULL;
 +  int uid;
@@ -84,7 +84,7 @@ diff -urNad '--exclude=CVS' '--exclude=.svn' '--exclude=.git' '--exclude=.arch' 
 +}
 +
 +static int
-+debian_config_fix_defaults()
++debian_config_fix_defaults(void)
 +{
 +  config_var_t *var;
 +  static int fixed = 0;
