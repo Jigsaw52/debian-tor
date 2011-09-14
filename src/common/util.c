@@ -334,7 +334,13 @@ tor_mathlog(double d)
 long
 tor_lround(double d)
 {
+#if defined(HAVE_LROUND)
   return lround(d);
+#elif defined(HAVE_RINT)
+  return (long)rint(d);
+#else
+  return (long)(d > 0 ? d + 0.5 : ceil(d - 0.5));
+#endif
 }
 
 /** Returns floor(log2(u64)).  If u64 is 0, (incorrectly) returns 0. */
