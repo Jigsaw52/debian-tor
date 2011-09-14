@@ -5,8 +5,9 @@ tor (0.2.2.33-1) unstable; urgency=low
     - Correctly declare functions as having no arguments instead of not
       telling the compiler which arguments it'll have.
   * Suggest tor-arm (closes: #640265).
+  * Downgrade socat and polipo|privoxy to Suggests (closes: #640264).
 
- -- Peter Palfrader <weasel@debian.org>  Wed, 14 Sep 2011 08:51:31 +0200
+ -- Peter Palfrader <weasel@debian.org>  Wed, 14 Sep 2011 08:53:40 +0200
 
 tor (0.2.2.32-1) unstable; urgency=low
 
