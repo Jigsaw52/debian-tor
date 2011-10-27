@@ -59,7 +59,8 @@ circuit_is_acceptable(circuit_t *circ, edge_connection_t *conn,
       return 0;
   }
 
-  if (purpose == CIRCUIT_PURPOSE_C_GENERAL)
+  if (purpose == CIRCUIT_PURPOSE_C_GENERAL ||
+      purpose == CIRCUIT_PURPOSE_C_REND_JOINED)
     if (circ->timestamp_dirty &&
        circ->timestamp_dirty+get_options()->MaxCircuitDirtiness <= now)
       return 0;
@@ -94,7 +95,7 @@ circuit_is_acceptable(circuit_t *circ, edge_connection_t *conn,
         char digest[DIGEST_LEN];
         if (hexdigest_to_digest(conn->chosen_exit_name, digest) < 0)
           return 0; /* broken digest, we don't want it */
-        if (memcmp(digest, build_state->chosen_exit->identity_digest,
+        if (tor_memneq(digest, build_state->chosen_exit->identity_digest,
                           DIGEST_LEN))
           return 0; /* this is a circuit to somewhere else */
         if (tor_digest_is_zero(digest)) {
@@ -1560,14 +1561,21 @@ connection_ap_handshake_attach_circuit(edge_connection_t *conn)
                  "introduction. (stream %d sec old)",
                  introcirc->_base.n_circ_id, rendcirc->_base.n_circ_id,
                  conn_age);
-        if (rend_client_send_introduction(introcirc, rendcirc) < 0) {
+        switch (rend_client_send_introduction(introcirc, rendcirc)) {
+        case 0: /* success */
+          rendcirc->_base.timestamp_dirty = time(NULL);
+          introcirc->_base.timestamp_dirty = time(NULL);
+          assert_circuit_ok(TO_CIRCUIT(rendcirc));
+          assert_circuit_ok(TO_CIRCUIT(introcirc));
+          return 0;
+        case -1: /* transient error */
+          return 0;
+        case -2: /* permanent error */
+          return -1;
+        default: /* oops */
+          tor_fragile_assert();
           return -1;
         }
-        rendcirc->_base.timestamp_dirty = time(NULL);
-        introcirc->_base.timestamp_dirty = time(NULL);
-        assert_circuit_ok(TO_CIRCUIT(rendcirc));
-        assert_circuit_ok(TO_CIRCUIT(introcirc));
-        return 0;
       }
     }
 
