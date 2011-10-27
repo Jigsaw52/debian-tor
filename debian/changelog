@@ -1,3 +1,20 @@
+tor (0.2.1.31-1) stable-security; urgency=high
+
+  * New upstream version, fixing a couple of security relevant bugs
+    such as guard enumeration (CVE-2011-2768) and bridge enumeration
+    (CVE-2011-2769) issues.  For details consult the upstream changelog.
+
+ -- Peter Palfrader <weasel@debian.org>  Thu, 27 Oct 2011 11:15:37 +0200
+
+tor (0.2.1.30-1) unstable; urgency=low
+
+  * New upstream version.
+  * The tor specification files are no longer shipped in the tarball,
+    so /usr/share/doc/tor/spec is no more.  They can be found online
+    at <URL:https://gitweb.torproject.org/torspec.git/tree>.
+
+ -- Peter Palfrader <weasel@debian.org>  Sat, 26 Feb 2011 10:57:43 +0100
+
 tor (0.2.1.29-1~lenny+1) stable-security; urgency=high
 
   * Build tor 0.2.1.29 for lenny security, rather than backport almost

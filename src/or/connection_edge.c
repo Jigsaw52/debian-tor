@@ -530,7 +530,7 @@ connection_ap_fail_onehop(const char *failed_digest,
     if (!edge_conn->want_onehop)
       continue;
     if (hexdigest_to_digest(edge_conn->chosen_exit_name, digest) < 0 ||
-        memcmp(digest, failed_digest, DIGEST_LEN))
+        tor_memneq(digest, failed_digest, DIGEST_LEN))
       continue;
     if (tor_digest_is_zero(digest)) {
       /* we don't know the digest; have to compare addr:port */
@@ -571,7 +571,7 @@ circuit_discard_optional_exit_enclaves(extend_info_t *info)
         !edge_conn->chosen_exit_retries)
       continue;
     r1 = router_get_by_nickname(edge_conn->chosen_exit_name, 0);
-    r2 = router_get_by_nickname(info->nickname, 0);
+    r2 = router_get_by_digest(info->identity_digest);
     if (!r1 || !r2 || r1 != r2)
       continue;
     tor_assert(edge_conn->socks_request);
@@ -2904,7 +2904,7 @@ connection_ap_can_use_exit(edge_connection_t *conn, routerinfo_t *exit)
   if (conn->chosen_exit_name) {
     routerinfo_t *chosen_exit =
       router_get_by_nickname(conn->chosen_exit_name, 1);
-    if (!chosen_exit || memcmp(chosen_exit->cache_info.identity_digest,
+    if (!chosen_exit || tor_memneq(chosen_exit->cache_info.identity_digest,
                                exit->cache_info.identity_digest, DIGEST_LEN)) {
       /* doesn't match */
 //      log_debug(LD_APP,"Requested node '%s', considering node '%s'. No.",

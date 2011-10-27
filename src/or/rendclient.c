@@ -74,10 +74,27 @@ rend_client_send_introduction(origin_circuit_t *introcirc,
 
   if (rend_cache_lookup_entry(introcirc->rend_data->onion_address, -1,
                               &entry) < 1) {
-    log_warn(LD_REND,
-             "query %s didn't have valid rend desc in cache. Failing.",
-             escaped_safe_str(introcirc->rend_data->onion_address));
-    goto err;
+    log_info(LD_REND,
+             "query %s didn't have valid rend desc in cache. "
+             "Refetching descriptor.",
+             safe_str(introcirc->rend_data->onion_address));
+    /* Fetch both v0 and v2 rend descriptors in parallel. Use whichever
+     * arrives first. Exception: When using client authorization, only
+     * fetch v2 descriptors.*/
+    rend_client_refetch_v2_renddesc(introcirc->rend_data);
+    if (introcirc->rend_data->auth_type == REND_NO_AUTH)
+      rend_client_refetch_renddesc(introcirc->rend_data->onion_address);
+    {
+      connection_t *conn;
+
+      while ((conn = connection_get_by_type_state_rendquery(CONN_TYPE_AP,
+                       AP_CONN_STATE_CIRCUIT_WAIT,
+                       introcirc->rend_data->onion_address, -1))) {
+        conn->state = AP_CONN_STATE_RENDDESC_WAIT;
+      }
+    }
+
+    return -1;
   }
 
   /* first 20 bytes of payload are the hash of Bob's pk */
@@ -87,7 +104,7 @@ rend_client_send_introduction(origin_circuit_t *introcirc,
     intro_key = NULL;
     SMARTLIST_FOREACH(entry->parsed->intro_nodes, rend_intro_point_t *,
                       intro, {
-      if (!memcmp(introcirc->build_state->chosen_exit->identity_digest,
+      if (tor_memeq(introcirc->build_state->chosen_exit->identity_digest,
                   intro->extend_info->identity_digest, DIGEST_LEN)) {
         intro_key = intro->intro_key;
         break;
@@ -115,13 +132,13 @@ rend_client_send_introduction(origin_circuit_t *introcirc,
         log_info(LD_REND, "Internal error: could not find intro key; we "
                  "only have a v2 rend desc with %d intro points.",
                  num_intro_points);
-        goto err;
+        goto perm_err;
       }
     }
   }
   if (crypto_pk_get_digest(intro_key, payload)<0) {
     log_warn(LD_BUG, "Internal error: couldn't hash public key.");
-    goto err;
+    goto perm_err;
   }
 
   /* Initialize the pending_final_cpath and start the DH handshake. */
@@ -130,13 +147,13 @@ rend_client_send_introduction(origin_circuit_t *introcirc,
     cpath = rendcirc->build_state->pending_final_cpath =
       tor_malloc_zero(sizeof(crypt_path_t));
     cpath->magic = CRYPT_PATH_MAGIC;
-    if (!(cpath->dh_handshake_state = crypto_dh_new())) {
+    if (!(cpath->dh_handshake_state = crypto_dh_new(DH_TYPE_REND))) {
       log_warn(LD_BUG, "Internal error: couldn't allocate DH.");
-      goto err;
+      goto perm_err;
     }
     if (crypto_dh_generate_public(cpath->dh_handshake_state)<0) {
       log_warn(LD_BUG, "Internal error: couldn't generate g^x.");
-      goto err;
+      goto perm_err;
     }
   }
 
@@ -186,7 +203,7 @@ rend_client_send_introduction(origin_circuit_t *introcirc,
   if (crypto_dh_get_public(cpath->dh_handshake_state, tmp+dh_offset,
                            DH_KEY_LEN)<0) {
     log_warn(LD_BUG, "Internal error: couldn't extract g^x.");
-    goto err;
+    goto perm_err;
   }
 
   note_crypto_pk_op(REND_CLIENT);
@@ -199,7 +216,7 @@ rend_client_send_introduction(origin_circuit_t *introcirc,
                                       PK_PKCS1_OAEP_PADDING, 0);
   if (r<0) {
     log_warn(LD_BUG,"Internal error: hybrid pk encrypt failed.");
-    goto err;
+    goto perm_err;
   }
 
   payload_len = DIGEST_LEN + r;
@@ -212,17 +229,17 @@ rend_client_send_introduction(origin_circuit_t *introcirc,
                                    introcirc->cpath->prev)<0) {
     /* introcirc is already marked for close. leave rendcirc alone. */
     log_warn(LD_BUG, "Couldn't send INTRODUCE1 cell");
-    return -1;
+    return -2;
   }
 
   /* Now, we wait for an ACK or NAK on this circuit. */
   introcirc->_base.purpose = CIRCUIT_PURPOSE_C_INTRODUCE_ACK_WAIT;
 
   return 0;
-err:
+perm_err:
   circuit_mark_for_close(TO_CIRCUIT(introcirc), END_CIRC_REASON_INTERNAL);
   circuit_mark_for_close(TO_CIRCUIT(rendcirc), END_CIRC_REASON_INTERNAL);
-  return -1;
+  return -2;
 }
 
 /** Called when a rendezvous circuit is open; sends a establish
@@ -412,7 +429,7 @@ directory_get_from_hs_dir(const char *desc_id, const rend_data_t *rend_query)
   tor_assert(rend_query);
   /* Determine responsible dirs. Even if we can't get all we want,
    * work with the ones we have. If it's empty, we'll notice below. */
-  (int) hid_serv_get_responsible_directories(responsible_dirs, desc_id);
+  hid_serv_get_responsible_directories(responsible_dirs, desc_id);
 
   base32_encode(desc_id_base32, sizeof(desc_id_base32),
                 desc_id, DIGEST_LEN);
@@ -557,8 +574,45 @@ rend_client_refetch_v2_renddesc(const rend_data_t *rend_query)
   return;
 }
 
+/** Cancel all rendezvous descriptor fetches currently in progress.
+ */
+void
+rend_client_cancel_descriptor_fetches(void)
+{
+  smartlist_t *connection_array = get_connection_array();
+
+  SMARTLIST_FOREACH_BEGIN(connection_array, connection_t *, conn) {
+    if (conn->type == CONN_TYPE_DIR &&
+        (conn->purpose == DIR_PURPOSE_FETCH_RENDDESC ||
+         conn->purpose == DIR_PURPOSE_FETCH_RENDDESC_V2)) {
+      /* It's a rendezvous descriptor fetch in progress -- cancel it
+       * by marking the connection for close.
+       *
+       * Even if this connection has already reached EOF, this is
+       * enough to make sure that if the descriptor hasn't been
+       * processed yet, it won't be.  See the end of
+       * connection_handle_read; connection_reached_eof (indirectly)
+       * processes whatever response the connection received. */
+
+      const rend_data_t *rd = (TO_DIR_CONN(conn))->rend_data;
+      if (!rd) {
+        log_warn(LD_BUG | LD_REND,
+                 "Marking for close dir conn fetching rendezvous "
+                 "descriptor for unknown service!");
+      } else {
+        log_debug(LD_REND, "Marking for close dir conn fetching v%d "
+                  "rendezvous descriptor for service %s",
+                  (int)(rd->rend_desc_version),
+                  safe_str(rd->onion_address));
+      }
+      connection_mark_for_close(conn);
+    }
+  } SMARTLIST_FOREACH_END(conn);
+}
+
 /** Remove failed_intro from ent. If ent now has no intro points, or
  * service is unrecognized, then launch a new renddesc fetch.
+
  *
  * Return -1 if error, 0 if no intro points remain or service
  * unrecognized, 1 if recognized and some intro points remain.
@@ -591,7 +645,7 @@ rend_client_remove_intro_point(extend_info_t *failed_intro,
 
   for (i = 0; i < smartlist_len(ent->parsed->intro_nodes); i++) {
     rend_intro_point_t *intro = smartlist_get(ent->parsed->intro_nodes, i);
-    if (!memcmp(failed_intro->identity_digest,
+    if (tor_memeq(failed_intro->identity_digest,
                 intro->extend_info->identity_digest, DIGEST_LEN)) {
       rend_intro_point_free(intro);
       smartlist_del(ent->parsed->intro_nodes, i);
@@ -694,7 +748,7 @@ rend_client_receive_rendezvous(origin_circuit_t *circ, const uint8_t *request,
     goto err;
 
   /* Check whether the digest is right... */
-  if (memcmp(keys, request+DH_KEY_LEN, DIGEST_LEN)) {
+  if (tor_memneq(keys, request+DH_KEY_LEN, DIGEST_LEN)) {
     log_warn(LD_PROTOCOL, "Incorrect digest of key material.");
     goto err;
   }
@@ -814,7 +868,10 @@ rend_client_get_random_intro(const rend_data_t *rend_query)
   intro = smartlist_get(entry->parsed->intro_nodes, i);
   /* Do we need to look up the router or is the extend info complete? */
   if (!intro->extend_info->onion_key) {
-    router = router_get_by_nickname(intro->extend_info->nickname, 0);
+    if (tor_digest_is_zero(intro->extend_info->identity_digest))
+      router = router_get_by_hexdigest(intro->extend_info->nickname);
+    else
+      router = router_get_by_digest(intro->extend_info->identity_digest);
     if (!router) {
       log_info(LD_REND, "Unknown router with nickname '%s'; trying another.",
                intro->extend_info->nickname);

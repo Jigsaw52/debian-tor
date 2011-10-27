@@ -1520,7 +1520,8 @@ dirserv_regenerate_directory(void)
 {
   char *new_directory=NULL;
 
-  if (dirserv_dump_directory_to_string(&new_directory, get_identity_key())) {
+  if (dirserv_dump_directory_to_string(&new_directory,
+                                       get_server_identity_key())) {
     log_warn(LD_BUG, "Error creating directory.");
     tor_free(new_directory);
     return NULL;
@@ -1550,7 +1551,7 @@ generate_runningrouters(void)
   char digest[DIGEST_LEN];
   char published[ISO_TIME_LEN+1];
   size_t len;
-  crypto_pk_env_t *private_key = get_identity_key();
+  crypto_pk_env_t *private_key = get_server_identity_key();
   char *identity_pkey; /* Identity key, DER64-encoded. */
   size_t identity_pkey_len;
 
@@ -1991,7 +1992,7 @@ routerstatus_format_entry(char *buf, size_t buf_len,
                id, dd);
       return -1;
     };
-    if (memcmp(desc->cache_info.signed_descriptor_digest,
+    if (fast_memcmp(desc->cache_info.signed_descriptor_digest,
                rs->descriptor_digest,
                DIGEST_LEN)) {
       char rl_d[HEX_DIGEST_LEN+1];
@@ -2007,7 +2008,7 @@ routerstatus_format_entry(char *buf, size_t buf_len,
                       "(router %s)\n",
               rl_d, rs_d, id);
 
-      tor_assert(!memcmp(desc->cache_info.signed_descriptor_digest,
+      tor_assert(fast_memeq(desc->cache_info.signed_descriptor_digest,
                        rs->descriptor_digest,
                        DIGEST_LEN));
     };
@@ -2083,9 +2084,9 @@ _compare_routerinfo_by_ip_and_bw(const void **a, const void **b)
 
   /* They're equal! Compare by identity digest, so there's a
    * deterministic order and we avoid flapping. */
-  return memcmp(first->cache_info.identity_digest,
-                second->cache_info.identity_digest,
-                DIGEST_LEN);
+  return fast_memcmp(first->cache_info.identity_digest,
+                     second->cache_info.identity_digest,
+                     DIGEST_LEN);
 }
 
 /** Given a list of routerinfo_t in <b>routers</b>, return a new digestmap_t
@@ -2441,7 +2442,7 @@ generate_v2_networkstatus_opinion(void)
   smartlist_t *routers = NULL;
   digestmap_t *omit_as_sybil = NULL;
 
-  private_key = get_identity_key();
+  private_key = get_server_identity_key();
 
   if (resolve_my_address(LOG_WARN, options, &addr, &hostname)<0) {
     log_warn(LD_NET, "Couldn't resolve my hostname");
@@ -2699,6 +2700,8 @@ dirserv_get_routerdesc_fingerprints(smartlist_t *fps_out, const char *key,
     SMARTLIST_FOREACH(rl->routers, routerinfo_t *, r,
                       smartlist_add(fps_out,
                       tor_memdup(r->cache_info.identity_digest, DIGEST_LEN)));
+    /* Treat "all" requests as if they were unencrypted */
+    for_unencrypted_conn = 1;
   } else if (!strcmp(key, "authority")) {
     routerinfo_t *ri = router_get_my_routerinfo();
     if (ri)
@@ -2842,7 +2845,7 @@ dirserv_orconn_tls_done(const char *address,
   SMARTLIST_FOREACH(rl->routers, routerinfo_t *, ri, {
     if (!strcasecmp(address, ri->address) && or_port == ri->or_port &&
         as_advertised &&
-        !memcmp(ri->cache_info.identity_digest, digest_rcvd, DIGEST_LEN)) {
+        fast_memeq(ri->cache_info.identity_digest, digest_rcvd, DIGEST_LEN)) {
       /* correct digest. mark this router reachable! */
       if (!bridge_auth || ri->purpose == ROUTER_PURPOSE_BRIDGE) {
         log_info(LD_DIRSERV, "Found router %s to be reachable. Yay.",

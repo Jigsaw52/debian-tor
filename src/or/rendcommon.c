@@ -871,6 +871,16 @@ rend_cache_clean(void)
   }
 }
 
+/** Remove ALL entries from the rendezvous service descriptor cache.
+ */
+void
+rend_cache_purge(void)
+{
+  if (rend_cache)
+    strmap_free(rend_cache, _rend_cache_entry_free);
+  rend_cache = strmap_new();
+}
+
 /** Remove all old v2 descriptors and those for which this hidden service
  * directory is not responsible for any more. */
 void
@@ -912,15 +922,15 @@ rend_id_is_in_interval(const char *a, const char *b, const char *c)
   tor_assert(c);
 
   /* There are five cases in which a is outside the interval ]b,c]: */
-  a_b = memcmp(a,b,DIGEST_LEN);
+  a_b = tor_memcmp(a,b,DIGEST_LEN);
   if (a_b == 0)
     return 0; /* 1. a == b (b is excluded) */
-  b_c = memcmp(b,c,DIGEST_LEN);
+  b_c = tor_memcmp(b,c,DIGEST_LEN);
   if (b_c == 0)
     return 0; /* 2. b == c (interval is empty) */
   else if (a_b <= 0 && b_c < 0)
     return 0; /* 3. a b c */
-  c_a = memcmp(c,a,DIGEST_LEN);
+  c_a = tor_memcmp(c,a,DIGEST_LEN);
   if (c_a < 0 && a_b <= 0)
     return 0; /* 4. c a b */
   else if (b_c < 0 && c_a < 0)
@@ -1037,9 +1047,14 @@ rend_cache_lookup_v2_desc_as_dir(const char *desc_id, const char **desc)
  *
  * The published flag tells us if we store the descriptor
  * in our role as directory (1) or if we cache it as client (0).
+ *
+ * If <b>service_id</b> is non-NULL and the descriptor is not for that
+ * service ID, reject it.  <b>service_id</b> must be specified if and
+ * only if <b>published</b> is 0 (we fetched this descriptor).
  */
 int
-rend_cache_store(const char *desc, size_t desc_len, int published)
+rend_cache_store(const char *desc, size_t desc_len, int published,
+                 const char *service_id)
 {
   rend_cache_entry_t *e;
   rend_service_descriptor_t *parsed;
@@ -1055,6 +1070,13 @@ rend_cache_store(const char *desc, size_t desc_len, int published)
   }
   if (rend_get_service_id(parsed->pk, query)<0) {
     log_warn(LD_BUG,"Couldn't compute service ID.");
+    rend_service_descriptor_free(parsed);
+    return -2;
+  }
+  if ((service_id != NULL) && strcmp(query, service_id)) {
+    log_warn(LD_REND, "Received service descriptor for service ID %s; "
+             "expected descriptor for service ID %s.",
+             query, safe_str(service_id));
     rend_service_descriptor_free(parsed);
     return -2;
   }
@@ -1091,7 +1113,7 @@ rend_cache_store(const char *desc, size_t desc_len, int published)
     rend_service_descriptor_free(parsed);
     return 0;
   }
-  if (e && e->len == desc_len && !memcmp(desc,e->desc,desc_len)) {
+  if (e && e->len == desc_len && tor_memeq(desc,e->desc,desc_len)) {
     log_info(LD_REND,"We already have this service descriptor %s.",
              safe_str(query));
     e->received = time(NULL);
@@ -1243,6 +1265,8 @@ rend_cache_store_v2_desc_as_dir(const char *desc)
  * If we have an older descriptor with the same ID, replace it.
  * If we have any v0 descriptor with the same ID, reject this one in order
  * to not get confused with having both versions for the same service.
+ * If the descriptor's service ID does not match
+ * <b>rend_query</b>-\>onion_address, reject it.
  * Return -2 if it's malformed or otherwise rejected; return -1 if we
  * already have a v0 descriptor here; return 0 if it's the same or older
  * than one we've already got; return 1 if it's novel.
@@ -1290,6 +1314,13 @@ rend_cache_store_v2_desc_as_client(const char *desc,
   /* Compute service ID from public key. */
   if (rend_get_service_id(parsed->pk, service_id)<0) {
     log_warn(LD_REND, "Couldn't compute service ID.");
+    retval = -2;
+    goto err;
+  }
+  if (strcmp(rend_query->onion_address, service_id)) {
+    log_warn(LD_REND, "Received service descriptor for service ID %s; "
+             "expected descriptor for service ID %s.",
+             service_id, safe_str(rend_query->onion_address));
     retval = -2;
     goto err;
   }

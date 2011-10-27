@@ -173,7 +173,7 @@ onion_skin_create(crypto_pk_env_t *dest_router_key,
   *handshake_state_out = NULL;
   memset(onion_skin_out, 0, ONIONSKIN_CHALLENGE_LEN);
 
-  if (!(dh = crypto_dh_new()))
+  if (!(dh = crypto_dh_new(DH_TYPE_CIRCUIT)))
     goto err;
 
   dhbytes = crypto_dh_get_bytes(dh);
@@ -247,7 +247,7 @@ onion_skin_server_handshake(const char *onion_skin, /*ONIONSKIN_CHALLENGE_LEN*/
     goto err;
   }
 
-  dh = crypto_dh_new();
+  dh = crypto_dh_new(DH_TYPE_CIRCUIT);
   if (crypto_dh_get_public(dh, handshake_reply_out, DH_KEY_LEN)) {
     log_info(LD_GENERAL, "crypto_dh_get_public failed.");
     goto err;
@@ -311,7 +311,7 @@ onion_skin_client_handshake(crypto_dh_env_t *handshake_state,
   if (len < 0)
     goto err;
 
-  if (memcmp(key_material, handshake_reply+DH_KEY_LEN, DIGEST_LEN)) {
+  if (tor_memneq(key_material, handshake_reply+DH_KEY_LEN, DIGEST_LEN)) {
     /* H(K) does *not* match. Something fishy. */
     log_warn(LD_PROTOCOL,"Digest DOES NOT MATCH on onion handshake. "
              "Bug or attack.");
@@ -398,7 +398,7 @@ fast_client_handshake(const uint8_t *handshake_state,/*DIGEST_LEN bytes*/
   if (crypto_expand_key_material(tmp, sizeof(tmp), out, out_len)) {
     goto done;
   }
-  if (memcmp(out, handshake_reply_out+DIGEST_LEN, DIGEST_LEN)) {
+  if (tor_memneq(out, handshake_reply_out+DIGEST_LEN, DIGEST_LEN)) {
     /* H(K) does *not* match. Something fishy. */
     log_warn(LD_PROTOCOL,"Digest DOES NOT MATCH on fast handshake. "
              "Bug or attack.");

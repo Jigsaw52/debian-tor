@@ -92,6 +92,7 @@ size_t crypto_pk_keysize(crypto_pk_env_t *env);
 crypto_pk_env_t *crypto_pk_dup_key(crypto_pk_env_t *orig);
 crypto_pk_env_t *crypto_pk_copy_full(crypto_pk_env_t *orig);
 int crypto_pk_key_is_private(const crypto_pk_env_t *key);
+int crypto_pk_public_exponent_ok(crypto_pk_env_t *env);
 
 int crypto_pk_public_encrypt(crypto_pk_env_t *env, char *to, size_t tolen,
                              const char *from, size_t fromlen, int padding);
@@ -159,7 +160,10 @@ void crypto_hmac_sha1(char *hmac_out,
                       const char *msg, size_t msg_len);
 
 /* Key negotiation */
-crypto_dh_env_t *crypto_dh_new(void);
+#define DH_TYPE_CIRCUIT 1
+#define DH_TYPE_REND 2
+#define DH_TYPE_TLS 3
+crypto_dh_env_t *crypto_dh_new(int dh_type);
 int crypto_dh_get_bytes(crypto_dh_env_t *dh);
 int crypto_dh_generate_public(crypto_dh_env_t *dh);
 int crypto_dh_get_public(crypto_dh_env_t *dh, char *pubkey_out,

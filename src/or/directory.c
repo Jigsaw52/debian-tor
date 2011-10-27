@@ -1468,9 +1468,10 @@ connection_dir_client_reached_eof(dir_connection_t *conn)
              delta>0 ? "ahead" : "behind", dbuf,
              delta>0 ? "behind" : "ahead");
       skewed = 1; /* don't check the recommended-versions line */
-      control_event_general_status(trusted ? LOG_WARN : LOG_NOTICE,
-                               "CLOCK_SKEW SKEW=%ld SOURCE=DIRSERV:%s:%d",
-                               delta, conn->_base.address, conn->_base.port);
+      if (trusted)
+        control_event_general_status(LOG_WARN,
+                                 "CLOCK_SKEW SKEW=%ld SOURCE=DIRSERV:%s:%d",
+                                 delta, conn->_base.address, conn->_base.port);
     } else {
       log_debug(LD_HTTP, "Time on received directory is within tolerance; "
                 "we are %ld seconds skewed.  (That's okay.)", delta);
@@ -1805,7 +1806,6 @@ connection_dir_client_reached_eof(dir_connection_t *conn)
             router_get_trusteddirserver_by_digest(conn->identity_digest);
           char *rejected_hdr = http_get_header(headers,
                                                "X-Descriptor-Not-New: ");
-          int rejected = 0;
           if (rejected_hdr) {
             if (!strcmp(rejected_hdr, "Yes")) {
               log_info(LD_GENERAL,
@@ -1818,7 +1818,6 @@ connection_dir_client_reached_eof(dir_connection_t *conn)
                * last descriptor, not on the published time of the last
                * descriptor.  If those are different, that's a bad thing to
                * do. -NM */
-              rejected = 1;
             }
             tor_free(rejected_hdr);
           }
@@ -1908,7 +1907,8 @@ connection_dir_client_reached_eof(dir_connection_t *conn)
              (int)body_len, status_code, escaped(reason));
     switch (status_code) {
       case 200:
-        if (rend_cache_store(body, body_len, 0) < -1) {
+        if (rend_cache_store(body, body_len, 0,
+                             conn->rend_data->onion_address) < -1) {
           log_warn(LD_REND,"Failed to parse rendezvous descriptor.");
           /* Any pending rendezvous attempts will notice when
            * connection_about_to_close_connection()
@@ -2357,7 +2357,7 @@ client_likes_consensus(networkstatus_t *v, const char *want_url)
 
     SMARTLIST_FOREACH(v->voters, networkstatus_voter_info_t *, vi, {
       if (vi->signature &&
-          !memcmp(vi->identity_digest, want_digest, want_len)) {
+          fast_memeq(vi->identity_digest, want_digest, want_len)) {
         have++;
         break;
       };
@@ -3113,7 +3113,7 @@ directory_handle_command_post(dir_connection_t *conn, const char *headers,
       !strcmpstart(url,"/tor/rendezvous/publish")) {
     /* rendezvous descriptor post */
     log_info(LD_REND, "Handling rendezvous descriptor post.");
-    if (rend_cache_store(body, body_len, 1) < 0) {
+    if (rend_cache_store(body, body_len, 1, NULL) < 0) {
       log_fn(LOG_PROTOCOL_WARN, LD_DIRSERV,
              "Rejected rend descriptor (length %d) from %s.",
              (int)body_len, conn->_base.address);
@@ -3450,17 +3450,17 @@ dir_routerdesc_download_failed(smartlist_t *failed, int status_code,
    * every 10 or 60 seconds (FOO_DESCRIPTOR_RETRY_INTERVAL) in main.c. */
 }
 
-/** Helper.  Compare two fp_pair_t objects, and return -1, 0, or 1 as
- * appropriate. */
+/** Helper.  Compare two fp_pair_t objects, and return negative, 0, or
+ * positive as appropriate. */
 static int
 _compare_pairs(const void **a, const void **b)
 {
   const fp_pair_t *fp1 = *a, *fp2 = *b;
   int r;
-  if ((r = memcmp(fp1->first, fp2->first, DIGEST_LEN)))
+  if ((r = fast_memcmp(fp1->first, fp2->first, DIGEST_LEN)))
     return r;
   else
-    return memcmp(fp1->second, fp2->second, DIGEST_LEN);
+    return fast_memcmp(fp1->second, fp2->second, DIGEST_LEN);
 }
 
 /** Divide a string <b>res</b> of the form FP1-FP2+FP3-FP4...[.z], where each
@@ -3576,7 +3576,7 @@ dir_split_resource_into_fingerprints(const char *resource,
       char *cp = smartlist_get(fp_tmp, i);
       char *last = smartlist_get(fp_tmp2, smartlist_len(fp_tmp2)-1);
 
-      if ((decode_hex && memcmp(cp, last, DIGEST_LEN))
+      if ((decode_hex && fast_memcmp(cp, last, DIGEST_LEN))
           || (!decode_hex && strcasecmp(cp, last)))
         smartlist_add(fp_tmp2, cp);
       else

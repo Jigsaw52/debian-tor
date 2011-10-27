@@ -321,10 +321,12 @@ crypto_new_pk_env(void)
 void
 crypto_free_pk_env(crypto_pk_env_t *env)
 {
-  tor_assert(env);
+  if (!env)
+    return;
 
   if (--env->refs > 0)
     return;
+  tor_assert(env->refs == 0);
 
   if (env->key)
     RSA_free(env->key);
@@ -452,7 +454,7 @@ crypto_pk_read_private_key_from_string(crypto_pk_env_t *env,
 
   tor_assert(env);
   tor_assert(s);
-  tor_assert(len < INT_MAX && len < SIZE_T_CEILING);
+  tor_assert(len < INT_MAX && len < SSIZE_T_CEILING);
 
   /* Create a read-only memory BIO, backed by the string 's' */
   b = BIO_new_mem_buf((char*)s, (int)len);
@@ -656,6 +658,18 @@ crypto_pk_key_is_private(const crypto_pk_env_t *key)
   return PRIVATE_KEY_OK(key);
 }
 
+/** Return true iff <b>env</b> contains a public key whose public exponent
+ * equals 65537.
+ */
+int
+crypto_pk_public_exponent_ok(crypto_pk_env_t *env)
+{
+  tor_assert(env);
+  tor_assert(env->key);
+
+  return BN_is_word(env->key->e, 65537);
+}
+
 /** Compare the public-key components of a and b.  Return -1 if a\<b, 0
  * if a==b, and 1 if a\>b.
  */
@@ -845,7 +859,7 @@ crypto_pk_public_checksig_digest(crypto_pk_env_t *env, const char *data,
     tor_free(buf);
     return -1;
   }
-  if (memcmp(buf, digest, DIGEST_LEN)) {
+  if (tor_memneq(buf, digest, DIGEST_LEN)) {
     log_warn(LD_CRYPTO, "Signature mismatched with digest.");
     tor_free(buf);
     return -1;
@@ -1505,8 +1519,10 @@ crypto_hmac_sha1(char *hmac_out,
 
 /* DH */
 
-/** Shared P parameter for our DH key exchanged. */
+/** Shared P parameter for our circuit-crypto DH key exchanges. */
 static BIGNUM *dh_param_p = NULL;
+/** Shared P parameter for our TLS DH key exchanges. */
+static BIGNUM *dh_param_p_tls = NULL;
 /** Shared G parameter for our DH key exchanges. */
 static BIGNUM *dh_param_g = NULL;
 
@@ -1515,14 +1531,16 @@ static BIGNUM *dh_param_g = NULL;
 static void
 init_dh_param(void)
 {
-  BIGNUM *p, *g;
+  BIGNUM *p, *p2, *g;
   int r;
-  if (dh_param_p && dh_param_g)
+  if (dh_param_p && dh_param_g && dh_param_p_tls)
     return;
 
   p = BN_new();
+  p2 = BN_new();
   g = BN_new();
   tor_assert(p);
+  tor_assert(p2);
   tor_assert(g);
 
   /* This is from rfc2409, section 6.2.  It's a safe prime, and
@@ -1536,10 +1554,20 @@ init_dh_param(void)
                 "A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE6"
                 "49286651ECE65381FFFFFFFFFFFFFFFF");
   tor_assert(r);
+  /* This is the 1024-bit safe prime that Apache uses for its DH stuff; see
+   * modules/ssl/ssl_engine_dh.c */
+  r = BN_hex2bn(&p2,
+                  "D67DE440CBBBDC1936D693D34AFD0AD50C84D239A45F520BB88174CB98"
+                "BCE951849F912E639C72FB13B4B4D7177E16D55AC179BA420B2A29FE324A"
+                "467A635E81FF5901377BEDDCFD33168A461AAD3B72DAE8860078045B07A7"
+                "DBCA7874087D1510EA9FCC9DDD330507DD62DB88AEAA747DE0F4D6E2BD68"
+                "B0E7393E0F24218EB3");
+  tor_assert(r);
 
   r = BN_set_word(g, 2);
   tor_assert(r);
   dh_param_p = p;
+  dh_param_p_tls = p2;
   dh_param_g = g;
 }
 
@@ -1548,9 +1576,12 @@ init_dh_param(void)
 /** Allocate and return a new DH object for a key exchange.
  */
 crypto_dh_env_t *
-crypto_dh_new(void)
+crypto_dh_new(int dh_type)
 {
   crypto_dh_env_t *res = tor_malloc_zero(sizeof(crypto_dh_env_t));
+
+  tor_assert(dh_type == DH_TYPE_CIRCUIT || dh_type == DH_TYPE_TLS ||
+             dh_type == DH_TYPE_REND);
 
   if (!dh_param_p)
     init_dh_param();
@@ -1558,8 +1589,13 @@ crypto_dh_new(void)
   if (!(res->dh = DH_new()))
     goto err;
 
-  if (!(res->dh->p = BN_dup(dh_param_p)))
-    goto err;
+  if (dh_type == DH_TYPE_TLS) {
+    if (!(res->dh->p = BN_dup(dh_param_p_tls)))
+      goto err;
+  } else {
+    if (!(res->dh->p = BN_dup(dh_param_p)))
+      goto err;
+  }
 
   if (!(res->dh->g = BN_dup(dh_param_g)))
     goto err;
