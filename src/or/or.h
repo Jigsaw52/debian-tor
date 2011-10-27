@@ -166,7 +166,9 @@
 /** How often do we rotate onion keys? */
 #define MIN_ONION_KEY_LIFETIME (7*24*60*60)
 /** How often do we rotate TLS contexts? */
-#define MAX_SSL_KEY_LIFETIME (2*60*60)
+#define MAX_SSL_KEY_LIFETIME_INTERNAL (2*60*60)
+/** What expiry time shall we place on our SSL certs? */
+#define MAX_SSL_KEY_LIFETIME_ADVERTISED (365*24*60*60)
 
 /** How old do we allow a router to get before removing it
  * from the router list? In seconds. */
@@ -1029,6 +1031,12 @@ typedef struct or_connection_t {
    * because the connection is too old, or because there's a better one, etc.
    */
   unsigned int is_bad_for_new_circs:1;
+  /** True iff we have decided that the other end of this connection
+   * is a client.  Connections with this flag set should never be used
+   * to satisfy an EXTEND request.  */
+  unsigned int is_connection_with_client:1;
+  /** True iff this is an outgoing connection. */
+  unsigned int is_outgoing:1;
   uint8_t link_proto; /**< What protocol version are we using? 0 for
                        * "none negotiated yet." */
   circid_t next_circ_id; /**< Which circ_id do we try to use next on
@@ -4039,6 +4047,7 @@ int rend_client_introduction_acked(origin_circuit_t *circ,
                                    size_t request_len);
 void rend_client_refetch_renddesc(const char *query);
 void rend_client_refetch_v2_renddesc(const rend_data_t *rend_query);
+void rend_client_cancel_descriptor_fetches(void);
 int rend_client_remove_intro_point(extend_info_t *failed_intro,
                                    const rend_data_t *rend_query);
 int rend_client_rendezvous_acked(origin_circuit_t *circ,
@@ -4137,6 +4146,7 @@ typedef struct rend_cache_entry_t {
 void rend_cache_init(void);
 void rend_cache_clean(void);
 void rend_cache_clean_v2_descs_as_dir(void);
+void rend_cache_purge(void);
 void rend_cache_free_all(void);
 int rend_valid_service_id(const char *query);
 int rend_cache_lookup_desc(const char *query, int version, const char **desc,
@@ -4144,7 +4154,8 @@ int rend_cache_lookup_desc(const char *query, int version, const char **desc,
 int rend_cache_lookup_entry(const char *query, int version,
                             rend_cache_entry_t **entry_out);
 int rend_cache_lookup_v2_desc_as_dir(const char *query, const char **desc);
-int rend_cache_store(const char *desc, size_t desc_len, int published);
+int rend_cache_store(const char *desc, size_t desc_len, int published,
+                     const char *service_id);
 int rend_cache_store_v2_desc_as_client(const char *desc,
                                        const rend_data_t *rend_query);
 int rend_cache_store_v2_desc_as_dir(const char *desc);
@@ -4200,9 +4211,12 @@ int rend_mid_rendezvous(or_circuit_t *circ, const uint8_t *request,
 
 crypto_pk_env_t *get_onion_key(void);
 time_t get_onion_key_set_at(void);
-void set_identity_key(crypto_pk_env_t *k);
-crypto_pk_env_t *get_identity_key(void);
-int identity_key_is_set(void);
+void set_client_identity_key(crypto_pk_env_t *k);
+void set_server_identity_key(crypto_pk_env_t *k);
+crypto_pk_env_t *get_tlsclient_identity_key(void);
+crypto_pk_env_t *get_server_identity_key(void);
+int client_identity_key_is_set(void);
+int server_identity_key_is_set(void);
 authority_cert_t *get_my_v3_authority_cert(void);
 crypto_pk_env_t *get_my_v3_authority_signing_key(void);
 authority_cert_t *get_my_v3_legacy_cert(void);
@@ -4234,6 +4248,7 @@ int authdir_mode_tests_reachability(or_options_t *options);
 int authdir_mode_bridge(or_options_t *options);
 
 int server_mode(or_options_t *options);
+int public_server_mode(or_options_t *options);
 int advertised_server_mode(void);
 int proxy_mode(or_options_t *options);
 void consider_publishable_server(int force);

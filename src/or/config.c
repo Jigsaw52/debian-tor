@@ -827,7 +827,16 @@ static char *_version = NULL;
 const char *
 get_version(void)
 {
-  return VERSION;
+  if (_version == NULL) {
+    if (strlen(tor_svn_revision)) {
+      size_t len = strlen(VERSION)+strlen(tor_svn_revision)+16;
+      _version = tor_malloc(len);
+      tor_snprintf(_version, len, "%s (git-%s)", VERSION, tor_svn_revision);
+    } else {
+      _version = tor_strdup(VERSION);
+    }
+  }
+  return _version;
 }
 
 /** Release additional memory allocated in options
@@ -1260,6 +1269,8 @@ options_act(or_options_t *old_options)
   or_options_t *options = get_options();
   int running_tor = options->command == CMD_RUN_TOR;
   char *msg;
+  const int transition_affects_workers =
+    old_options && options_transition_affects_workers(old_options, options);
 
   if (running_tor && !have_lockfile()) {
     if (try_locking(options, 1) < 0)
@@ -1308,6 +1319,17 @@ options_act(or_options_t *old_options)
   if (running_tor && options->RunAsDaemon) {
     /* We may be calling this for the n'th time (on SIGHUP), but it's safe. */
     finish_daemon(options->DataDirectory);
+  }
+
+  /* We want to reinit keys as needed before we do much of anything else:
+     keys are important, and other things can depend on them. */
+  if (transition_affects_workers ||
+      (options->V3AuthoritativeDir && (!old_options ||
+                                       !old_options->V3AuthoritativeDir))) {
+    if (init_keys() < 0) {
+      log_warn(LD_BUG,"Error initializing keys; exiting");
+      return -1;
+    }
   }
 
   /* Write our PID to the PID file. If we do not have write permissions we
@@ -1359,14 +1381,11 @@ options_act(or_options_t *old_options)
       geoip_remove_old_clients(time(NULL)+(2*60*60));
     }
 
-    if (options_transition_affects_workers(old_options, options)) {
+    if (transition_affects_workers) {
       log_info(LD_GENERAL,
                "Worker-related options changed. Rotating workers.");
+
       if (server_mode(options) && !server_mode(old_options)) {
-        if (init_keys() < 0) {
-          log_warn(LD_BUG,"Error initializing keys; exiting");
-          return -1;
-        }
         ip_address_changed(0);
         if (has_completed_circuit || !any_predicted_circuits(time(NULL)))
           inform_testing_reachability();
@@ -1378,9 +1397,6 @@ options_act(or_options_t *old_options)
       if (dns_reset())
         return -1;
     }
-
-    if (options->V3AuthoritativeDir && !old_options->V3AuthoritativeDir)
-      init_keys();
   }
 
   /* Maybe load geoip file */
@@ -3754,6 +3770,7 @@ options_transition_affects_workers(or_options_t *old_options,
                                        new_options->ServerDNSSearchDomains ||
       old_options->SafeLogging != new_options->SafeLogging ||
       old_options->ClientOnly != new_options->ClientOnly ||
+      public_server_mode(old_options) != public_server_mode(new_options) ||
       !config_lines_eq(old_options->Logs, new_options->Logs))
     return 1;
 
@@ -4616,7 +4633,7 @@ write_configuration_file(const char *fname, or_options_t *options)
   switch (file_status(fname)) {
     case FN_FILE:
       old_val = read_file_to_str(fname, 0, NULL);
-      if (strcmpstart(old_val, GENERATED_FILE_PREFIX)) {
+      if (!old_val || strcmpstart(old_val, GENERATED_FILE_PREFIX)) {
         rename_old = 1;
       }
       tor_free(old_val);

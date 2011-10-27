@@ -463,7 +463,7 @@ sockaddr_eq(const struct sockaddr *sa1, const struct sockaddr *sa2,
 		const struct sockaddr_in6 *sin1, *sin2;
 		sin1 = (const struct sockaddr_in6 *)sa1;
 		sin2 = (const struct sockaddr_in6 *)sa2;
-		if (memcmp(sin1->sin6_addr.s6_addr, sin2->sin6_addr.s6_addr, 16))
+		if (tor_memneq(sin1->sin6_addr.s6_addr, sin2->sin6_addr.s6_addr, 16))
 			return 0;
 		else if (include_port && sin1->sin6_port != sin2->sin6_port)
 			return 0;
@@ -1077,6 +1077,9 @@ request_parse(u8 *packet, ssize_t length, struct evdns_server_port *port, struct
 	GET16(answers);
 	GET16(authority);
 	GET16(additional);
+	(void)additional;
+	(void)authority;
+	(void)answers;
 
 	if (flags & 0x8000) return -1; /* Must not be an answer. */
 	flags &= 0x0110; /* Only RD and CD get preserved. */
@@ -1949,7 +1952,7 @@ server_request_free(struct server_request *req)
 
 	if (req->port) {
 		if (req->port->pending_replies == req) {
-			if (req->next_pending)
+			if (req->next_pending && req->next_pending != req)
 				req->port->pending_replies = req->next_pending;
 			else
 				req->port->pending_replies = NULL;
@@ -2320,7 +2323,7 @@ _evdns_nameserver_add_impl(const struct sockaddr *address,
 	memset(ns, 0, sizeof(struct nameserver));
 	ns->timeout_event_deleted = __LINE__;
 
-	ns->socket = socket(PF_INET, SOCK_DGRAM, 0);
+	ns->socket = socket(address->sa_family, SOCK_DGRAM, 0);
 	if (ns->socket < 0) { err = 1; goto out1; }
 #ifdef WIN32
 	{

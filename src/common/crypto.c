@@ -321,10 +321,12 @@ crypto_new_pk_env(void)
 void
 crypto_free_pk_env(crypto_pk_env_t *env)
 {
-  tor_assert(env);
+  if (!env)
+    return;
 
   if (--env->refs > 0)
     return;
+  tor_assert(env->refs == 0);
 
   if (env->key)
     RSA_free(env->key);
@@ -452,7 +454,7 @@ crypto_pk_read_private_key_from_string(crypto_pk_env_t *env,
 
   tor_assert(env);
   tor_assert(s);
-  tor_assert(len < INT_MAX && len < SIZE_T_CEILING);
+  tor_assert(len < INT_MAX && len < SSIZE_T_CEILING);
 
   /* Create a read-only memory BIO, backed by the string 's' */
   b = BIO_new_mem_buf((char*)s, (int)len);
@@ -656,6 +658,18 @@ crypto_pk_key_is_private(const crypto_pk_env_t *key)
   return PRIVATE_KEY_OK(key);
 }
 
+/** Return true iff <b>env</b> contains a public key whose public exponent
+ * equals 65537.
+ */
+int
+crypto_pk_public_exponent_ok(crypto_pk_env_t *env)
+{
+  tor_assert(env);
+  tor_assert(env->key);
+
+  return BN_is_word(env->key->e, 65537);
+}
+
 /** Compare the public-key components of a and b.  Return -1 if a\<b, 0
  * if a==b, and 1 if a\>b.
  */
@@ -845,7 +859,7 @@ crypto_pk_public_checksig_digest(crypto_pk_env_t *env, const char *data,
     tor_free(buf);
     return -1;
   }
-  if (memcmp(buf, digest, DIGEST_LEN)) {
+  if (tor_memneq(buf, digest, DIGEST_LEN)) {
     log_warn(LD_CRYPTO, "Signature mismatched with digest.");
     tor_free(buf);
     return -1;

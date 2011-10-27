@@ -43,6 +43,7 @@ const char tor_svn_revision[] = "";
 #include "torgzip.h"
 #include "mempool.h"
 #include "memarea.h"
+#include "di_ops.h"
 
 #ifdef USE_DMALLOC
 #include <dmalloc.h>
@@ -460,7 +461,7 @@ test_crypto_rng(void)
     uint64_t big;
     char *host;
     j = crypto_rand_int(100);
-    if (i < 0 || i >= 100)
+    if (j < 0 || j >= 100)
       allok = 0;
     big = crypto_rand_uint64(U64_LITERAL(1)<<40);
     if (big >= (U64_LITERAL(1)<<40))
@@ -625,6 +626,7 @@ test_crypto_sha(void)
   /* Test SHA-1 with a test vector from the specification. */
   i = crypto_digest(data, "abc", 3);
   test_memeq_hex(data, "A9993E364706816ABA3E25717850C26C9CD0D89D");
+  test_eq(i, 0);
 
   /* Test HMAC-SHA-1 with test cases from RFC2202. */
 
@@ -1326,6 +1328,59 @@ test_util(void)
   test_eq(round_to_power_of_2(U64_LITERAL(40000000000000000)),
           U64_LITERAL(1)<<55);
   test_eq(round_to_power_of_2(0), 2);
+
+ done:
+  ;
+}
+
+static void
+test_util_di_ops(void)
+{
+#define LT -1
+#define GT 1
+#define EQ 0
+  const struct {
+    const char *a; int want_sign; const char *b;
+  } examples[] = {
+    { "Foo", EQ, "Foo" },
+    { "foo", GT, "bar", },
+    { "foobar", EQ ,"foobar" },
+    { "foobar", LT, "foobaw" },
+    { "foobar", GT, "f00bar" },
+    { "foobar", GT, "boobar" },
+    { "", EQ, "" },
+    { NULL, 0, NULL },
+  };
+
+  int i;
+
+  for (i = 0; examples[i].a; ++i) {
+    size_t len = strlen(examples[i].a);
+    int eq1, eq2, neq1, neq2, cmp1, cmp2;
+    test_eq(len, strlen(examples[i].b));
+    /* We do all of the operations, with operands in both orders. */
+    eq1 = tor_memeq(examples[i].a, examples[i].b, len);
+    eq2 = tor_memeq(examples[i].b, examples[i].a, len);
+    neq1 = tor_memneq(examples[i].a, examples[i].b, len);
+    neq2 = tor_memneq(examples[i].b, examples[i].a, len);
+    cmp1 = tor_memcmp(examples[i].a, examples[i].b, len);
+    cmp2 = tor_memcmp(examples[i].b, examples[i].a, len);
+
+    /* Check for correctness of cmp1 */
+    if (cmp1 < 0 && examples[i].want_sign != LT)
+      test_fail();
+    else if (cmp1 > 0 && examples[i].want_sign != GT)
+      test_fail();
+    else if (cmp1 == 0 && examples[i].want_sign != EQ)
+      test_fail();
+
+    /* Check for consistency of everything else with cmp1 */
+    test_eq(eq1, eq2);
+    test_eq(neq1, neq2);
+    test_eq(cmp1, -cmp2);
+    test_eq(eq1, cmp1 == 0);
+    test_eq(neq1, !eq1);
+  }
 
  done:
   ;
@@ -4753,6 +4808,7 @@ static struct {
   SUBENT(crypto, aes_iv),
   SUBENT(crypto, base32_decode),
   ENT(util),
+  SUBENT(util, di_ops),
   SUBENT(util, ip6_helpers),
   SUBENT(util, gzip),
   SUBENT(util, datadir),

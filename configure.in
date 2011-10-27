@@ -5,7 +5,7 @@ dnl Copyright (c) 2007-2008, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
 AC_INIT
-AM_INIT_AUTOMAKE(tor, 0.2.1.30)
+AM_INIT_AUTOMAKE(tor, 0.2.1.31)
 AM_CONFIG_HEADER(orconfig.h)
 
 AC_CANONICAL_HOST
@@ -336,10 +336,10 @@ AC_SUBST(TOR_OPENSSL_LIBS)
 dnl ------------------------------------------------------
 dnl Where do you live, zlib?  And how do we call you?
 
-tor_openssl_pkg_redhat="zlib"
-tor_openssl_pkg_debian="zlib1g"
-tor_openssl_devpkg_redhat="zlib-devel"
-tor_openssl_devpkg_debian="zlib1g-dev"
+tor_zlib_pkg_redhat="zlib"
+tor_zlib_pkg_debian="zlib1g"
+tor_zlib_devpkg_redhat="zlib-devel"
+tor_zlib_devpkg_debian="zlib1g-dev"
 
 TOR_SEARCH_LIBRARY(zlib, $tryzlibdir, [-lz],
     [#include <zlib.h>],
@@ -624,6 +624,24 @@ fi
 if test "$tor_cv_twos_complement" != no ; then
   AC_DEFINE([USING_TWOS_COMPLEMENT], 1,
             [Define to 1 iff we represent negative integers with two's complement])
+fi
+
+# What does shifting a negative value do?
+AC_CACHE_CHECK([whether right-shift on negative values does sign-extension], tor_cv_sign_extend,
+[AC_RUN_IFELSE([AC_LANG_SOURCE(
+[[int main () { int okay = (-60 >> 8) == -1; return okay ? 0 : 1; }]])],
+       [tor_cv_sign_extend=yes],
+       [tor_cv_sign_extend=no],
+       [tor_cv_sign_extend=cross])])
+
+if test "$tor_cv_sign_extend" = cross ; then
+  # Cross-compiling; let's hope that the target isn't raving mad.
+  AC_MSG_NOTICE([Cross-compiling: we'll assume that right-shifting negative integers causes sign-extension])
+fi
+
+if test "$tor_cv_sign_extend" != no ; then
+  AC_DEFINE([RSHIFT_DOES_SIGN_EXTEND], 1,
+            [Define to 1 iff right-shifting a negative value performs sign-extension])
 fi
 
 # Whether we should use the dmalloc memory allocation debugging library.
