@@ -1,3 +1,10 @@
+tor (0.2.1.32-1) oldstable-security; urgency=high
+
+  * New upstream version, fixing a heap overflow bug related to Tor's
+    SOCKS code (CVE-2011-2778).
+
+ -- Peter Palfrader <weasel@debian.org>  Thu, 15 Dec 2011 21:25:18 +0100
+
 tor (0.2.1.31-1~lenny+1) oldstable-security; urgency=high
 
   * New upstream version, fixing a couple of security relevant bugs
