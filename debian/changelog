@@ -1,3 +1,18 @@
+tor (0.2.2.35-1~squeeze+1) stable-security; urgency=low
+
+  * Upload tor 0.2.2.x to squeeze security as the old 0.2.1.x tree
+    will be end-of-lifed by upstream soon.  This version brings
+    one important security fix to squeeze (CVE-2011-2778, SOCKS handling
+    potential remote code execution), together with the numerous
+    stability and performance improvements that the 0.2.2.x tree
+    has over the old 0.2.1.x versions.
+  * Revert the patch that enables Control Socket by default from Tor
+    version 0.2.2.29-beta-1 (git commit 61bd4d4f) for the squeeze-
+    security upload to make this package's behaviour reasonable close
+    to how Tor 0.2.1.x behaved in squeeze.
+
+ -- Peter Palfrader <weasel@debian.org>  Thu, 15 Dec 2011 21:07:32 +0100
+
 tor (0.2.2.35-1) unstable; urgency=high
 
   * New upstream version, fixing a heap overflow bug related to Tor's
