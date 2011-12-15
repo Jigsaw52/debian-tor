@@ -175,6 +175,8 @@ static config_var_t _option_vars[] = {
   V(AuthDirBadDir,               LINELIST, NULL),
   V(AuthDirBadExit,              LINELIST, NULL),
   V(AuthDirInvalid,              LINELIST, NULL),
+  V(AuthDirFastGuarantee,        MEMUNIT,  "20 KB"),
+  V(AuthDirGuardBWGuarantee,     MEMUNIT,  "250 KB"),
   V(AuthDirReject,               LINELIST, NULL),
   V(AuthDirRejectUnlisted,       BOOL,     "0"),
   V(AuthDirListBadDirs,          BOOL,     "0"),
@@ -1414,6 +1416,15 @@ options_act(or_options_t *old_options)
       options->EntryStatistics || options->ExitPortStatistics) {
     time_t now = time(NULL);
     int print_notice = 0;
+
+    /* If we aren't acting as a server, we can't collect stats anyway. */
+    if (!server_mode(options)) {
+      options->CellStatistics = 0;
+      options->DirReqStatistics = 0;
+      options->EntryStatistics = 0;
+      options->ExitPortStatistics = 0;
+    }
+
     if ((!old_options || !old_options->CellStatistics) &&
         options->CellStatistics) {
       rep_hist_buffer_stats_init(now);
@@ -1425,6 +1436,7 @@ options_act(or_options_t *old_options)
         geoip_dirreq_stats_init(now);
         print_notice = 1;
       } else {
+        options->DirReqStatistics = 0;
         log_notice(LD_CONFIG, "Configured to measure directory request "
                               "statistics, but no GeoIP database found! "
                               "Please specify a GeoIP database using the "
@@ -1437,6 +1449,7 @@ options_act(or_options_t *old_options)
         geoip_entry_stats_init(now);
         print_notice = 1;
       } else {
+        options->EntryStatistics = 0;
         log_notice(LD_CONFIG, "Configured to measure entry node "
                               "statistics, but no GeoIP database found! "
                               "Please specify a GeoIP database using the "
@@ -3361,6 +3374,12 @@ options_validate(or_options_t *old_options, or_options_t *options,
     return -1;
   if (ensure_bandwidth_cap(&options->PerConnBWBurst,
                            "PerConnBWBurst", msg) < 0)
+    return -1;
+  if (ensure_bandwidth_cap(&options->AuthDirFastGuarantee,
+                           "AuthDirFastGuarantee", msg) < 0)
+    return -1;
+  if (ensure_bandwidth_cap(&options->AuthDirGuardBWGuarantee,
+                           "AuthDirGuardBWGuarantee", msg) < 0)
     return -1;
 
   if (options->RelayBandwidthRate && !options->RelayBandwidthBurst)
