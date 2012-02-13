@@ -1,3 +1,9 @@
+tor (0.2.3.12-alpha-1) experimental; urgency=low
+
+  * New upstream version.
+
+ -- Peter Palfrader <weasel@debian.org>  Mon, 13 Feb 2012 19:09:58 +0100
+
 tor (0.2.3.11-alpha-2) experimental; urgency=low
 
   * init script:  use the new defaults torrc file also for when we
