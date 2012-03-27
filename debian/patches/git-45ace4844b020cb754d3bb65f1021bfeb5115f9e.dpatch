@@ -1,0 +1,59 @@
+#! /bin/sh -e
+## 14_fix_geoip_warning.dpatch by  <weasel@debian.org>
+##
+## All lines beginning with `## DP:' are a description of the patch.
+## DP: Include 45ace4844b020cb754d3bb65f1021bfeb5115f9e from master to fix a test suite stack overflow, just introduced
+
+if [ $# -lt 1 ]; then
+    echo "`basename $0`: script expects -patch|-unpatch as argument" >&2
+    exit 1
+fi
+
+[ -f debian/patches/00patch-opts ] && . debian/patches/00patch-opts
+patch_opts="${patch_opts:--f --no-backup-if-mismatch} ${2:+-d $2}"
+
+case "$1" in
+    -patch) patch -p1 ${patch_opts} < $0;;
+    -unpatch) patch -R -p1 ${patch_opts} < $0;;
+    *)
+        echo "`basename $0`: script expects -patch|-unpatch as argument" >&2
+        exit 1;;
+esac
+
+exit 0
+
+@DPATCH@
+#commit 45ace4844b020cb754d3bb65f1021bfeb5115f9e
+#Author: Sebastian Hahn <sebastian@torproject.org>
+#Date:   Tue Mar 27 14:04:15 2012 +0200
+#
+#    Provide large enough buffer in test_util_sscanf()
+#    
+#    This was causing crashes during unit test runs, as stack smashing
+#    protections got triggered. Issue spotted by weasel
+#
+#diff --git a/changes/bug5449 b/changes/bug5449
+#new file mode 100644
+#index 0000000..7106659
+#--- /dev/null
+#+++ b/changes/bug5449
+#@@ -0,0 +1,6 @@
+#+  o Minor bugfixes:
+#+    - In the testsuite, provide a large enough buffer in the sscanf unit
+#+      test. We'd otherwise overrun that buffer and crash during the unit
+#+      tests. Fixes bug 5449; bugfix on 0.2.3.12-alpha. Thanks weasel for
+#+      spotting the bug.
+#+
+diff --git a/src/test/test_util.c b/src/test/test_util.c
+index 0187187..9da4cb7 100644
+--- a/src/test/test_util.c
++++ b/src/test/test_util.c
+@@ -1376,7 +1376,7 @@ static void
+ test_util_sscanf(void)
+ {
+   unsigned u1, u2, u3;
+-  char s1[10], s2[10], s3[10], ch;
++  char s1[20], s2[10], s3[10], ch;
+   int r;
+ 
+   /* Simple tests (malformed patterns, literal matching, ...) */
