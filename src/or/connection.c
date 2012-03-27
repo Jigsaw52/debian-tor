@@ -508,6 +508,7 @@ _connection_free(connection_t *conn)
   }
   if (conn->type == CONN_TYPE_CONTROL) {
     control_connection_t *control_conn = TO_CONTROL_CONN(conn);
+    tor_free(control_conn->safecookie_client_hash);
     tor_free(control_conn->incoming_cmd);
   }
 
@@ -901,6 +902,25 @@ connection_listener_new(const struct sockaddr *listensockaddr,
     }
 
     make_socket_reuseable(s);
+
+#ifdef IPV6_V6ONLY
+    if (listensockaddr->sa_family == AF_INET6) {
+#ifdef _WIN32
+      /* In Redmond, this kind of thing passes for standards-conformance. */
+      DWORD one = 1;
+#else
+      int one = 1;
+#endif
+      /* We need to set IPV6_V6ONLY so that this socket can't get used for
+       * IPv4 connections. */
+      if (setsockopt(s,IPPROTO_IPV6, IPV6_V6ONLY, (void*)&one, sizeof(one))<0) {
+        int e = tor_socket_errno(s);
+        log_warn(LD_NET, "Error setting IPV6_V6ONLY flag: %s",
+                 tor_socket_strerror(e));
+        /* Keep going; probably not harmful. */
+      }
+    }
+#endif
 
     if (bind(s,listensockaddr,socklen) < 0) {
       const char *helpfulhint = "";
@@ -2575,10 +2595,6 @@ connection_consider_empty_read_buckets(connection_t *conn)
 #endif
 
 /** Read bytes from conn-\>s and process them.
- *
- * This function gets called from conn_read() in main.c, either
- * when poll() has declared that conn wants to read, or (for OR conns)
- * when there are pending TLS bytes.
  *
  * It calls connection_read_to_buf() to bring in any new bytes,
  * and then calls connection_process_inbuf() to process them.

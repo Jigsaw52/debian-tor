@@ -928,7 +928,7 @@ add_default_trusted_dir_authorities(dirinfo_type_t type)
       "208.83.223.34:443 0AD3 FA88 4D18 F89E EA2D 89C0 1937 9E0E 7FD9 4417",
     "maatuska orport=80 no-v2 "
       "v3ident=49015F787433103580E3B66A1707A00E60F2D15B "
-      "213.115.239.118:443 BD6A 8292 55CB 08E6 6FBE 7D37 4836 3586 E46B 3810",
+      "171.25.193.9:443 BD6A 8292 55CB 08E6 6FBE 7D37 4836 3586 E46B 3810",
     NULL
   };
   for (i=0; dirservers[i]; i++) {
@@ -1338,7 +1338,9 @@ options_act(const or_options_t *old_options)
     /* Remember if we already warned about being configured not to disable
      * debugger attachment */
     static int warned_debugger_attach = 0;
-    if (options->DisableDebuggerAttachment && !disabled_debugger_attach) {
+    /* Don't disable debugger attachment when we're running the unit tests. */
+    if (options->DisableDebuggerAttachment && !disabled_debugger_attach &&
+        running_tor) {
       int ok = tor_disable_debugger_attach();
       if (warned_debugger_attach && ok == 1) {
         log_notice(LD_CONFIG, "Disabled attaching debuggers for unprivileged "
@@ -4659,6 +4661,13 @@ options_init_from_string(const char *cf_defaults, const char *cf,
       }
       if (i==0)
         newdefaultoptions = options_dup(&options_format, newoptions);
+    }
+    /* Assign command-line variables a second time too */
+    retval = config_assign(&options_format, newoptions,
+                           global_cmdline_options, 0, 0, msg);
+    if (retval < 0) {
+      err = SETOPT_ERR_PARSE;
+      goto err;
     }
   }
 

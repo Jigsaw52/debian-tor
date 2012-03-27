@@ -16,7 +16,11 @@
  * We also need it to make memmem get defined (where available)
  */
 /* XXXX023 We should just use AC_USE_SYSTEM_EXTENSIONS in our autoconf,
- * and get this (and other important stuff!) automatically */
+ * and get this (and other important stuff!) automatically. Once we do that,
+ * make sure to also change the extern char **environ detection in
+ * configure.in, because whether that is declared or not depends on whether
+ * we have _GNU_SOURCE defined! Maybe that means that once we take this out,
+ * we can also take out the configure check. */
 #define _GNU_SOURCE
 
 #include "compat.h"
@@ -50,6 +54,9 @@
 #endif
 #ifdef HAVE_ARPA_INET_H
 #include <arpa/inet.h>
+#endif
+#ifdef HAVE_CRT_EXTERNS_H
+#include <crt_externs.h>
 #endif
 
 #ifndef HAVE_GETTIMEOFDAY
@@ -1656,6 +1663,28 @@ make_path_absolute(char *fname)
   }
 
   return absfname;
+#endif
+}
+
+#ifndef HAVE__NSGETENVIRON
+#ifndef HAVE_EXTERN_ENVIRON_DECLARED__
+/* Some platforms declare environ under some circumstances, others don't. */
+extern char **environ;
+#endif
+#endif
+
+/** Return the current environment. This is a portable replacement for
+ * 'environ'. */
+char **
+get_environment(void)
+{
+#ifdef HAVE__NSGETENVIRON
+  /* This is for compatibility between OSX versions.  Otherwise (for example)
+   * when we do a mostly-static build on OSX 10.7, the resulting binary won't
+   * work on OSX 10.6. */
+  return *_NSGetEnviron();
+#else
+  return environ;
 #endif
 }
 
