@@ -1,8 +1,11 @@
 tor (0.2.3.13-alpha-1) experimental; urgency=low
 
   * New upstream version.
+  * When creating the debian-tor user that tor runs at, create it with
+    a shell of /bin/false instead of /bin/bash.  Does not change shells
+    of existing users (closes: #658358).
 
- -- Peter Palfrader <weasel@debian.org>  Tue, 27 Mar 2012 08:43:41 +0200
+ -- Peter Palfrader <weasel@debian.org>  Tue, 27 Mar 2012 08:44:07 +0200
 
 tor (0.2.3.12-alpha-1) experimental; urgency=low
 
