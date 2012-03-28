@@ -12,7 +12,7 @@ Package: tor
 Architecture: any
 Depends: ${shlibs:Depends}, adduser, ${misc:Depends}
 Conflicts: libssl0.9.8 (<< 0.9.8g-9)
-Recommends: logrotate, tor-geoipdb, torsocks | tsocks
+Recommends: logrotate, tor-geoipdb, torsocks
 Suggests: mixmaster, xul-ext-torbutton, socat, tor-arm, polipo (>= 1) | privoxy
 Description: anonymizing overlay network for TCP
  Tor is a connection-based low-latency anonymous communication system which

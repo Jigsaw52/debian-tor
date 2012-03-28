@@ -1,3 +1,10 @@
+tor (0.2.3.13-alpha-2) experimental; urgency=low
+
+  * torify now no longer can use tsocks.  Change recommends from
+    torsocks | tsocks to just torsocks.
+
+ -- Peter Palfrader <weasel@debian.org>  Wed, 28 Mar 2012 08:16:48 +0200
+
 tor (0.2.3.13-alpha-1) experimental; urgency=low
 
   * New upstream version.
