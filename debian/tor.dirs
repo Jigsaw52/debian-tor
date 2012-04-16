@@ -1,3 +1,4 @@
+etc/apparmor.d
 etc/tor
 var/lib/tor
 var/log/tor
