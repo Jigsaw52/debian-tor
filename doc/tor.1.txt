@@ -1182,7 +1182,8 @@ is non-zero):
     their identity fingerprints or nicknames. When two servers both declare
     that they are in the same \'family', Tor clients will not use them in the
     same circuit. (Each server only needs to list the other servers in its
-    family; it doesn't need to list itself, but it won't hurt.)
+    family; it doesn't need to list itself, but it won't hurt.) Do not list
+    any bridge relay as it would compromise its concealment.
 
 **Nickname** __name__::
     Set the server's nickname to \'name'. Nicknames must be between 1 and 19
@@ -1555,8 +1556,11 @@ DIRECTORY AUTHORITY SERVER OPTIONS
 
 **BridgePassword** __Password__::
     If set, contains an HTTP authenticator that tells a bridge authority to
-    serve all requested bridge information.  Used for debugging.  (Default:
-    not set.)
+    serve all requested bridge information. Used by the (only partially
+    implemented) "bridge community" design, where a community of bridge
+    relay operators all use an alternate bridge directory authority,
+    and their target user audience can periodically fetch the list of
+    available community bridges to stay up-to-date. (Default: not set.)
 
 **V3AuthVotingInterval** __N__ **minutes**|**hours**::
     V3 authoritative directories only. Configures the server's preferred voting

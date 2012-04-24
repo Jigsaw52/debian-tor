@@ -484,6 +484,8 @@ static const config_var_t testing_tor_network_defaults[] = {
 
 /** Array of "state" variables saved to the ~/.tor/state file. */
 static config_var_t _state_vars[] = {
+  /* Remember to document these in state-contents.txt ! */
+
   V(AccountingBytesReadInInterval,    MEMUNIT,  NULL),
   V(AccountingBytesWrittenInInterval, MEMUNIT,  NULL),
   V(AccountingExpectedUsage,          MEMUNIT,  NULL),
@@ -811,6 +813,7 @@ or_options_free(or_options_t *options)
                       rs, routerset_free(rs));
     smartlist_free(options->NodeFamilySets);
   }
+  tor_free(options->_BridgePassword_AuthDigest);
   config_free(&options_format, options);
 }
 
@@ -916,8 +919,9 @@ add_default_trusted_dir_authorities(dirinfo_type_t type)
       "194.109.206.212:80 7EA6 EAD6 FD83 083C 538F 4403 8BBF A077 587D D755",
     "Tonga orport=443 bridge no-v2 82.94.251.203:80 "
       "4A0C CD2D DC79 9508 3D73 F5D6 6710 0C8A 5831 F16D",
-    "ides orport=9090 no-v2 v3ident=27B6B5996C426270A5C95488AA5BCEB6BCC86956 "
-      "216.224.124.114:9030 F397 038A DC51 3361 35E7 B80B D99C A384 4360 292B",
+    "turtles orport=9090 no-v2 "
+      "v3ident=27B6B5996C426270A5C95488AA5BCEB6BCC86956 "
+      "76.73.17.194:9030 F397 038A DC51 3361 35E7 B80B D99C A384 4360 292B",
     "gabelmoo orport=443 no-v2 "
       "v3ident=ED03BB616EB2F60BEC80151114BB25CEF515B226 "
       "212.112.245.170:80 F204 4413 DAC2 E02E 3D6B CF47 35A1 9BCA 1DE9 7281",
@@ -1454,23 +1458,18 @@ options_act(const or_options_t *old_options)
   }
 
   /* If needed, generate a new TLS DH prime according to the current torrc. */
-  if (server_mode(options)) {
-    if (!old_options) {
-      if (options->DynamicDHGroups) {
-        char *fname = get_datadir_fname2("keys", "dynamic_dh_params");
-        crypto_set_tls_dh_prime(fname);
-        tor_free(fname);
-      } else {
-        crypto_set_tls_dh_prime(NULL);
-      }
-    } else {
-      if (options->DynamicDHGroups && !old_options->DynamicDHGroups) {
-        char *fname = get_datadir_fname2("keys", "dynamic_dh_params");
-        crypto_set_tls_dh_prime(fname);
-        tor_free(fname);
-      } else if (!options->DynamicDHGroups && old_options->DynamicDHGroups) {
-        crypto_set_tls_dh_prime(NULL);
-      }
+  if (server_mode(options) && options->DynamicDHGroups) {
+    char *keydir = get_datadir_fname("keys");
+    if (check_private_dir(keydir, CPD_CREATE, options->User)) {
+      tor_free(keydir);
+      return -1;
+    }
+    tor_free(keydir);
+
+    if (!old_options || !old_options->DynamicDHGroups) {
+      char *fname = get_datadir_fname2("keys", "dynamic_dh_params");
+      crypto_set_tls_dh_prime(fname);
+      tor_free(fname);
     }
   } else { /* clients don't need a dynamic DH prime. */
     crypto_set_tls_dh_prime(NULL);
@@ -1544,6 +1543,24 @@ options_act(const or_options_t *old_options)
 
   /* Change the cell EWMA settings */
   cell_ewma_set_scale_factor(options, networkstatus_get_latest_consensus());
+
+  /* Update the BridgePassword's hashed version as needed.  We store this as a
+   * digest so that we can do side-channel-proof comparisons on it.
+   */
+  if (options->BridgePassword) {
+    char *http_authenticator;
+    http_authenticator = alloc_http_authenticator(options->BridgePassword);
+    if (!http_authenticator) {
+      log_warn(LD_BUG, "Unable to allocate HTTP authenticator. Not setting "
+               "BridgePassword.");
+      return -1;
+    }
+    options->_BridgePassword_AuthDigest = tor_malloc(DIGEST256_LEN);
+    crypto_digest256(options->_BridgePassword_AuthDigest,
+                     http_authenticator, strlen(http_authenticator),
+                     DIGEST_SHA256);
+    tor_free(http_authenticator);
+  }
 
   /* Check for transitions that need action. */
   if (old_options) {
@@ -2800,6 +2817,7 @@ static uint32_t last_resolved_addr = 0;
  * set *<b>hostname_out</b> to a new string holding the hostname we used to
  * get the address. Return 0 if all is well, or -1 if we can't find a suitable
  * public IP address.
+ * XXXX ipv6
  */
 int
 resolve_my_address(int warn_severity, const or_options_t *options,
@@ -5770,13 +5788,13 @@ parse_port_config(smartlist_t *out,
 
     if (out && port) {
       port_cfg_t *cfg = tor_malloc_zero(sizeof(port_cfg_t));
-      cfg->type = listener_type;
-      cfg->port = port;
       tor_addr_copy(&cfg->addr, &addr);
-      cfg->session_group = sessiongroup;
+      cfg->port = port;
+      cfg->type = listener_type;
       cfg->isolation_flags = isolation;
+      cfg->session_group = sessiongroup;
+      cfg->no_advertise = no_advertise;
       cfg->no_listen = no_listen;
-      cfg->no_listen = no_advertise;
       cfg->all_addrs = all_addrs;
       cfg->ipv4_only = ipv4_only;
       cfg->ipv6_only = ipv6_only;

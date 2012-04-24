@@ -1,9 +1,12 @@
-tor (0.2.3.13-alpha-2) experimental; urgency=low
+tor (0.2.3.14-alpha-1) experimental; urgency=low
 
+  * New upstream version.
+    - No longer need backported 45ace4844b020cb754d3bb65f1021bfeb5115f9e
+      from master to fix a test suite stack overflow.
   * torify now no longer can use tsocks.  Change recommends from
     torsocks | tsocks to just torsocks.
 
- -- Peter Palfrader <weasel@debian.org>  Wed, 28 Mar 2012 08:16:48 +0200
+ -- Peter Palfrader <weasel@debian.org>  Tue, 24 Apr 2012 08:34:05 +0200
 
 tor (0.2.3.13-alpha-1) experimental; urgency=low
 

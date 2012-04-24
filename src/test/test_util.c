@@ -50,7 +50,6 @@ test_util_time(void)
 
   test_eq(-1005000L, tv_udiff(&start, &end));
 
-
   /* Test tor_timegm */
 
   /* The test values here are confirmed to be correct on a platform
@@ -76,7 +75,6 @@ test_util_time(void)
   a_time.tm_mon = -1;          /* Wrong month */
   a_time.tm_mday = 10;
   test_eq((time_t) -1, tor_timegm(&a_time));
-
 
   /* Test {format,parse}_rfc1123_time */
 
@@ -110,7 +108,6 @@ test_util_time(void)
   test_eq(-1, parse_rfc1123_time("Wed, 30 Mar 2011 23:59:61 GMT", &t_res));
 #endif
 
-
   /* Test parse_iso_time */
 
   t_res = 0;
@@ -140,7 +137,6 @@ test_util_time(void)
   test_eq(-1, parse_iso_time("2011-00-30 23:59:59 GMT", &t_res));
   test_eq(-1, parse_iso_time("2011-03-30 23:59", &t_res));
 
-
   /* Test tor_gettimeofday */
 
   end.tv_sec = 4;
@@ -153,7 +149,6 @@ test_util_time(void)
   tor_gettimeofday(&end);
   /* We might've timewarped a little. */
   tt_int_op(tv_udiff(&start, &end), >=, -5000);
-
 
   /* Test format_iso_time */
 
@@ -393,6 +388,8 @@ test_util_config_line_comment_character(void)
   test_streq(v, "some value");
   tor_free(k); tor_free(v);
 
+  test_streq(str, "k3 /home/user/myTorNetwork#2\n");
+
 #if 0
   str = parse_config_line_from_str(str, &k, &v);
   test_streq(k, "k3");
@@ -504,6 +501,7 @@ test_util_config_line_escaped_content(void)
   test_streq(k, "Mix");
   test_streq(v, "This is a \"star\":\t'*'\nAnd second line");
   tor_free(k); tor_free(v);
+  test_streq(str, "");
 
   str = buf2;
 
@@ -910,7 +908,8 @@ test_util_strmisc(void)
 
     wrap_string(sl, "A test of string wrapping...", 6, "### ", "# ");
     cp = smartlist_join_strings(sl, "", 0, NULL);
-    test_streq(cp, "### A\n# test\n# of\n# stri\n# ng\n# wrap\n# ping\n# ...\n");
+    test_streq(cp,
+               "### A\n# test\n# of\n# stri\n# ng\n# wrap\n# ping\n# ...\n");
     tor_free(cp);
     SMARTLIST_FOREACH(sl, char *, cp, tor_free(cp));
     smartlist_clear(sl);
@@ -924,7 +923,8 @@ test_util_strmisc(void)
 
     wrap_string(sl, "Small test", 6, "### ", "#### ");
     cp = smartlist_join_strings(sl, "", 0, NULL);
-    test_streq(cp, "### Sm\n#### a\n#### l\n#### l\n#### t\n#### e\n#### s\n#### t\n");
+    test_streq(cp, "### Sm\n#### a\n#### l\n#### l\n#### t\n#### e"
+                   "\n#### s\n#### t\n");
     tor_free(cp);
     SMARTLIST_FOREACH(sl, char *, cp, tor_free(cp));
     smartlist_clear(sl);
@@ -1376,7 +1376,7 @@ static void
 test_util_sscanf(void)
 {
   unsigned u1, u2, u3;
-  char s1[10], s2[10], s3[10], ch;
+  char s1[20], s2[10], s3[10], ch;
   int r;
 
   /* Simple tests (malformed patterns, literal matching, ...) */
@@ -1384,7 +1384,6 @@ test_util_sscanf(void)
   test_eq(-1, tor_sscanf("wrong", "%5c", s1)); /* %c cannot have a number. */
   test_eq(-1, tor_sscanf("hello", "%s", s1)); /* %s needs a number. */
   test_eq(-1, tor_sscanf("prettylongstring", "%999999s", s1));
-  test_eq(-1, tor_sscanf("We're the 99 monkeys", "We're the 99%%"));
 #if 0
   /* GCC thinks these two are illegal. */
   test_eq(-1, tor_sscanf("prettylongstring", "%0s", s1));
@@ -1468,6 +1467,11 @@ test_util_sscanf(void)
   /* Literal '%' (ie. '%%') */
   test_eq(1, tor_sscanf("99% fresh", "%3u%% fresh", &u1));
   test_eq(99, u1);
+  test_eq(0, tor_sscanf("99 fresh", "%% %3u %s", &u1, s1));
+  test_eq(1, tor_sscanf("99 fresh", "%3u%% %s", &u1, s1));
+  test_eq(2, tor_sscanf("99 fresh", "%3u %5s %%", &u1, s1));
+  test_eq(99, u1);
+  test_streq(s1, "fresh");
   test_eq(1, tor_sscanf("% boo", "%% %3s", s1));
   test_streq("boo", s1);
 

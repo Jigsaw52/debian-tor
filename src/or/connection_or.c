@@ -1453,7 +1453,6 @@ int
 connection_or_client_learned_peer_id(or_connection_t *conn,
                                      const uint8_t *peer_id)
 {
-  int as_expected = 1;
   const or_options_t *options = get_options();
   int severity = server_mode(options) ? LOG_PROTOCOL_WARN : LOG_WARN;
 
@@ -1492,14 +1491,12 @@ connection_or_client_learned_peer_id(or_connection_t *conn,
       control_event_bootstrap_problem(
                                 "Unexpected identity in router certificate",
                                 END_OR_CONN_REASON_OR_IDENTITY);
-    as_expected = 0;
+    return -1;
   }
   if (authdir_mode_tests_reachability(options)) {
     dirserv_orconn_tls_done(conn->_base.address, conn->_base.port,
-                            (const char*)peer_id, as_expected);
+                            (const char*)peer_id);
   }
-  if (!as_expected)
-    return -1;
 
   return 0;
 }
@@ -1713,11 +1710,8 @@ connection_or_set_state_open(or_connection_t *conn)
   } else {
     /* only report it to the geoip module if it's not a known router */
     if (!router_get_by_id_digest(conn->identity_digest)) {
-      if (tor_addr_family(&TO_CONN(conn)->addr) == AF_INET) {
-        /*XXXX IP6 support ipv6 geoip.*/
-        uint32_t a = tor_addr_to_ipv4h(&TO_CONN(conn)->addr);
-        geoip_note_client_seen(GEOIP_CLIENT_CONNECT, a, now);
-      }
+      geoip_note_client_seen(GEOIP_CLIENT_CONNECT, &TO_CONN(conn)->addr,
+                             now);
     }
   }
 
