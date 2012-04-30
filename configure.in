@@ -4,7 +4,7 @@ dnl Copyright (c) 2007-2008, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
 AC_INIT
-AM_INIT_AUTOMAKE(tor, 0.2.3.14-alpha)
+AM_INIT_AUTOMAKE(tor, 0.2.3.15-alpha)
 AM_CONFIG_HEADER(orconfig.h)
 
 AC_CANONICAL_HOST
@@ -280,7 +280,12 @@ AC_SEARCH_LIBS(socket, [socket network])
 AC_SEARCH_LIBS(gethostbyname, [nsl])
 AC_SEARCH_LIBS(dlopen, [dl])
 AC_SEARCH_LIBS(inet_aton, [resolv])
-AC_SEARCH_LIBS([clock_gettime], [rt], [have_rt=yes])
+saved_LIBS="$LIBS"
+AC_SEARCH_LIBS([clock_gettime], [rt])
+if test "$LIBS" != "$saved_LIBS"; then
+   # Looks like we need -lrt for clock_gettime().
+   have_rt=yes
+fi
 
 if test "$enable_threads" = "yes"; then
   AC_SEARCH_LIBS(pthread_create, [pthread])
@@ -592,15 +597,34 @@ dnl There are no packages for Debian or Redhat as of this patch
 
 if test "$upnp" = "true"; then
     AC_DEFINE(MINIUPNPC, 1, [Define to 1 if we are building with UPnP.])
-    TOR_SEARCH_LIBRARY(libminiupnpc, $trylibminiupnpcdir, [-lminiupnpc $TOR_LIB_WS32 $TOR_LIB_IPHLPAPI],
-        [#include <miniupnpc/miniwget.h>
-         #include <miniupnpc/miniupnpc.h>
-         #include <miniupnpc/upnpcommands.h>],
-        [void upnpDiscover(int delay, const char * multicastif,
-         const char * minissdpdsock, int sameport);],
-        [upnpDiscover(1, 0, 0, 0); exit(0);],
-        [--with-libminiupnpc-dir],
-        [/usr/lib/])
+
+    dnl Before we call TOR_SEARCH_LIBRARY we'll do a quick compile test
+    dnl to see if we have miniupnpc-1.5 or -1.6
+    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([#include <miniupnpc/miniupnpc.h>],
+        [upnpDiscover(1, 0, 0, 0);exit(0);])],[miniupnpc15="true"],[miniupnpc15="false"])
+
+    if test "$miniupnpc15" = "true" ; then
+        AC_DEFINE([MINIUPNPC15],[1],[libminiupnpc version 1.5 found])
+        TOR_SEARCH_LIBRARY(libminiupnpc, $trylibminiupnpcdir, [-lminiupnpc $TOR_LIB_WS32 $TOR_LIB_IPHLPAPI],
+            [#include <miniupnpc/miniwget.h>
+             #include <miniupnpc/miniupnpc.h>
+             #include <miniupnpc/upnpcommands.h>],
+            [void upnpDiscover(int delay, const char * multicastif,
+             const char * minissdpdsock, int sameport);],
+            [upnpDiscover(1, 0, 0, 0); exit(0);],
+            [--with-libminiupnpc-dir],
+            [/usr/lib/])
+    else
+        TOR_SEARCH_LIBRARY(libminiupnpc, $trylibminiupnpcdir, [-lminiupnpc $TOR_LIB_WS32 $TOR_LIB_IPHLPAPI],
+            [#include <miniupnpc/miniwget.h>
+             #include <miniupnpc/miniupnpc.h>
+             #include <miniupnpc/upnpcommands.h>],
+            [void upnpDiscover(int delay, const char * multicastif,
+             const char * minissdpdsock, int sameport, int ipv6, int * error);],
+            [upnpDiscover(1, 0, 0, 0, 0, 0); exit(0);],
+            [--with-libminiupnpc-dir],
+            [/usr/lib/])
+    fi
 fi
 
 AC_SYS_LARGEFILE
@@ -1092,7 +1116,10 @@ AC_CACHE_CHECK([whether we have extern char **environ already declared],
 /* We define _GNU_SOURCE here because it is also defined in compat.c.
  * Without it environ doesn't get declared. */
 #define _GNU_SOURCE
+#ifdef HAVE_UNISTD_H
 #include <unistd.h>
+#endif
+#include <stdlib.h>
 int main(int c, char **v) { char **t = environ; }])],
   tor_cv_have_environ_declared=yes,
   tor_cv_have_environ_declared=no))
@@ -1111,7 +1138,7 @@ if test "$tor_cv_have_FUNCTION_macro" = 'yes'; then
 fi
 
 if test "$tor_cv_have_environ_declared" = 'yes'; then
-  AC_DEFINE(HAVE_EXTERN_ENVIRON_DECLARED__, 1,
+  AC_DEFINE(HAVE_EXTERN_ENVIRON_DECLARED, 1,
            [Defined if we have extern char **environ already declared])
 fi
 

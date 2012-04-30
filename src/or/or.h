@@ -187,7 +187,7 @@
 #define ROUTER_MAX_AGE (60*60*48)
 /** How old can a router get before we (as a server) will no longer
  * consider it live? In seconds. */
-#define ROUTER_MAX_AGE_TO_PUBLISH (60*60*20)
+#define ROUTER_MAX_AGE_TO_PUBLISH (60*60*24)
 /** How old do we let a saved descriptor get before force-removing it? */
 #define OLD_ROUTER_DESC_MAX_AGE (60*60*24*5)
 
@@ -3269,10 +3269,6 @@ typedef struct {
   int AuthDirMaxServersPerAuthAddr; /**< Do not permit more than this
                                      * number of servers per IP address shared
                                      * with an authority. */
-
-  /** Should we assign the Guard flag to relays which would allow
-   * exploitation of CVE-2011-2768 against their clients? */
-  int GiveGuardFlagTo_CVE_2011_2768_VulnerableRelays;
 
   /** If non-zero, always vote the Fast flag for any relay advertising
    * this amount of capacity or more. */
