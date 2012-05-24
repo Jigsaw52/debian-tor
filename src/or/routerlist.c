@@ -504,9 +504,9 @@ authority_certs_fetch_missing(networkstatus_t *status, time_t now)
         if (download_status_is_ready(&cl->dl_status, now,
                                      MAX_CERT_DL_FAILURES) &&
             !digestmap_get(pending, voter->identity_digest)) {
-          log_notice(LD_DIR, "We're missing a certificate from authority "
-                     "with signing key %s: launching request.",
-                     hex_str(sig->signing_key_digest, DIGEST_LEN));
+          log_info(LD_DIR, "We're missing a certificate from authority "
+                   "with signing key %s: launching request.",
+                   hex_str(sig->signing_key_digest, DIGEST_LEN));
           smartlist_add(missing_digests, sig->identity_digest);
         }
       } SMARTLIST_FOREACH_END(sig);
@@ -2815,6 +2815,13 @@ routerlist_insert(routerlist_t *rl, routerinfo_t *ri)
                      ri->cache_info.signed_descriptor_digest,
                      &(ri->cache_info));
   if (sd_old) {
+    int idx = sd_old->routerlist_index;
+    sd_old->routerlist_index = -1;
+    smartlist_del(rl->old_routers, idx);
+    if (idx < smartlist_len(rl->old_routers)) {
+       signed_descriptor_t *d = smartlist_get(rl->old_routers, idx);
+       d->routerlist_index = idx;
+    }
     rl->desc_store.bytes_dropped += sd_old->signed_descriptor_len;
     sdmap_remove(rl->desc_by_eid_map, sd_old->extra_info_digest);
     signed_descriptor_free(sd_old);
@@ -4788,18 +4795,21 @@ get_dir_info_status_string(void)
  * them seem like ones we'd use, and how many of <em>those</em> we have
  * descriptors for.  Store the former in *<b>num_usable</b> and the latter in
  * *<b>num_present</b>.  If <b>in_set</b> is non-NULL, only consider those
- * routers in <b>in_set</b>.
+ * routers in <b>in_set</b>.  If <b>exit_only</b> is true, only consider nodes
+ * with the Exit flag.
  */
 static void
 count_usable_descriptors(int *num_present, int *num_usable,
                          const networkstatus_t *consensus,
                          or_options_t *options, time_t now,
-                         routerset_t *in_set)
+                         routerset_t *in_set, int exit_only)
 {
   *num_present = 0, *num_usable=0;
 
   SMARTLIST_FOREACH(consensus->routerstatus_list, routerstatus_t *, rs,
      {
+       if (exit_only && ! rs->is_exit)
+         continue;
        if (in_set && ! routerset_contains_routerstatus(in_set, rs))
          continue;
        if (client_would_use_router(rs, now, options)) {
@@ -4830,7 +4840,7 @@ count_loading_descriptors_progress(void)
     return 0; /* can't count descriptors if we have no list of them */
 
   count_usable_descriptors(&num_present, &num_usable,
-                           consensus, get_options(), now, NULL);
+                           consensus, get_options(), now, NULL, 0);
 
   if (num_usable == 0)
     return 0; /* don't div by 0 */
@@ -4849,6 +4859,7 @@ static void
 update_router_have_minimum_dir_info(void)
 {
   int num_present = 0, num_usable=0;
+  int num_exit_present = 0, num_exit_usable = 0;
   time_t now = time(NULL);
   int res;
   or_options_t *options = get_options();
@@ -4875,7 +4886,9 @@ update_router_have_minimum_dir_info(void)
   }
 
   count_usable_descriptors(&num_present, &num_usable, consensus, options, now,
-                           NULL);
+                           NULL, 0);
+  count_usable_descriptors(&num_exit_present, &num_exit_usable,
+                           consensus, options, now, options->ExitNodes, 1);
 
   if (num_present < num_usable/4) {
     tor_snprintf(dir_info_status, sizeof(dir_info_status),
@@ -4889,12 +4902,19 @@ update_router_have_minimum_dir_info(void)
                  num_present, num_present ? "" : "s");
     res = 0;
     goto done;
+  } else if (num_exit_present < num_exit_usable / 3) {
+    tor_snprintf(dir_info_status, sizeof(dir_info_status),
+                 "We have only %d/%d usable exit node descriptors.",
+                 num_exit_present, num_exit_usable);
+    res = 0;
+    control_event_bootstrap(BOOTSTRAP_STATUS_REQUESTING_DESCRIPTORS, 0);
+    goto done;
   }
 
   /* Check for entry nodes. */
   if (options->EntryNodes) {
     count_usable_descriptors(&num_present, &num_usable, consensus, options,
-                             now, options->EntryNodes);
+                             now, options->EntryNodes, 0);
 
     if (!num_usable || !num_present) {
       tor_snprintf(dir_info_status, sizeof(dir_info_status),
