@@ -1,7 +1,7 @@
 tor (0.2.2.36-1) unstable; urgency=low
 
   * New upstream version, including updates to authority addresses, and
-    a coulpe minor security issues, see upstream's changelog.
+    a couple minor security issues, see upstream's changelog.
 
  -- Peter Palfrader <weasel@debian.org>  Thu, 24 May 2012 11:08:24 +0200
 
