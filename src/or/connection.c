@@ -419,6 +419,7 @@ _connection_free(connection_t *conn)
   }
   if (conn->type == CONN_TYPE_CONTROL) {
     control_connection_t *control_conn = TO_CONTROL_CONN(conn);
+    tor_free(control_conn->safecookie_client_hash);
     tor_free(control_conn->incoming_cmd);
   }
 
@@ -880,7 +881,7 @@ check_location_for_unix_socket(or_options_t *options, const char *path)
     log_warn(LD_GENERAL, "Before Tor can create a control socket in %s, the "
              "directory %s needs to exist, and to be accessible only by the "
              "user%s account that is running Tor.  (On some Unix systems, "
-             "anybody who can list a socket can conect to it, so Tor is "
+             "anybody who can list a socket can connect to it, so Tor is "
              "being careful.)", escpath, escdir,
              options->ControlSocketsGroupWritable ? " and group" : "");
     tor_free(escpath);
@@ -1076,7 +1077,12 @@ connection_create_listener(const struct sockaddr *listensockaddr,
 }
 
 /** Do basic sanity checking on a newly received socket. Return 0
- * if it looks ok, else return -1. */
+ * if it looks ok, else return -1.
+ *
+ * Notably, some TCP stacks can erroneously have accept() return successfully
+ * with socklen 0, when the client sends an RST before the accept call (as
+ * nmap does).  We want to detect that, and not go on with the connection.
+ */
 static int
 check_sockaddr(struct sockaddr *sa, int len, int level)
 {
@@ -1142,7 +1148,7 @@ connection_handle_listener_read(connection_t *conn, int new_type)
   tor_socket_t news; /* the new socket */
   connection_t *newconn;
   /* information about the remote peer when connecting to other routers */
-  char addrbuf[256];
+  char addrbuf[256]; /*XXX023 use sockaddr_storage instead*/
   struct sockaddr *remote = (struct sockaddr*)addrbuf;
   /* length of the remote address. Must be whatever accept() needs. */
   socklen_t remotelen = (socklen_t)sizeof(addrbuf);
@@ -1186,21 +1192,9 @@ connection_handle_listener_read(connection_t *conn, int new_type)
     uint16_t port;
     if (check_sockaddr(remote, remotelen, LOG_INFO)<0) {
       log_info(LD_NET,
-               "accept() returned a strange address; trying getsockname().");
-      remotelen=sizeof(addrbuf);
-      memset(addrbuf, 0, sizeof(addrbuf));
-      if (getsockname(news, remote, &remotelen)<0) {
-        int e = tor_socket_errno(news);
-        log_warn(LD_NET, "getsockname() for new connection failed: %s",
-                 tor_socket_strerror(e));
-      } else {
-        if (check_sockaddr((struct sockaddr*)addrbuf, remotelen,
-                              LOG_WARN) < 0) {
-          log_warn(LD_NET,"Something's wrong with this conn. Closing it.");
-          tor_close_socket(news);
-          return 0;
-        }
-      }
+               "accept() returned a strange address; closing connection.");
+      tor_close_socket(news);
+      return 0;
     }
 
     if (check_sockaddr_family_match(remote->sa_family, conn) < 0) {
@@ -1471,10 +1465,13 @@ connection_proxy_connect(connection_t *conn, int type)
       }
 
       if (base64_authenticator) {
+        const char *addr = fmt_addr(&conn->addr);
         tor_snprintf(buf, sizeof(buf), "CONNECT %s:%d HTTP/1.1\r\n"
+                     "Host: %s:%d\r\n"
                      "Proxy-Authorization: Basic %s\r\n\r\n",
-                     fmt_addr(&conn->addr),
-                     conn->port, base64_authenticator);
+                     addr, conn->port,
+                     addr, conn->port,
+                     base64_authenticator);
         tor_free(base64_authenticator);
       } else {
         tor_snprintf(buf, sizeof(buf), "CONNECT %s:%d HTTP/1.0\r\n\r\n",

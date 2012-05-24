@@ -764,6 +764,9 @@ tor_digest256_is_zero(const char *digest)
 /* Helper: common code to check whether the result of a strtol or strtoul or
  * strtoll is correct. */
 #define CHECK_STRTOX_RESULT()                           \
+  /* Did an overflow occur? */                          \
+  if (errno == ERANGE)                                  \
+    goto err;                                           \
   /* Was at least one character converted? */           \
   if (endptr == s)                                      \
     goto err;                                           \
@@ -800,6 +803,7 @@ tor_parse_long(const char *s, int base, long min, long max,
   char *endptr;
   long r;
 
+  errno = 0;
   r = strtol(s, &endptr, base);
   CHECK_STRTOX_RESULT();
 }
@@ -812,6 +816,7 @@ tor_parse_ulong(const char *s, int base, unsigned long min,
   char *endptr;
   unsigned long r;
 
+  errno = 0;
   r = strtoul(s, &endptr, base);
   CHECK_STRTOX_RESULT();
 }
@@ -823,6 +828,7 @@ tor_parse_double(const char *s, double min, double max, int *ok, char **next)
   char *endptr;
   double r;
 
+  errno = 0;
   r = strtod(s, &endptr);
   CHECK_STRTOX_RESULT();
 }
@@ -836,6 +842,7 @@ tor_parse_uint64(const char *s, int base, uint64_t min,
   char *endptr;
   uint64_t r;
 
+  errno = 0;
 #ifdef HAVE_STRTOULL
   r = (uint64_t)strtoull(s, &endptr, base);
 #elif defined(MS_WINDOWS)
@@ -1261,7 +1268,7 @@ format_rfc1123_time(char *buf, time_t t)
   tor_assert(tm.tm_wday >= 0);
   tor_assert(tm.tm_wday <= 6);
   memcpy(buf, WEEKDAY_NAMES[tm.tm_wday], 3);
-  tor_assert(tm.tm_wday >= 0);
+  tor_assert(tm.tm_mon >= 0);
   tor_assert(tm.tm_mon <= 11);
   memcpy(buf+8, MONTH_NAMES[tm.tm_mon], 3);
 }
@@ -1291,7 +1298,8 @@ parse_rfc1123_time(const char *buf, time_t *t)
     tor_free(esc);
     return -1;
   }
-  if (tm_mday > 31 || tm_hour > 23 || tm_min > 59 || tm_sec > 61) {
+  if (tm_mday < 1 || tm_mday > 31 || tm_hour > 23 || tm_min > 59 ||
+      tm_sec > 60) {
     char *esc = esc_for_log(buf);
     log_warn(LD_GENERAL, "Got invalid RFC1123 time %s", esc);
     tor_free(esc);
@@ -1361,7 +1369,7 @@ int
 parse_iso_time(const char *cp, time_t *t)
 {
   struct tm st_tm;
-  unsigned int year=0, month=0, day=0, hour=100, minute=100, second=100;
+  unsigned int year=0, month=0, day=0, hour=0, minute=0, second=0;
   if (tor_sscanf(cp, "%u-%2u-%2u %2u:%2u:%2u", &year, &month,
                 &day, &hour, &minute, &second) < 6) {
     char *esc = esc_for_log(cp);
@@ -1370,7 +1378,7 @@ parse_iso_time(const char *cp, time_t *t)
     return -1;
   }
   if (year < 1970 || month < 1 || month > 12 || day < 1 || day > 31 ||
-          hour > 23 || minute > 59 || second > 61) {
+          hour > 23 || minute > 59 || second > 60) {
     char *esc = esc_for_log(cp);
     log_warn(LD_GENERAL, "ISO time %s was nonsensical", esc);
     tor_free(esc);
@@ -1410,12 +1418,15 @@ parse_http_time(const char *date, struct tm *tm)
   /* First, try RFC1123 or RFC850 format: skip the weekday.  */
   if ((cp = strchr(date, ','))) {
     ++cp;
-    if (tor_sscanf(date, "%2u %3s %4u %2u:%2u:%2u GMT",
+    if (*cp != ' ')
+      return -1;
+    ++cp;
+    if (tor_sscanf(cp, "%2u %3s %4u %2u:%2u:%2u GMT",
                &tm_mday, month, &tm_year,
                &tm_hour, &tm_min, &tm_sec) == 6) {
       /* rfc1123-date */
       tm_year -= 1900;
-    } else if (tor_sscanf(date, "%2u-%3s-%2u %2u:%2u:%2u GMT",
+    } else if (tor_sscanf(cp, "%2u-%3s-%2u %2u:%2u:%2u GMT",
                       &tm_mday, month, &tm_year,
                       &tm_hour, &tm_min, &tm_sec) == 6) {
       /* rfc850-date */
@@ -1440,18 +1451,20 @@ parse_http_time(const char *date, struct tm *tm)
 
   month[3] = '\0';
   /* Okay, now decode the month. */
+  /* set tm->tm_mon to dummy value so the check below fails. */
+  tm->tm_mon = -1;
   for (i = 0; i < 12; ++i) {
     if (!strcasecmp(MONTH_NAMES[i], month)) {
-      tm->tm_mon = i+1;
+      tm->tm_mon = i;
     }
   }
 
   if (tm->tm_year < 0 ||
-      tm->tm_mon < 1  || tm->tm_mon > 12 ||
-      tm->tm_mday < 0 || tm->tm_mday > 31 ||
+      tm->tm_mon < 0  || tm->tm_mon > 11 ||
+      tm->tm_mday < 1 || tm->tm_mday > 31 ||
       tm->tm_hour < 0 || tm->tm_hour > 23 ||
       tm->tm_min < 0  || tm->tm_min > 59 ||
-      tm->tm_sec < 0  || tm->tm_sec > 61)
+      tm->tm_sec < 0  || tm->tm_sec > 60)
     return -1; /* Out of range, or bad month. */
 
   return 0;
@@ -2212,14 +2225,16 @@ unescape_string(const char *s, char **result, size_t *size_out)
       case '\"':
         goto end_of_loop;
       case '\\':
-        if ((cp[1] == 'x' || cp[1] == 'X')
-            && TOR_ISXDIGIT(cp[2]) && TOR_ISXDIGIT(cp[3])) {
+        if (cp[1] == 'x' || cp[1] == 'X') {
+          if (!(TOR_ISXDIGIT(cp[2]) && TOR_ISXDIGIT(cp[3])))
+            return NULL;
           cp += 4;
         } else if (TOR_ISODIGIT(cp[1])) {
           cp += 2;
           if (TOR_ISODIGIT(*cp)) ++cp;
           if (TOR_ISODIGIT(*cp)) ++cp;
-        } else if (cp[1]) {
+        } else if (cp[1] == 'n' || cp[1] == 'r' || cp[1] == 't' || cp[1] == '"'
+                   || cp[1] == '\\' || cp[1] == '\'') {
           cp += 2;
         } else {
           return NULL;
@@ -2251,9 +2266,19 @@ unescape_string(const char *s, char **result, size_t *size_out)
           case 'r': *out++ = '\r'; cp += 2; break;
           case 't': *out++ = '\t'; cp += 2; break;
           case 'x': case 'X':
-            *out++ = ((hex_decode_digit(cp[2])<<4) +
-                      hex_decode_digit(cp[3]));
-            cp += 4;
+            {
+              int x1, x2;
+
+              x1 = hex_decode_digit(cp[2]);
+              x2 = hex_decode_digit(cp[3]);
+              if (x1 == -1 || x2 == -1) {
+                  tor_free(*result);
+                  return NULL;
+              }
+
+              *out++ = ((x1<<4) + x2);
+              cp += 4;
+            }
             break;
           case '0': case '1': case '2': case '3': case '4': case '5':
           case '6': case '7':
