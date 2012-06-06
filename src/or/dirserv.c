@@ -1,6 +1,6 @@
 /* Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #define DIRSERV_PRIVATE
@@ -951,6 +951,7 @@ list_single_server_status(const routerinfo_t *desc, int is_live)
   return tor_strdup(buf);
 }
 
+/* DOCDOC running_long_enough_to_decide_unreachable */
 static INLINE int
 running_long_enough_to_decide_unreachable(void)
 {
@@ -1250,6 +1251,15 @@ int
 directory_caches_v2_dir_info(const or_options_t *options)
 {
   return options->DirPort != NULL;
+}
+
+/** Return true iff we want to fetch and keep certificates for authorities
+ * that we don't acknowledge as aurthorities ourself.
+ */
+int
+directory_caches_unknown_auth_certs(const or_options_t *options)
+{
+  return options->DirPort || options->BridgeRelay;
 }
 
 /** Return 1 if we want to keep descriptors, networkstatuses, etc around
@@ -1985,7 +1995,7 @@ dirserv_compute_performance_thresholds(routerlist_t *rl)
   log(LOG_INFO, LD_DIRSERV,
       "Cutoffs: For Stable, %lu sec uptime, %lu sec MTBF. "
       "For Fast: %lu bytes/sec. "
-      "For Guard: WFU %.03lf%%, time-known %lu sec, "
+      "For Guard: WFU %.03f%%, time-known %lu sec, "
       "and bandwidth %lu or %lu bytes/sec. We%s have enough stability data.",
       (unsigned long)stable_uptime,
       (unsigned long)stable_mtbf,

@@ -1,6 +1,6 @@
 /* Copyright (c) 2003-2004, Roger Dingledine
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -17,6 +17,10 @@
 #include "di_ops.h"
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef _WIN32
+/* for the correct alias to struct stat */
+#include <sys/stat.h>
+#endif
 
 #ifndef O_BINARY
 #define O_BINARY 0
@@ -213,7 +217,11 @@ const char *escaped(const char *string);
 struct smartlist_t;
 void wrap_string(struct smartlist_t *out, const char *string, size_t width,
                  const char *prefix0, const char *prefixRest);
-int tor_vsscanf(const char *buf, const char *pattern, va_list ap);
+int tor_vsscanf(const char *buf, const char *pattern, va_list ap)
+#ifdef __GNUC__
+  __attribute__((format(scanf, 2, 0)))
+#endif
+  ;
 int tor_sscanf(const char *buf, const char *pattern, ...)
 #ifdef __GNUC__
   __attribute__((format(scanf, 2, 3)))
@@ -346,7 +354,9 @@ int write_bytes_to_new_file(const char *fname, const char *str, size_t len,
 /** Flag for read_file_to_str: it's okay if the file doesn't exist. */
 #define RFTS_IGNORE_MISSING 2
 
+#ifndef _WIN32
 struct stat;
+#endif
 char *read_file_to_str(const char *filename, int flags, struct stat *stat_out)
   ATTR_MALLOC;
 const char *parse_config_line_from_str(const char *line,
@@ -378,6 +388,7 @@ HANDLE load_windows_system_library(const TCHAR *library_name);
 
 int environment_variable_names_equal(const char *s1, const char *s2);
 
+/* DOCDOC process_environment_t */
 struct process_environment_t {
   /** A pointer to a sorted empty-string-terminated sequence of
    * NUL-terminated strings of the form "NAME=VALUE". */
@@ -405,8 +416,10 @@ void set_environment_variable_in_smartlist(struct smartlist_t *env_vars,
 #define PROCESS_STATUS_ERROR -1
 
 #ifdef UTIL_PRIVATE
-/*DOCDOC*/
+/** Structure to represent the state of a process with which Tor is
+ * communicating. The contents of this structure are private to util.c */
 struct process_handle_t {
+  /** One of the PROCESS_STATUS_* values */
   int status;
 #ifdef _WIN32
   HANDLE stdout_pipe;

@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -94,7 +94,9 @@ static int stats_prev_global_read_bucket;
 static int stats_prev_global_write_bucket;
 #endif
 
+/* DOCDOC stats_prev_n_read */
 static uint64_t stats_prev_n_read = 0;
+/* DOCDOC stats_prev_n_written */
 static uint64_t stats_prev_n_written = 0;
 
 /* XXX we might want to keep stats about global_relayed_*_bucket too. Or not.*/
@@ -443,6 +445,7 @@ get_bytes_read(void)
   return stats_n_bytes_read;
 }
 
+/* DOCDOC get_bytes_written */
 uint64_t
 get_bytes_written(void)
 {
@@ -1428,7 +1431,7 @@ run_scheduled_events(time_t now)
 
   /** 3d. And every 60 seconds, we relaunch listeners if any died. */
   if (!net_is_disabled() && time_to_check_listeners < now) {
-    retry_all_listeners(NULL, NULL);
+    retry_all_listeners(NULL, NULL, 0);
     time_to_check_listeners = now+60;
   }
 
@@ -1773,8 +1776,16 @@ do_hup(void)
     }
     options = get_options(); /* they have changed now */
   } else {
+    char *msg = NULL;
     log_notice(LD_GENERAL, "Not reloading config file: the controller told "
                "us not to.");
+    /* Make stuff get rescanned, reloaded, etc. */
+    if (set_options((or_options_t*)options, &msg) < 0) {
+      if (!msg)
+        msg = tor_strdup("Unknown error");
+      log_warn(LD_GENERAL, "Unable to re-set previous options: %s", msg);
+      tor_free(msg);
+    }
   }
   if (authdir_mode_handles_descs(options, -1)) {
     /* reload the approved-routers file */

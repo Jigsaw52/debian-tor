@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -78,6 +78,9 @@ typedef struct consensus_waiting_for_certs_t {
   int dl_failed;
 } consensus_waiting_for_certs_t;
 
+/** An array, for each flavor of consensus we might want, of consensuses that
+ * we have downloaded, but which we cannot verify due to having insufficient
+ * authority certificates. */
 static consensus_waiting_for_certs_t
        consensus_waiting_for_certs[N_CONSENSUS_FLAVORS];
 
@@ -1006,8 +1009,8 @@ networkstatus_get_v2_list(void)
   return networkstatus_v2_list;
 }
 
-/* As router_get_consensus_status_by_descriptor_digest, but does not return
- * a const pointer */
+/** As router_get_consensus_status_by_descriptor_digest, but does not return
+ * a const pointer. */
 routerstatus_t *
 router_get_mutable_consensus_status_by_descriptor_digest(
                                                  networkstatus_t *consensus,
@@ -1183,7 +1186,8 @@ update_v2_networkstatus_cache_downloads(time_t now)
   }
 }
 
-/** DOCDOC */
+/** Return true iff, given the options listed in <b>options</b>, <b>flavor</b>
+ *  is the flavor of a consensus networkstatus that we would like to fetch. */
 static int
 we_want_to_fetch_flavor(const or_options_t *options, int flavor)
 {
@@ -1455,7 +1459,8 @@ networkstatus_get_latest_consensus(void)
   return current_consensus;
 }
 
-/** DOCDOC */
+/** Return the latest consensus we have whose flavor matches <b>f</b>, or NULL
+ * if we don't have one. */
 networkstatus_t *
 networkstatus_get_latest_consensus_by_flavor(consensus_flavor_t f)
 {
@@ -1463,8 +1468,10 @@ networkstatus_get_latest_consensus_by_flavor(consensus_flavor_t f)
     return current_ns_consensus;
   else if (f == FLAV_MICRODESC)
     return current_md_consensus;
-  else
+  else {
     tor_assert(0);
+    return NULL;
+  }
 }
 
 /** Return the most recent consensus that we have downloaded, or NULL if it is
@@ -2190,6 +2197,7 @@ networkstatus_dump_bridge_status_to_file(time_t now)
   tor_free(status);
 }
 
+/* DOCDOC get_net_param_from_list */
 static int32_t
 get_net_param_from_list(smartlist_t *net_params, const char *param_name,
                         int32_t default_val, int32_t min_val, int32_t max_val)

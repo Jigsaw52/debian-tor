@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -23,11 +23,8 @@
 #endif
 
 #ifdef _WIN32
-#ifndef WIN32_WINNT
-#define WIN32_WINNT 0x400
-#endif
 #ifndef _WIN32_WINNT
-#define _WIN32_WINNT 0x400
+#define _WIN32_WINNT 0x0501
 #endif
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -1068,6 +1065,7 @@ typedef struct connection_t {
   uint64_t dirreq_id;
 } connection_t;
 
+/** Subtype of connection_t; used for a listener socket. */
 typedef struct listener_connection_t {
   connection_t _base;
 
@@ -1254,7 +1252,8 @@ typedef struct or_connection_t {
                     * bandwidthburst. (OPEN ORs only) */
   int write_bucket; /**< When this hits 0, stop writing. Like read_bucket. */
 #else
-  /** DOCDOC */
+  /** A rate-limiting configuration object to determine how this connection
+   * set its read- and write- limits. */
   /* XXXX we could share this among all connections. */
   struct ev_token_bucket_cfg *bucket_cfg;
 #endif
@@ -1732,7 +1731,7 @@ typedef struct {
   uint16_t or_port; /**< Port for TLS connections. */
   uint16_t dir_port; /**< Port for HTTP directory connections. */
 
-  /* DOCDOC */
+  /** A router's IPv6 address, if it has one. */
   /* XXXXX187 Actually these should probably be part of a list of addresses,
    * not just a special case.  Use abstractions to access these; don't do it
    * directly. */

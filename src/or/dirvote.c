@@ -1,6 +1,6 @@
 /* Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #define DIRVOTE_PRIVATE
@@ -33,6 +33,7 @@ typedef struct pending_consensus_t {
   networkstatus_t *consensus;
 } pending_consensus_t;
 
+/* DOCDOC dirvote_add_signatures_to_all_pending_consensuses */
 static int dirvote_add_signatures_to_all_pending_consensuses(
                        const char *detached_signatures_body,
                        const char *source,
@@ -668,10 +669,10 @@ dirvote_compute_params(smartlist_t *votes, int method, int total_authorities)
     const char *next_param;
     int ok=0;
     eq = strchr(param, '=');
-    tor_assert(i<n_votes);
+    tor_assert(i<n_votes); /* Make sure we prevented vote-stuffing. */
     vals[i++] = (int32_t)
       tor_parse_long(eq+1, 10, INT32_MIN, INT32_MAX, &ok, NULL);
-    tor_assert(ok);
+    tor_assert(ok); /* Already checked these when parsing. */
 
     if (param_sl_idx+1 == smartlist_len(param_list))
       next_param = NULL;
@@ -1005,7 +1006,7 @@ networkstatus_compute_bw_weights_v10(smartlist_t *chunks, int64_t G,
   /* We cast down the weights to 32 bit ints on the assumption that
    * weight_scale is ~= 10000. We need to ensure a rogue authority
    * doesn't break this assumption to rig our weights */
-  tor_assert(0 < weight_scale && weight_scale < INT32_MAX);
+  tor_assert(0 < weight_scale && weight_scale <= INT32_MAX);
 
   /*
    * Provide Wgm=Wgg, Wmm=1, Wem=Wee, Weg=Wed. May later determine
@@ -1233,7 +1234,7 @@ networkstatus_compute_bw_weights_v9(smartlist_t *chunks, int64_t G, int64_t M,
   /* We cast down the weights to 32 bit ints on the assumption that
    * weight_scale is ~= 10000. We need to ensure a rogue authority
    * doesn't break this assumption to rig our weights */
-  tor_assert(0 < weight_scale && weight_scale < INT32_MAX);
+  tor_assert(0 < weight_scale && weight_scale <= INT32_MAX);
 
   if (Wgg < 0 || Wgg > weight_scale) {
     log_warn(LD_DIR, "Bw %s: Wgg="I64_FORMAT"! G="I64_FORMAT
@@ -2019,7 +2020,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
       int ok=0;
       char *eq = strchr(bw_weight_param, '=');
       if (eq) {
-        weight_scale = tor_parse_long(eq+1, 10, INT32_MIN, INT32_MAX, &ok,
+        weight_scale = tor_parse_long(eq+1, 10, 1, INT32_MAX, &ok,
                                          NULL);
         if (!ok) {
           log_warn(LD_DIR, "Bad element '%s' in bw weight param",
@@ -2679,6 +2680,7 @@ static smartlist_t *pending_vote_list = NULL;
  * build a consensus, the votes go here for the next period. */
 static smartlist_t *previous_vote_list = NULL;
 
+/* DOCDOC pending_consensuses */
 static pending_consensus_t pending_consensuses[N_CONSENSUS_FLAVORS];
 
 /** The detached signatures for the consensus that we're currently

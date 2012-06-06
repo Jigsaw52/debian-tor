@@ -1,6 +1,6 @@
 /* Copyright (c) 2003, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -22,11 +22,8 @@
 
 #include <assert.h>
 #ifdef _WIN32 /*wrkard for dtls1.h >= 0.9.8m of "#include <winsock.h>"*/
- #ifndef WIN32_WINNT
- #define WIN32_WINNT 0x400
- #endif
  #ifndef _WIN32_WINNT
- #define _WIN32_WINNT 0x400
+ #define _WIN32_WINNT 0x0501
  #endif
  #define WIN32_LEAN_AND_MEAN
  #if defined(_MSC_VER) && (_MSC_VER < 1300)
@@ -226,9 +223,12 @@ static int check_cert_lifetime_internal(int severity, const X509 *cert,
                                    int past_tolerance, int future_tolerance);
 
 /** Global TLS contexts. We keep them here because nobody else needs
- * to touch them. */
+ * to touch them.
+ *
+ * @{ */
 static tor_tls_context_t *server_tls_context = NULL;
 static tor_tls_context_t *client_tls_context = NULL;
+/**@}*/
 
 /** True iff tor_tls_init() has been called. */
 static int tls_library_is_initialized = 0;
@@ -271,6 +271,9 @@ tor_tls_get_state_description(tor_tls_t *tls, char *buf, size_t sz)
   tor_snprintf(buf, sz, "%s%s", ssl_state, tortls_state);
 }
 
+/** Log a single error <b>err</b> as returned by ERR_get_error(), which was
+ * received while performing an operation <b>doing</b> on <b>tls</b>.  Log
+ * the message at <b>severity</b>, in log domain <b>domain</b>. */
 void
 tor_tls_log_one_error(tor_tls_t *tls, unsigned long err,
                   int severity, int domain, const char *doing)
@@ -315,8 +318,8 @@ tor_tls_log_one_error(tor_tls_t *tls, unsigned long err,
   }
 }
 
-/** Log all pending tls errors at level <b>severity</b>.  Use
- * <b>doing</b> to describe our current activities.
+/** Log all pending tls errors at level <b>severity</b> in log domain
+ * <b>domain</b>.  Use <b>doing</b> to describe our current activities.
  */
 static void
 tls_log_errors(tor_tls_t *tls, int severity, int domain, const char *doing)
@@ -798,7 +801,7 @@ tor_cert_decode(const uint8_t *certificate, size_t certificate_len)
   return newcert;
 }
 
-/** Set *<b>encoded_out</b> and *<b>size_out/b> to <b>cert</b>'s encoded DER
+/** Set *<b>encoded_out</b> and *<b>size_out</b> to <b>cert</b>'s encoded DER
  * representation and length, respectively. */
 void
 tor_cert_get_der(const tor_cert_t *cert,
@@ -1175,6 +1178,21 @@ tor_tls_context_new(crypto_pk_t *identity, unsigned int key_lifetime,
     goto error;
   SSL_CTX_set_options(result->ctx, SSL_OP_NO_SSLv2);
 
+  /* Disable TLS1.1 and TLS1.2 if they exist.  We need to do this to
+   * workaround a bug present in all OpenSSL 1.0.1 versions (as of 1
+   * June 2012), wherein renegotiating while using one of these TLS
+   * protocols will cause the client to send a TLS 1.0 ServerHello
+   * rather than a ServerHello written with the appropriate protocol
+   * version.  Once some version of OpenSSL does TLS1.1 and TLS1.2
+   * renegotiation properly, we can turn them back on when built with
+   * that version. */
+#ifdef SSL_OP_NO_TLSv1_2
+  SSL_CTX_set_options(result->ctx, SSL_OP_NO_TLSv1_2);
+#endif
+#ifdef SSL_OP_NO_TLSv1_1
+  SSL_CTX_set_options(result->ctx, SSL_OP_NO_TLSv1_1);
+#endif
+
   if (
 #ifdef DISABLE_SSL3_HANDSHAKE
       1 ||
@@ -1330,6 +1348,7 @@ tor_tls_client_is_using_v2_ciphers(const SSL *ssl, const char *address)
   return 1;
 }
 
+/** Invoked when a TLS state changes: log the change at severity 'debug' */
 static void
 tor_tls_debug_state_callback(const SSL *ssl, int type, int val)
 {
@@ -1370,7 +1389,9 @@ tor_tls_server_info_callback(const SSL *ssl, int type, int val)
 
   /* Now check the cipher list. */
   if (tor_tls_client_is_using_v2_ciphers(ssl, ADDR(tls))) {
-    /*XXXX_TLS keep this from happening more than once! */
+    if (tls->wasV2Handshake)
+      return; /* We already turned this stuff off for the first handshake;
+               * This is a renegotiation. */
 
     /* Yes, we're casting away the const from ssl.  This is very naughty of us.
      * Let's hope openssl doesn't notice! */
@@ -1607,6 +1628,7 @@ tor_tls_block_renegotiation(tor_tls_t *tls)
   tls->ssl->s3->flags &= ~SSL3_FLAGS_ALLOW_UNSAFE_LEGACY_RENEGOTIATION;
 }
 
+/** Assert that the flags that allow legacy renegotiation are still set */
 void
 tor_tls_assert_renegotiation_unblocked(tor_tls_t *tls)
 {

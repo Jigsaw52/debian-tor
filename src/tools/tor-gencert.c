@@ -1,4 +1,4 @@
-/* Copyright (c) 2007-2011, The Tor Project, Inc. */
+/* Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #include "orconfig.h"
@@ -9,7 +9,9 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#ifdef HAVE_UNISTD_H
 #include <unistd.h>
+#endif
 
 #include <openssl/evp.h>
 #include <openssl/pem.h>

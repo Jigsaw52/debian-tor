@@ -1,6 +1,6 @@
 /* Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #include "or.h"
@@ -130,8 +130,9 @@ purpose_needs_anonymity(uint8_t dir_purpose, uint8_t router_purpose)
 {
   if (get_options()->AllDirActionsPrivate)
     return 1;
-  if (router_purpose == ROUTER_PURPOSE_BRIDGE && can_complete_circuit)
-    return 1; /* if no circuits yet, we may need this info to bootstrap. */
+  if (router_purpose == ROUTER_PURPOSE_BRIDGE)
+    return 1; /* if no circuits yet, this might break bootstrapping, but it's
+               * needed to be safe. */
   if (dir_purpose == DIR_PURPOSE_UPLOAD_DIR ||
       dir_purpose == DIR_PURPOSE_UPLOAD_VOTE ||
       dir_purpose == DIR_PURPOSE_UPLOAD_SIGNATURES ||
@@ -2437,7 +2438,8 @@ write_http_response_header(dir_connection_t *conn, ssize_t length,
                              cache_lifetime);
 }
 
-#ifdef INSTRUMENT_DOWNLOADS
+#if defined(INSTRUMENT_DOWNLOADS) || defined(RUNNING_DOXYGEN)
+/* DOCDOC */
 typedef struct request_t {
   uint64_t bytes; /**< How many bytes have we transferred? */
   uint64_t count; /**< How many requests have we made? */
@@ -2795,7 +2797,7 @@ directory_handle_command_get(dir_connection_t *conn, const char *headers,
           want_fps = url+strlen(CONSENSUS_URL_PREFIX);
       }
 
-      /* XXXX MICRODESC NM NM should check document of correct flavor */
+      /* XXXX023 MICRODESC NM NM should check document of correct flavor */
       if (v && want_fps &&
           !client_likes_consensus(v, want_fps)) {
         write_http_status_line(conn, 404, "Consensus not signed by sufficient "
@@ -3787,7 +3789,10 @@ dir_routerdesc_download_failed(smartlist_t *failed, int status_code,
    * every 10 or 60 seconds (FOO_DESCRIPTOR_RETRY_INTERVAL) in main.c. */
 }
 
-/* DOCDOC NM */
+/** Called when a connection to download microdescriptors has failed in whole
+ * or in part. <b>failed</b> is a list of every microdesc digest we didn't
+ * get. <b>status_code</b> is the http status code we received. Reschedule the
+ * microdesc downloads as appropriate. */
 static void
 dir_microdesc_download_failed(smartlist_t *failed,
                               int status_code)

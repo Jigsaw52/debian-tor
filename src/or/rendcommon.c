@@ -1,5 +1,5 @@
 /* Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -797,6 +797,8 @@ rend_cache_entry_free(rend_cache_entry_t *e)
   tor_free(e);
 }
 
+/** Helper: deallocate a rend_cache_entry_t.  (Used with strmap_free(), which
+ * requires a function pointer whose argument is void*). */
 static void
 _rend_cache_entry_free(void *p)
 {

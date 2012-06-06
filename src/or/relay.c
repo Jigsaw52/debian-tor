@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -64,6 +64,7 @@ static struct timeval cached_time_hires = {0, 0};
  * cells. */
 #define CELL_QUEUE_LOWWATER_SIZE 64
 
+/** Return a fairly recent view of the current time. */
 static void
 tor_gettimeofday_cached(struct timeval *tv)
 {
@@ -73,6 +74,8 @@ tor_gettimeofday_cached(struct timeval *tv)
   *tv = cached_time_hires;
 }
 
+/** Reset the cached view of the current time, so that the next time we try
+ * to learn it, we will get an up-to-date value. */
 void
 tor_gettimeofday_cache_clear(void)
 {
@@ -1125,8 +1128,12 @@ connection_edge_process_relay_cell(cell_t *cell, circuit_t *circ,
           (!layer_hint && --circ->deliver_window < 0)) {
         log_fn(LOG_PROTOCOL_WARN, LD_PROTOCOL,
                "(relay data) circ deliver_window below 0. Killing.");
-        connection_edge_end(conn, END_STREAM_REASON_TORPROTOCOL);
-        connection_mark_for_close(TO_CONN(conn));
+        if (conn) {
+          /* XXXX Do we actually need to do this?  Will killing the circuit
+           * not send an END and mark the stream for close as appropriate? */
+          connection_edge_end(conn, END_STREAM_REASON_TORPROTOCOL);
+          connection_mark_for_close(TO_CONN(conn));
+        }
         return -END_CIRC_REASON_TORPROTOCOL;
       }
       log_debug(domain,"circ deliver_window now %d.", layer_hint ?
@@ -2086,9 +2093,12 @@ cell_ewma_get_tick(void)
  * has value ewma_scale_factor ** N.)
  */
 static double ewma_scale_factor = 0.1;
+/* DOCDOC ewma_enabled */
 static int ewma_enabled = 0;
 
+/*DOCDOC*/
 #define EPSILON 0.00001
+/*DOCDOC*/
 #define LOG_ONEHALF -0.69314718055994529
 
 /** Adjust the global cell scale factor based on <b>options</b> */

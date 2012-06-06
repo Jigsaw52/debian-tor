@@ -45,10 +45,16 @@ OPTIONS
 **--verify-config**::
     Verify the configuration file is valid.
 
+**--service install** [**--options** __command-line options__]::
+    Install an instance of Tor as a Windows service, with the provided
+    command-line options. Current instructions can be found at
+    https://trac.torproject.org/projects/tor/wiki/doc/TorFAQ#HowdoIrunmyTorrelayasanNTservice
+
+**--service** **remove**|**start**|**stop**::
+    Remove, start, or stop a configured Tor Windows service.
+
 **--nt-service**::
-    **--service [install|remove|start|stop]** Manage the Tor Windows
-    NT/2000/XP service. Current instructions can be found at
-    https://wiki.torproject.org/noreply/TheOnionRouter/TorFAQ#WinNTService
+    Used internally to implement a Windows service.
 
 **--list-torrc-options**::
     List all valid options.
@@ -732,8 +738,10 @@ The following options are useful only for clients (that is, if
     A list of ports for services that tend to have long-running connections
     (e.g. chat and interactive shells). Circuits for streams that use these
     ports will contain only high-uptime nodes, to reduce the chance that a node
-    will go down before the stream is finished. (Default: 21, 22, 706, 1863,
-    5050, 5190, 5222, 5223, 6523, 6667, 6697, 8300)
+    will go down before the stream is finished. Note that the list is also
+    honored for circuits (both client and service side) involving hidden
+    services whose virtual port is in this list. (Default: 21, 22, 706,
+    1863, 5050, 5190, 5222, 5223, 6523, 6667, 6697, 8300)
 
 **MapAddress** __address__ __newaddress__::
     When a request for address arrives to Tor, it will transform to newaddress
@@ -781,8 +789,9 @@ The following options are useful only for clients (that is, if
 
 **MaxCircuitDirtiness** __NUM__::
     Feel free to reuse a circuit that was first used at most NUM seconds ago,
-    but never attach a new stream to a circuit that is too old. (Default: 10
-    minutes)
+    but never attach a new stream to a circuit that is too old.  For hidden
+    services, this applies to the __last__ time a circuit was used, not the
+    first.  (Default: 10 minutes)
 
 **MaxClientCircuitsPending** __NUM__::
     Do not allow more than NUM circuits to be pending at a time for handling
@@ -834,7 +843,8 @@ The following options are useful only for clients (that is, if
         If no other isolation rules would prevent it, allow streams
         on this port to share circuits with streams from every other
         port with the same session group.  (By default, streams received
-        on different ports are always isolated from one another.)
+        on different SOCKSPorts, TransPorts, etc are always isolated from one
+        another. This option overrides that behavior.)
 
 **SOCKSListenAddress** __IP__[:__PORT__]::
     Bind to this address to listen for connections from Socks-speaking
@@ -1194,16 +1204,41 @@ is non-zero):
     parallelizable operations.  If this is set to 0, Tor will try to detect
     how many CPUs you have, defaulting to 1 if it can't tell.  (Default: 0)
 
-**ORPort** __PORT__|**auto**::
+**ORPort** \['address':]__PORT__|**auto** [_flags_]::
     Advertise this port to listen for connections from Tor clients and
     servers.  This option is required to be a Tor server.
-    Set it to "auto" to have Tor pick a port for you. (Default: 0).
+    Set it to "auto" to have Tor pick a port for you. Set it to 0 to not
+    run an ORPort at all. This option can occur more than once. (Default: 0)
++
+    Tor recognizes these flags on each ORPort:
+    **NoAdvertise**::
+        By default, we bind to a port and tell our users about it. If
+        NoAdvertise is specified, we don't advertise, but listen anyway.  This
+        can be useful if the port everybody will be connecting to (for
+        example, one that's opened on our firewall) is somewhere else.
+    **NoListen**::
+        By default, we bind to a port and tell our users about it. If
+        NoListen is specified, we don't bind, but advertise anyway.  This
+        can be useful if something else  (for example, a firewall's port
+        forwarding configuration) is causing connections to reach us.
+    **IPv4Only**::
+        If the address is absent, or resolves to both an IPv4 and an IPv6
+        address, only listen to the IPv4 address.
+    **IPv6Only**::
+        If the address is absent, or resolves to both an IPv4 and an IPv6
+        address, only listen to the IPv6 address.
++
+    For obvious reasons, NoAdvertise and NoListen are mutually exclusive, and
+    IPv4Only and IPv6Only are mutually exclusive.
 
 **ORListenAddress** __IP__[:__PORT__]::
     Bind to this IP address to listen for connections from Tor clients and
     servers. If you specify a port, bind to this port rather than the one
     specified in ORPort. (Default: 0.0.0.0) This directive can be specified
     multiple times to bind to multiple addresses/ports.
++
+    This option is deprecated; you can get the same behavior with ORPort now
+    that it supports NoAdvertise and explicit addresses.
 
 **PortForwarding** **0**|**1**::
     Attempt to automatically forward the DirPort and ORPort on a NAT router
@@ -1430,15 +1465,21 @@ if DirPort is non-zero):
     Minimum uptime of a v2 hidden service directory to be accepted as such by
     authoritative directories. (Default: 25 hours)
 
-**DirPort** __PORT__|**auto**::
+**DirPort** \['address':]__PORT__|**auto** [_flags_]::
     If this option is nonzero, advertise the directory service on this port.
-    Set it to "auto" to have Tor pick a port for you.  (Default: 0)
+    Set it to "auto" to have Tor pick a port for you.  This option can occur
+    more than once. (Default: 0)
++
+    The same flags are supported here as are supported by ORPort.
 
 **DirListenAddress** __IP__[:__PORT__]::
     Bind the directory service to this address. If you specify a port, bind to
     this port rather than the one specified in DirPort.  (Default: 0.0.0.0)
     This directive can be specified multiple times  to bind to multiple
     addresses/ports.
++
+    This option is deprecated; you can get the same behavior with DirPort now
+    that it supports NoAdvertise and explicit addresses.
 
 **DirPolicy** __policy__,__policy__,__...__::
     Set an entrance policy for this server, to limit who can connect to the

@@ -1,6 +1,6 @@
 /* Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #include "orconfig.h"
@@ -169,6 +169,76 @@ test_util_time(void)
   test_streq("2012-01-11T15:38:58.003060", timestr);
   test_eq(strlen(timestr), ISO_TIME_USEC_LEN);
 
+ done:
+  ;
+}
+
+static void
+test_util_parse_http_time(void *arg)
+{
+  struct tm a_time;
+  char b[ISO_TIME_LEN+1];
+  (void)arg;
+
+#define T(s) do {                               \
+    format_iso_time(b, tor_timegm(&a_time));    \
+    tt_str_op(b, ==, (s));                      \
+    b[0]='\0';                                  \
+  } while (0)
+
+  /* Test parse_http_time */
+
+  test_eq(-1, parse_http_time("", &a_time));
+  test_eq(-1, parse_http_time("Sunday, 32 Aug 2004 00:48:22 GMT", &a_time));
+  test_eq(-1, parse_http_time("Sunday, 3 Aug 1869 00:48:22 GMT", &a_time));
+  test_eq(-1, parse_http_time("Sunday, 32-Aug-94 00:48:22 GMT", &a_time));
+  test_eq(-1, parse_http_time("Sunday, 3-Ago-04 00:48:22", &a_time));
+  test_eq(-1, parse_http_time("Sunday, August the third", &a_time));
+  test_eq(-1, parse_http_time("Wednesday,,04 Aug 1994 00:48:22 GMT", &a_time));
+
+  test_eq(0, parse_http_time("Wednesday, 04 Aug 1994 00:48:22 GMT", &a_time));
+  test_eq((time_t)775961302UL, tor_timegm(&a_time));
+  T("1994-08-04 00:48:22");
+  test_eq(0, parse_http_time("Wednesday, 4 Aug 1994 0:48:22 GMT", &a_time));
+  test_eq((time_t)775961302UL, tor_timegm(&a_time));
+  T("1994-08-04 00:48:22");
+  test_eq(0, parse_http_time("Miercoles, 4 Aug 1994 0:48:22 GMT", &a_time));
+  test_eq((time_t)775961302UL, tor_timegm(&a_time));
+  T("1994-08-04 00:48:22");
+  test_eq(0, parse_http_time("Wednesday, 04-Aug-94 00:48:22 GMT", &a_time));
+  test_eq((time_t)775961302UL, tor_timegm(&a_time));
+  T("1994-08-04 00:48:22");
+  test_eq(0, parse_http_time("Wednesday, 4-Aug-94 0:48:22 GMT", &a_time));
+  test_eq((time_t)775961302UL, tor_timegm(&a_time));
+  T("1994-08-04 00:48:22");
+  test_eq(0, parse_http_time("Miercoles, 4-Aug-94 0:48:22 GMT", &a_time));
+  test_eq((time_t)775961302UL, tor_timegm(&a_time));
+  T("1994-08-04 00:48:22");
+  test_eq(0, parse_http_time("Wed Aug 04 00:48:22 1994", &a_time));
+  test_eq((time_t)775961302UL, tor_timegm(&a_time));
+  T("1994-08-04 00:48:22");
+  test_eq(0, parse_http_time("Wed Aug 4 0:48:22 1994", &a_time));
+  test_eq((time_t)775961302UL, tor_timegm(&a_time));
+  T("1994-08-04 00:48:22");
+  test_eq(0, parse_http_time("Mie Aug 4 0:48:22 1994", &a_time));
+  test_eq((time_t)775961302UL, tor_timegm(&a_time));
+  T("1994-08-04 00:48:22");
+  test_eq(0, parse_http_time("Sun, 1 Jan 2012 00:00:00 GMT", &a_time));
+  test_eq((time_t)1325376000UL, tor_timegm(&a_time));
+  T("2012-01-01 00:00:00");
+  test_eq(0, parse_http_time("Mon, 31 Dec 2012 00:00:00 GMT", &a_time));
+  test_eq((time_t)1356912000UL, tor_timegm(&a_time));
+  T("2012-12-31 00:00:00");
+  test_eq(-1, parse_http_time("2004-08-zz 99-99x99 GMT", &a_time));
+  test_eq(-1, parse_http_time("2011-03-32 00:00:00 GMT", &a_time));
+  test_eq(-1, parse_http_time("2011-03-30 24:00:00 GMT", &a_time));
+  test_eq(-1, parse_http_time("2011-03-30 23:60:00 GMT", &a_time));
+  test_eq(-1, parse_http_time("2011-03-30 23:59:62 GMT", &a_time));
+  test_eq(-1, parse_http_time("1969-03-30 23:59:59 GMT", &a_time));
+  test_eq(-1, parse_http_time("2011-00-30 23:59:59 GMT", &a_time));
+  test_eq(-1, parse_http_time("2011-03-30 23:59", &a_time));
+
+#undef T
  done:
   ;
 }
@@ -753,6 +823,21 @@ test_util_strmisc(void)
   d = tor_parse_double("-10", -100.0, 100.0,&i,NULL);
   test_eq(1, i);
   test_eq(-10.0, d);
+  }
+
+  {
+    /* Test tor_parse_* where we overflow/underflow the underlying type. */
+    /* This string should overflow 64-bit ints. */
+#define TOOBIG "100000000000000000000000000"
+    test_eq(0L, tor_parse_long(TOOBIG, 10, LONG_MIN, LONG_MAX, &i, NULL));
+    test_eq(i, 0);
+    test_eq(0L, tor_parse_long("-"TOOBIG, 10, LONG_MIN, LONG_MAX, &i, NULL));
+    test_eq(i, 0);
+    test_eq(0UL, tor_parse_ulong(TOOBIG, 10, 0, ULONG_MAX, &i, NULL));
+    test_eq(i, 0);
+    test_eq(U64_LITERAL(0), tor_parse_uint64(TOOBIG, 10,
+                                             0, UINT64_MAX, &i, NULL));
+    test_eq(i, 0);
   }
 
   /* Test snprintf */
@@ -1737,32 +1822,55 @@ test_util_strtok(void)
 {
   char buf[128];
   char buf2[128];
+  int i;
   char *cp1, *cp2;
-  strlcpy(buf, "Graved on the dark in gestures of descent", sizeof(buf));
-  strlcpy(buf2, "they.seemed;their!own;most.perfect;monument", sizeof(buf2));
-  /*  -- "Year's End", Richard Wilbur */
 
-  test_streq("Graved", tor_strtok_r_impl(buf, " ", &cp1));
-  test_streq("they", tor_strtok_r_impl(buf2, ".!..;!", &cp2));
+  for (i = 0; i < 3; i++) {
+    const char *pad1="", *pad2="";
+    switch (i) {
+    case 0:
+      break;
+    case 1:
+      pad1 = " ";
+      pad2 = "!";
+      break;
+    case 2:
+      pad1 = "  ";
+      pad2 = ";!";
+      break;
+    }
+    tor_snprintf(buf, sizeof(buf), "%s", pad1);
+    tor_snprintf(buf2, sizeof(buf2), "%s", pad2);
+    test_assert(NULL == tor_strtok_r_impl(buf, " ", &cp1));
+    test_assert(NULL == tor_strtok_r_impl(buf2, ".!..;!", &cp2));
+
+    tor_snprintf(buf, sizeof(buf),
+                 "%sGraved on the dark  in gestures of descent%s", pad1, pad1);
+    tor_snprintf(buf2, sizeof(buf2),
+                "%sthey.seemed;;their!.own;most.perfect;monument%s",pad2,pad2);
+    /*  -- "Year's End", Richard Wilbur */
+
+    test_streq("Graved", tor_strtok_r_impl(buf, " ", &cp1));
+    test_streq("they", tor_strtok_r_impl(buf2, ".!..;!", &cp2));
 #define S1() tor_strtok_r_impl(NULL, " ", &cp1)
 #define S2() tor_strtok_r_impl(NULL, ".!..;!", &cp2)
-  test_streq("on", S1());
-  test_streq("the", S1());
-  test_streq("dark", S1());
-  test_streq("seemed", S2());
-  test_streq("their", S2());
-  test_streq("own", S2());
-  test_streq("in", S1());
-  test_streq("gestures", S1());
-  test_streq("of", S1());
-  test_streq("most", S2());
-  test_streq("perfect", S2());
-  test_streq("descent", S1());
-  test_streq("monument", S2());
-  test_eq_ptr(NULL, S1());
-  test_eq_ptr(NULL, S2());
+    test_streq("on", S1());
+    test_streq("the", S1());
+    test_streq("dark", S1());
+    test_streq("seemed", S2());
+    test_streq("their", S2());
+    test_streq("own", S2());
+    test_streq("in", S1());
+    test_streq("gestures", S1());
+    test_streq("of", S1());
+    test_streq("most", S2());
+    test_streq("perfect", S2());
+    test_streq("descent", S1());
+    test_streq("monument", S2());
+    test_eq_ptr(NULL, S1());
+    test_eq_ptr(NULL, S2());
+  }
 
-#if 0
   buf[0] = 0;
   test_eq_ptr(NULL, tor_strtok_r_impl(buf, " ", &cp1));
   test_eq_ptr(NULL, tor_strtok_r_impl(buf, "!", &cp1));
@@ -1775,12 +1883,10 @@ test_util_strtok(void)
   test_eq_ptr(NULL, tor_strtok_r_impl(buf, " ", &cp1));
   strlcpy(buf, "  ", sizeof(buf));
   test_eq_ptr(NULL, tor_strtok_r_impl(buf, " ", &cp1));
-#endif
 
   strlcpy(buf, "something  ", sizeof(buf));
   test_streq("something", tor_strtok_r_impl(buf, " ", &cp1));
-  test_streq(" ", tor_strtok_r_impl(NULL, ";", &cp1));
-  test_eq_ptr(NULL, tor_strtok_r_impl(NULL, " ", &cp1));
+  test_eq_ptr(NULL, tor_strtok_r_impl(NULL, ";", &cp1));
  done:
   ;
 }
@@ -1977,10 +2083,8 @@ test_util_parent_dir(void *ptr)
   T("/home/wombat", 0, "/home/wombat/knish/");
   T("/home/wombat", 0, "/home/wombat/knish///");
   T("./home/wombat", 0, "./home/wombat/knish/");
-#if 0
   T("/", 0, "/home");
   T("/", 0, "/home//");
-#endif
   T(".", 0, "./wombat");
   T(".", 0, "./wombat/");
   T(".", 0, "./wombat//");
@@ -1994,14 +2098,12 @@ test_util_parent_dir(void *ptr)
   T("wombat", 0, "wombat/.foo");
   T("wombat", 0, "wombat/.foo/");
 
-  T("", -1, "");
-  T("", -1, ".");
-  T("", -1, "..");
-  T("", -1, "../");
-  T("", -1, "/");
-  T("", -1, "////");
-  T("", -1, "wombat");
-  T("", -1, "wombat/");
+  T("wombat", -1, "");
+  T("w", -1, "");
+  T("wombat", 0, "wombat/knish");
+
+  T("/", 0, "/");
+  T("/", 0, "////");
 
  done:
   tor_free(cp);
@@ -2172,8 +2274,13 @@ run_util_spawn_background(const char *argv[], const char *expected_out,
   test_assert(process_handle != NULL);
   test_eq(expected_status, process_handle->status);
 
+#ifdef _WIN32
+  test_assert(process_handle->stdout_pipe != INVALID_HANDLE_VALUE);
+  test_assert(process_handle->stderr_pipe != INVALID_HANDLE_VALUE);
+#else
   test_assert(process_handle->stdout_pipe > 0);
   test_assert(process_handle->stderr_pipe > 0);
+#endif
 
   /* Check stdout */
   pos = tor_read_all_from_process_stdout(process_handle, stdout_buf,
@@ -2226,6 +2333,9 @@ test_util_spawn_background_ok(void *ptr)
 static void
 test_util_spawn_background_fail(void *ptr)
 {
+#ifndef BUILDDIR
+#define BUILDDIR "."
+#endif
   const char *argv[] = {BUILDDIR "/src/test/no-such-file", "--test", NULL};
   const char *expected_err = "";
   char expected_out[1024];
@@ -2881,6 +2991,7 @@ test_util_set_env_var_in_sl(void *ptr)
 
 struct testcase_t util_tests[] = {
   UTIL_LEGACY(time),
+  UTIL_TEST(parse_http_time, 0),
   UTIL_LEGACY(config_line),
   UTIL_LEGACY(config_line_quotes),
   UTIL_LEGACY(config_line_comment_character),

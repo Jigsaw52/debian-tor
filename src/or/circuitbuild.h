@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -147,6 +147,7 @@ void circuit_build_times_network_is_live(circuit_build_times_t *cbt);
 int circuit_build_times_network_check_live(circuit_build_times_t *cbt);
 void circuit_build_times_network_circ_success(circuit_build_times_t *cbt);
 
+/* DOCDOC circuit_build_times_get_bw_scale */
 int circuit_build_times_get_bw_scale(networkstatus_t *ns);
 
 void clear_transport_list(void);
@@ -156,6 +157,10 @@ int transport_add(transport_t *t);
 void transport_free(transport_t *transport);
 transport_t *transport_new(const tor_addr_t *addr, uint16_t port,
                                       const char *name, int socks_ver);
+
+/* DOCDOC find_transport_name_by_bridge_addrport */
+const char *find_transport_name_by_bridge_addrport(const tor_addr_t *addr,
+                                                   uint16_t port);
 
 int find_transport_by_bridge_addrport(const tor_addr_t *addr, uint16_t port,
                                       const transport_t **transport);
