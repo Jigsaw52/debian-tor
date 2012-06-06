@@ -152,8 +152,7 @@ install: build
 	install -m 644 debian/tor-service-defaults-torrc $(CURDIR)/debian/tor/usr/share/tor
 
 	install -m 644 debian/tor.apparmor-profile $(CURDIR)/debian/tor/etc/apparmor.d/usr.sbin.tor
-	if type dh_apparmor >/dev/null 2>&1; \
-	then dh_apparmor --profile-name=usr.sbin.tor -ptor; fi
+	dh_apparmor --profile-name=usr.sbin.tor -ptor
 
 	dh_link usr/share/man/man8/tor.8 usr/share/man/man5/torrc.5
 
