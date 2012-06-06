@@ -1,6 +1,6 @@
 /* Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -535,6 +535,7 @@ typedef struct policy_map_ent_t {
   addr_policy_t *policy;
 } policy_map_ent_t;
 
+/* DOCDOC policy_root */
 static HT_HEAD(policy_map, policy_map_ent_t) policy_root = HT_INITIALIZER();
 
 /** Return true iff a and b are equal. */

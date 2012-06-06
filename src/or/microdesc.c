@@ -1,4 +1,4 @@
-/* Copyright (c) 2009-2011, The Tor Project, Inc. */
+/* Copyright (c) 2009-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #include "or.h"
@@ -80,7 +80,12 @@ dump_microdescriptor(FILE *f, microdesc_t *md, size_t *annotation_len_out)
     char annotation[ISO_TIME_LEN+32];
     format_iso_time(buf, md->last_listed);
     tor_snprintf(annotation, sizeof(annotation), "@last-listed %s\n", buf);
-    fputs(annotation, f);
+    if (fputs(annotation, f) < 0) {
+      log_warn(LD_DIR,
+               "Couldn't write microdescriptor annotation: %s",
+               strerror(ferror(f)));
+      return -1;
+    }
     r += strlen(annotation);
     *annotation_len_out = r;
   } else {
@@ -182,7 +187,7 @@ microdescs_add_to_cache(microdesc_cache_t *cache,
   return added;
 }
 
-/* As microdescs_add_to_cache, but takes a list of micrdescriptors instead of
+/** As microdescs_add_to_cache, but takes a list of micrdescriptors instead of
  * a string to decode.  Frees any members of <b>descriptors</b> that it does
  * not add. */
 smartlist_t *
@@ -226,9 +231,10 @@ microdescs_add_list_to_cache(microdesc_cache_t *cache,
       size_t annotation_len;
       size = dump_microdescriptor(f, md, &annotation_len);
       if (size < 0) {
-        /* XXX handle errors from dump_microdescriptor() */
-        /* log?  return -1?  die?  coredump the universe? */
-        continue;
+        /* we already warned in dump_microdescriptor; */
+        abort_writing_to_file(open_file);
+        smartlist_clear(added);
+        return added;
       }
       md->saved_location = SAVED_IN_JOURNAL;
       cache->journal_len += size;

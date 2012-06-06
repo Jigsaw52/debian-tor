@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -457,7 +457,7 @@ connection_edge_about_to_close(edge_connection_t *edge_conn)
   }
 }
 
-/* Called when we're about to finally unlink and free an AP (client)
+/** Called when we're about to finally unlink and free an AP (client)
  * connection: perform necessary accounting and cleanup */
 void
 connection_ap_about_to_close(entry_connection_t *entry_conn)
@@ -492,7 +492,7 @@ connection_ap_about_to_close(entry_connection_t *entry_conn)
     circuit_detach_stream(circ, edge_conn);
 }
 
-/* Called when we're about to finally unlink and free an exit
+/** Called when we're about to finally unlink and free an exit
  * connection: perform necessary accounting and cleanup */
 void
 connection_exit_about_to_close(edge_connection_t *edge_conn)
@@ -2000,20 +2000,35 @@ connection_ap_handshake_rewrite_and_attach(entry_connection_t *conn,
       if (options->ClientRejectInternalAddresses &&
           !conn->use_begindir && !conn->chosen_exit_name && !circ) {
         tor_addr_t addr;
-        if (tor_addr_parse(&addr, socks->address) >= 0 &&
-            tor_addr_is_internal(&addr, 0)) {
+        if (tor_addr_hostname_is_local(socks->address) ||
+            (tor_addr_parse(&addr, socks->address) >= 0 &&
+             tor_addr_is_internal(&addr, 0))) {
           /* If this is an explicit private address with no chosen exit node,
            * then we really don't want to try to connect to it.  That's
            * probably an error. */
           if (conn->is_transparent_ap) {
-            log_warn(LD_NET,
-                     "Rejecting request for anonymous connection to private "
-                     "address %s on a TransPort or NATDPort.  Possible loop "
-                     "in your NAT rules?", safe_str_client(socks->address));
+#define WARN_INTRVL_LOOP 300
+            static ratelim_t loop_warn_limit = RATELIM_INIT(WARN_INTRVL_LOOP);
+            char *m;
+            if ((m = rate_limit_log(&loop_warn_limit, approx_time()))) {
+              log_warn(LD_NET,
+                       "Rejecting request for anonymous connection to private "
+                       "address %s on a TransPort or NATDPort.  Possible loop "
+                       "in your NAT rules?%s", safe_str_client(socks->address),
+                       m);
+              tor_free(m);
+            }
           } else {
-            log_warn(LD_NET,
-                     "Rejecting SOCKS request for anonymous connection to "
-                     "private address %s", safe_str_client(socks->address));
+#define WARN_INTRVL_PRIV 300
+            static ratelim_t priv_warn_limit = RATELIM_INIT(WARN_INTRVL_PRIV);
+            char *m;
+            if ((m = rate_limit_log(&priv_warn_limit, approx_time()))) {
+              log_warn(LD_NET,
+                       "Rejecting SOCKS request for anonymous connection to "
+                       "private address %s.%s",
+                       safe_str_client(socks->address),m);
+              tor_free(m);
+            }
           }
           connection_mark_unattached_ap(conn, END_STREAM_REASON_PRIVATE_ADDR);
           return -1;
@@ -2304,6 +2319,11 @@ connection_ap_handshake_process_socks(entry_connection_t *conn)
     connection_write_to_buf((const char*)socks->reply, socks->replylen,
                             base_conn);
     socks->replylen = 0;
+    if (sockshere == -1) {
+      /* An invalid request just got a reply, no additional
+       * one is necessary. */
+      socks->has_finished = 1;
+    }
   }
 
   if (sockshere == 0) {
@@ -2653,12 +2673,12 @@ connection_ap_handshake_send_resolve(entry_connection_t *ap_conn)
   return 0;
 }
 
-/** Make an AP connection_t, make a new linked connection pair, and attach
- * one side to the conn, connection_add it, initialize it to circuit_wait,
- * and call connection_ap_handshake_attach_circuit(conn) on it.
+/** Make an AP connection_t linked to the connection_t <b>partner</b>. make a
+ * new linked connection pair, and attach one side to the conn, connection_add
+ * it, initialize it to circuit_wait, and call
+ * connection_ap_handshake_attach_circuit(conn) on it.
  *
- * Return the other end of the linked connection pair, or -1 if error.
- * DOCDOC partner.
+ * Return the newly created end of the linked connection pair, or -1 if error.
  */
 entry_connection_t *
 connection_ap_make_link(connection_t *partner,
@@ -2745,7 +2765,7 @@ tell_controller_about_resolved_result(entry_connection_t *conn,
                    answer_type == RESOLVED_TYPE_HOSTNAME)) {
     return; /* we already told the controller. */
   } else if (answer_type == RESOLVED_TYPE_IPV4 && answer_len >= 4) {
-    char *cp = tor_dup_ip(get_uint32(answer));
+    char *cp = tor_dup_ip(ntohl(get_uint32(answer)));
     control_event_address_mapped(conn->socks_request->address,
                                  cp, expires, NULL);
     tor_free(cp);

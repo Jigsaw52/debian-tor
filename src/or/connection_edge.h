@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -79,7 +79,8 @@ int addressmap_have_mapping(const char *address, int update_timeout);
 
 void addressmap_register(const char *address, char *new_address,
                          time_t expires, addressmap_entry_source_t source,
-                         int address_wildcard, int new_address_wildcard);
+                         const int address_wildcard,
+                         const int new_address_wildcard);
 int parse_virtual_addr_network(const char *val, int validate_only,
                                char **msg);
 int client_dns_incr_failures(const char *address);

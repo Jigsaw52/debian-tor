@@ -1,5 +1,5 @@
 /* Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -30,6 +30,7 @@
 #include "nodelist.h"
 #include "policies.h"
 #include "reasons.h"
+#include "rephist.h"
 #include "router.h"
 #include "routerlist.h"
 #include "routerparse.h"
@@ -135,6 +136,13 @@ typedef int event_format_t;
 static void connection_printf_to_buf(control_connection_t *conn,
                                      const char *format, ...)
   CHECK_PRINTF(2,3);
+static void send_control_event_impl(uint16_t event, event_format_t which,
+                                    const char *format, va_list ap)
+  CHECK_PRINTF(3,0);
+static int control_event_status(int type, int severity, const char *format,
+                                va_list args)
+  CHECK_PRINTF(3,0);
+
 static void send_control_done(control_connection_t *conn);
 static void send_control_event(uint16_t event, event_format_t which,
                                const char *format, ...)
@@ -912,10 +920,13 @@ handle_control_loadconf(control_connection_t *conn, uint32_t len,
   return 0;
 }
 
+/** Helper structure: maps event values to their names. */
 struct control_event_t {
   uint16_t event_code;
   const char *event_name;
 };
+/** Table mapping event values to their names.  Used to implement SETEVENTS
+ * and GETINFO events/names, and to keep they in sync. */
 static const struct control_event_t control_event_table[] = {
   { EVENT_CIRCUIT_STATUS, "CIRC" },
   { EVENT_CIRCUIT_STATUS_MINOR, "CIRC_MINOR" },
@@ -1397,6 +1408,9 @@ getinfo_helper_misc(control_connection_t *conn, const char *question,
     *answer = options_dump(get_options(), 1);
   } else if (!strcmp(question, "info/names")) {
     *answer = list_getinfo_options();
+  } else if (!strcmp(question, "dormant")) {
+    int dormant = rep_hist_circbuilding_dormant(time(NULL));
+    *answer = tor_strdup(dormant ? "1" : "0");
   } else if (!strcmp(question, "events/names")) {
     int i;
     smartlist_t *event_names = smartlist_new();
@@ -2138,12 +2152,13 @@ static const getinfo_item_t getinfo_items[] = {
          "Brief summary of router status by nickname (v2 directory format)."),
   PREFIX("ns/purpose/", networkstatus,
          "Brief summary of router status by purpose (v2 directory format)."),
-
   ITEM("network-status", dir,
        "Brief summary of router status (v1 directory format)"),
   ITEM("circuit-status", events, "List of current circuits originating here."),
   ITEM("stream-status", events,"List of current streams."),
   ITEM("orconn-status", events, "A list of current OR connections."),
+  ITEM("dormant", misc,
+       "Is Tor dormant (not building circuits because it's idle)?"),
   PREFIX("address-mappings/", events, NULL),
   DOC("address-mappings/all", "Current address mappings."),
   DOC("address-mappings/cache", "Current cached DNS replies."),
@@ -2530,6 +2545,10 @@ handle_control_setcircuitpurpose(control_connection_t *conn,
 
   {
     const char *purp = find_element_starting_with(args,1,"PURPOSE=");
+    if (!purp) {
+      connection_write_str_to_buf("552 No purpose given\r\n", conn);
+      goto done;
+    }
     new_purpose = circuit_purpose_from_string(purp);
     if (new_purpose == CIRCUIT_PURPOSE_UNKNOWN) {
       connection_printf_to_buf(conn, "552 Unknown purpose \"%s\"\r\n", purp);
@@ -2986,13 +3005,14 @@ handle_control_authchallenge(control_connection_t *conn, uint32_t len,
     cp += strlen("SAFECOOKIE");
   } else {
     connection_write_str_to_buf("513 AUTHCHALLENGE only supports SAFECOOKIE "
-                                "authentication", conn);
+                                "authentication\r\n", conn);
     connection_mark_for_close(TO_CONN(conn));
     return -1;
   }
 
   if (!authentication_cookie_is_set) {
-    connection_write_str_to_buf("515 Cookie authentication is disabled", conn);
+    connection_write_str_to_buf("515 Cookie authentication is disabled\r\n",
+                                conn);
     connection_mark_for_close(TO_CONN(conn));
     return -1;
   }
@@ -3003,7 +3023,7 @@ handle_control_authchallenge(control_connection_t *conn, uint32_t len,
       decode_escaped_string(cp, len - (cp - body),
                             &client_nonce, &client_nonce_len);
     if (newcp == NULL) {
-      connection_write_str_to_buf("513 Invalid quoted client nonce",
+      connection_write_str_to_buf("513 Invalid quoted client nonce\r\n",
                                   conn);
       connection_mark_for_close(TO_CONN(conn));
       return -1;
@@ -3017,7 +3037,7 @@ handle_control_authchallenge(control_connection_t *conn, uint32_t len,
 
     if (base16_decode(client_nonce, client_nonce_len,
                       cp, client_nonce_encoded_len) < 0) {
-      connection_write_str_to_buf("513 Invalid base16 client nonce",
+      connection_write_str_to_buf("513 Invalid base16 client nonce\r\n",
                                   conn);
       connection_mark_for_close(TO_CONN(conn));
       tor_free(client_nonce);
@@ -3030,7 +3050,7 @@ handle_control_authchallenge(control_connection_t *conn, uint32_t len,
   cp += strspn(cp, " \t\n\r");
   if (*cp != '\0' ||
       cp != body + len) {
-    connection_write_str_to_buf("513 Junk at end of AUTHCHALLENGE command",
+    connection_write_str_to_buf("513 Junk at end of AUTHCHALLENGE command\r\n",
                                 conn);
     connection_mark_for_close(TO_CONN(conn));
     tor_free(client_nonce);
@@ -3198,6 +3218,10 @@ is_valid_initial_command(control_connection_t *conn, const char *cmd)
  * interfaces is broken. */
 #define MAX_COMMAND_LINE_LENGTH (1024*1024)
 
+/** Wrapper around peek_(evbuffer|buf)_has_control0 command: presents the same
+ * interface as those underlying functions, but takes a connection_t intead of
+ * an evbuffer or a buf_t.
+ */
 static int
 peek_connection_has_control0_command(connection_t *conn)
 {
@@ -4198,6 +4222,7 @@ control_event_my_descriptor_changed(void)
 static int
 control_event_status(int type, int severity, const char *format, va_list args)
 {
+  char *user_buf = NULL;
   char format_buf[160];
   const char *status, *sev;
 
@@ -4229,13 +4254,15 @@ control_event_status(int type, int severity, const char *format, va_list args)
       log_warn(LD_BUG, "Unrecognized status severity %d", severity);
       return -1;
   }
-  if (tor_snprintf(format_buf, sizeof(format_buf), "650 %s %s %s\r\n",
-                   status, sev, format)<0) {
+  if (tor_snprintf(format_buf, sizeof(format_buf), "650 %s %s\r\n",
+                   status, sev)<0) {
     log_warn(LD_BUG, "Format string too long.");
     return -1;
   }
+  tor_vasprintf(&user_buf, format, args);
 
-  send_control_event_impl(type, ALL_FORMATS, format_buf, args);
+  send_control_event(type, ALL_FORMATS, "%s %s", format_buf, user_buf);
+  tor_free(user_buf);
   return 0;
 }
 

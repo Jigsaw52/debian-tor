@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -108,7 +108,7 @@ chunk_repack(chunk_t *chunk)
   chunk->data = &chunk->mem[0];
 }
 
-#ifdef ENABLE_BUF_FREELISTS
+#if defined(ENABLE_BUF_FREELISTS) || defined(RUNNING_DOXYGEN)
 /** A freelist of chunks. */
 typedef struct chunk_freelist_t {
   size_t alloc_size; /**< What size chunks does this freelist hold? */
@@ -1011,7 +1011,7 @@ fetch_from_buf(char *string, size_t string_len, buf_t *buf)
 
 /** True iff the cell command <b>command</b> is one that implies a
  * variable-length cell in Tor link protocol <b>linkproto</b>. */
-static inline int
+static INLINE int
 cell_command_is_var_length(uint8_t command, int linkproto)
 {
   /* If linkproto is v2 (2), CELL_VERSIONS is the only variable-length cells

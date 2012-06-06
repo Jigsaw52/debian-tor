@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -104,9 +104,12 @@ static time_t last_descriptor_download_attempted = 0;
 /** When we last computed the weights to use for bandwidths on directory
  * requests, what were the total weighted bandwidth, and our share of that
  * bandwidth?  Used to determine what fraction of directory requests we should
- * expect to see. */
+ * expect to see.
+ *
+ * @{ */
 static uint64_t sl_last_total_weighted_bw = 0,
   sl_last_weighted_bw_of_me = 0;
+/**@}*/
 
 /** Return the number of directory authorities whose type matches some bit set
  * in <b>type</b>  */
@@ -229,7 +232,7 @@ trusted_dirs_load_certs_from_string(const char *contents, int from_store,
                "signing key %s", from_store ? "cached" : "downloaded",
                ds->nickname, hex_str(cert->signing_key_digest,DIGEST_LEN));
     } else {
-      int adding = directory_caches_dir_info(get_options());
+      int adding = directory_caches_unknown_auth_certs(get_options());
       log_info(LD_DIR, "%s %s certificate for unrecognized directory "
                "authority with signing key %s",
                adding ? "Adding" : "Not adding",
@@ -480,7 +483,7 @@ authority_certs_fetch_missing(networkstatus_t *status, time_t now)
   smartlist_t *missing_digests;
   char *resource = NULL;
   cert_list_t *cl;
-  const int cache = directory_caches_dir_info(get_options());
+  const int cache = directory_caches_unknown_auth_certs(get_options());
 
   if (should_delay_dir_fetches(get_options()))
     return;
@@ -1430,7 +1433,7 @@ nodelist_add_node_and_family(smartlist_t *sl, const node_t *node)
 }
 
 /** Given a <b>router</b>, add every node_t in its family (including the
- * node itself</b>) to <b>sl</b>.
+ * node itself!) to <b>sl</b>.
  *
  * Note the type mismatch: This function takes a routerinfo, but adds nodes
  * to the smartlist!
@@ -2294,7 +2297,7 @@ hex_digest_nickname_matches(const char *hexdigest, const char *identity_digest,
   return tor_memeq(digest, identity_digest, DIGEST_LEN);
 }
 
-/* Return true iff <b>router</b> is listed as named in the current
+/** Return true iff <b>router</b> is listed as named in the current
  * consensus. */
 int
 router_is_named(const routerinfo_t *router)
@@ -2838,6 +2841,13 @@ routerlist_insert(routerlist_t *rl, routerinfo_t *ri)
                      ri->cache_info.signed_descriptor_digest,
                      &(ri->cache_info));
   if (sd_old) {
+    int idx = sd_old->routerlist_index;
+    sd_old->routerlist_index = -1;
+    smartlist_del(rl->old_routers, idx);
+    if (idx < smartlist_len(rl->old_routers)) {
+       signed_descriptor_t *d = smartlist_get(rl->old_routers, idx);
+       d->routerlist_index = idx;
+    }
     rl->desc_store.bytes_dropped += sd_old->signed_descriptor_len;
     sdmap_remove(rl->desc_by_eid_map, sd_old->extra_info_digest);
     signed_descriptor_free(sd_old);
@@ -4181,9 +4191,9 @@ any_trusted_dir_is_v1_authority(void)
 
 /** For every current directory connection whose purpose is <b>purpose</b>,
  * and where the resource being downloaded begins with <b>prefix</b>, split
- * rest of the resource into base16 fingerprints, decode them, and set the
+ * rest of the resource into base16 fingerprints (or base64 fingerprints if
+ * purpose==DIR_PURPPOSE_FETCH_MICRODESC), decode them, and set the
  * corresponding elements of <b>result</b> to a nonzero value.
- * DOCDOC purpose==microdesc
  */
 static void
 list_pending_downloads(digestmap_t *result,
@@ -4228,8 +4238,13 @@ list_pending_descriptor_downloads(digestmap_t *result, int extrainfo)
   list_pending_downloads(result, purpose, "d/");
 }
 
-/** DOCDOC */
-/*XXXX NM should use digest256, if one comes into being. */
+/** For every microdescriptor we are currently downloading by descriptor
+ * digest, set result[d] to (void*)1.   (Note that microdescriptor digests
+ * are 256-bit, and digestmap_t only holds 160-bit digests, so we're only
+ * getting the first 20 bytes of each digest here.)
+ *
+ * XXXX Let there be a digestmap256_t, and use that instead.
+ */
 void
 list_pending_microdesc_downloads(digestmap_t *result)
 {
@@ -4997,7 +5012,14 @@ update_router_have_minimum_dir_info(void)
   count_usable_descriptors(&num_exit_present, &num_exit_usable,
                            consensus, options, now, options->ExitNodes, 1);
 
-  if (num_present < num_usable/4) {
+/* What fraction of desired server descriptors do we need before we will
+ * build circuits? */
+#define FRAC_USABLE_NEEDED .75
+/* What fraction of desired _exit_ server descriptors do we need before we
+ * will build circuits? */
+#define FRAC_EXIT_USABLE_NEEDED .5
+
+  if (num_present < num_usable * FRAC_USABLE_NEEDED) {
     tor_snprintf(dir_info_status, sizeof(dir_info_status),
                  "We have only %d/%d usable %sdescriptors.",
                  num_present, num_usable, using_md ? "micro" : "");
@@ -5010,7 +5032,7 @@ update_router_have_minimum_dir_info(void)
                  num_present, using_md ? "micro" : "", num_present ? "" : "s");
     res = 0;
     goto done;
-  } else if (num_exit_present < num_exit_usable / 3) {
+  } else if (num_exit_present < num_exit_usable * FRAC_EXIT_USABLE_NEEDED) {
     tor_snprintf(dir_info_status, sizeof(dir_info_status),
                  "We have only %d/%d usable exit node descriptors.",
                  num_exit_present, num_exit_usable);

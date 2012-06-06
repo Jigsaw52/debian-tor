@@ -1,10 +1,10 @@
 dnl Copyright (c) 2001-2004, Roger Dingledine
 dnl Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson
-dnl Copyright (c) 2007-2008, The Tor Project, Inc.
+dnl Copyright (c) 2007-2012, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
 AC_INIT
-AM_INIT_AUTOMAKE(tor, 0.2.3.15-alpha)
+AM_INIT_AUTOMAKE(tor, 0.2.3.16-alpha)
 AM_CONFIG_HEADER(orconfig.h)
 
 AC_CANONICAL_HOST
@@ -680,6 +680,8 @@ AC_CHECK_HEADERS(
         utime.h
 )
 
+AC_CHECK_HEADERS(sys/param.h)
+
 TOR_CHECK_PROTOTYPE(malloc_good_size, HAVE_MALLOC_GOOD_SIZE_PROTOTYPE,
 [#ifdef HAVE_MALLOC_H
 #include <malloc.h>
@@ -796,8 +798,7 @@ AC_CHECK_TYPES([struct in6_addr, struct sockaddr_in6, sa_family_t], , ,
 #include <sys/socket.h>
 #endif
 #ifdef _WIN32
-#define WIN32_WINNT 0x400
-#define _WIN32_WINNT 0x400
+#define _WIN32_WINNT 0x0501
 #define WIN32_LEAN_AND_MEAN
 #if defined(_MSC_VER) && (_MSC_VER < 1300)
 #include <winsock.h>
@@ -821,8 +822,7 @@ AC_CHECK_MEMBERS([struct in6_addr.s6_addr32, struct in6_addr.s6_addr16, struct s
 #include <sys/socket.h>
 #endif
 #ifdef _WIN32
-#define WIN32_WINNT 0x400
-#define _WIN32_WINNT 0x400
+#define _WIN32_WINNT 0x0501
 #define WIN32_LEAN_AND_MEAN
 #if defined(_MSC_VER) && (_MSC_VER < 1300)
 #include <winsock.h>

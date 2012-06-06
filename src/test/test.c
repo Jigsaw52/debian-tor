@@ -1,6 +1,6 @@
 /* Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /* Ordinarily defined in tor_main.c; this bit is just here to provide one
@@ -71,6 +71,9 @@ int have_failed = 0;
 /** Temporary directory (set up by setup_directory) under which we store all
  * our files during testing. */
 static char temp_dir[256];
+#ifdef _WIN32
+#define pid_t int
+#endif
 static pid_t temp_dir_setup_in_pid = 0;
 
 /** Select and create the temporary directory we'll use to run our unit tests.

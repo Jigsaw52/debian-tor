@@ -1,7 +1,7 @@
 /* Copyright (c) 2001, Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -13,11 +13,8 @@
 #include "orconfig.h"
 
 #ifdef _WIN32
-#ifndef WIN32_WINNT
-#define WIN32_WINNT 0x400
-#endif
 #ifndef _WIN32_WINNT
-#define _WIN32_WINNT 0x400
+#define _WIN32_WINNT 0x0501
 #endif
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -72,7 +69,8 @@
 /** Longest recognized */
 #define MAX_DNS_LABEL_SIZE 63
 
-#if OPENSSL_VERSION_NUMBER < OPENSSL_V_SERIES(0,9,8)
+#if OPENSSL_VERSION_NUMBER < OPENSSL_V_SERIES(0,9,8) && \
+  !defined(RUNNING_DOXYGEN)
 /** @{ */
 /** On OpenSSL versions before 0.9.8, there is no working SHA256
  * implementation, so we use Tom St Denis's nice speedy one, slightly adapted
@@ -407,6 +405,8 @@ crypto_cipher_new_with_iv(const char *key, const char *iv)
   return env;
 }
 
+/** Return a new crypto_cipher_t with the provided <b>key</b> and an IV of all
+ * zero bytes.  */
 crypto_cipher_t *
 crypto_cipher_new(const char *key)
 {
@@ -1809,7 +1809,6 @@ crypto_get_stored_dynamic_dh_modulus(const char *fname)
   char *contents = NULL;
   const char *contents_tmp = NULL;
   int dh_codes;
-  char *fname_new = NULL;
   DH *stored_dh = NULL;
   BIGNUM *dynamic_dh_modulus = NULL;
   int length = 0;
@@ -1884,12 +1883,10 @@ crypto_get_stored_dynamic_dh_modulus(const char *fname)
 
  err:
 
-  { /* move broken prime to $filename.broken */
-    fname_new = tor_malloc(strlen(fname) + 8);
-
-    /* no can do if these functions return error */
-    strlcpy(fname_new, fname, strlen(fname) + 8);
-    strlcat(fname_new, ".broken", strlen(fname) + 8);
+  {
+    /* move broken prime to $filename.broken */
+    char *fname_new=NULL;
+    tor_asprintf(&fname_new, "%s.broken", fname);
 
     log_warn(LD_CRYPTO, "Moving broken dynamic DH prime to '%s'.", fname_new);
 

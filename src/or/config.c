@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -675,11 +675,12 @@ static const config_format_t state_format = {
 
 /** Command-line and config-file options. */
 static or_options_t *global_options = NULL;
-/** DOCDOC */
+/** The fallback options_t object; this is where we look for options not
+ * in torrc before we fall back to Tor's defaults. */
 static or_options_t *global_default_options = NULL;
 /** Name of most recently read torrc file. */
 static char *torrc_fname = NULL;
-/** DOCDOC */
+/** Name of the most recently read torrc-defaults file.*/
 static char *torrc_defaults_fname;
 /** Persistent serialized state. */
 static or_state_t *global_state = NULL;
@@ -748,7 +749,7 @@ set_options(or_options_t *new_val, char **msg)
   }
   /* Issues a CONF_CHANGED event to notify controller of the change. If Tor is
    * just starting up then the old_options will be undefined. */
-  if (old_options) {
+  if (old_options && old_options != global_options) {
     elements = smartlist_new();
     for (i=0; options_format.vars[i].name; ++i) {
       const config_var_t *var = &options_format.vars[i];
@@ -774,7 +775,9 @@ set_options(or_options_t *new_val, char **msg)
     control_event_conf_changed(elements);
     smartlist_free(elements);
   }
-  config_free(&options_format, old_options);
+
+  if (old_options != global_options)
+    config_free(&options_format, old_options);
 
   return 0;
 }
@@ -783,6 +786,9 @@ extern const char tor_git_revision[]; /* from tor_main.c */
 
 /** The version of this Tor process, as parsed. */
 static char *the_tor_version = NULL;
+/** A shorter version of this Tor process's version, for export in our router
+ *  descriptor.  (Does not include the git version, if any.) */
+static char *the_short_tor_version = NULL;
 
 /** Return the current Tor version. */
 const char *
@@ -790,12 +796,28 @@ get_version(void)
 {
   if (the_tor_version == NULL) {
     if (strlen(tor_git_revision)) {
-      tor_asprintf(&the_tor_version, "%s (git-%s)", VERSION, tor_git_revision);
+      tor_asprintf(&the_tor_version, "%s (git-%s)", get_short_version(),
+                   tor_git_revision);
     } else {
-      the_tor_version = tor_strdup(VERSION);
+      the_tor_version = tor_strdup(get_short_version());
     }
   }
   return the_tor_version;
+}
+
+/** Return the current Tor version, without any git tag. */
+const char *
+get_short_version(void)
+{
+
+  if (the_short_tor_version == NULL) {
+#ifdef TOR_BUILD_TAG
+    tor_asprintf(&the_short_tor_version, "%s (%s)", VERSION, TOR_BUILD_TAG);
+#else
+    the_short_tor_version = tor_strdup(VERSION);
+#endif
+  }
+  return the_short_tor_version;
 }
 
 /** Release additional memory allocated in options
@@ -1118,7 +1140,8 @@ options_act_reversible(const or_options_t *old_options, char **msg)
      * networking is disabled, this will close all but the control listeners,
      * but disable those. */
     if (!we_are_hibernating()) {
-      if (retry_all_listeners(replaced_listeners, new_listeners) < 0) {
+      if (retry_all_listeners(replaced_listeners, new_listeners,
+                              options->DisableNetwork) < 0) {
         *msg = tor_strdup("Failed to bind one of the listener ports.");
         goto rollback;
       }
@@ -2237,7 +2260,7 @@ config_assign_value(const config_format_t *fmt, or_options_t *options,
   return 0;
 }
 
-/** Mark every linelist in <b>options<b> "fragile", so that fresh assignments
+/** Mark every linelist in <b>options</b> "fragile", so that fresh assignments
  * to it will replace old ones. */
 static void
 config_mark_lists_fragile(const config_format_t *fmt, or_options_t *options)
@@ -2786,7 +2809,7 @@ print_usage(void)
   printf(
 "Copyright (c) 2001-2004, Roger Dingledine\n"
 "Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson\n"
-"Copyright (c) 2007-2011, The Tor Project, Inc.\n\n"
+"Copyright (c) 2007-2012, The Tor Project, Inc.\n\n"
 "tor -f <torrc> [args]\n"
 "See man page for options, or https://www.torproject.org/ for "
 "documentation.\n");
@@ -3913,6 +3936,12 @@ options_validate(or_options_t *old_options, or_options_t *options,
   if (options->UseEntryGuards && ! options->NumEntryGuards)
     REJECT("Cannot enable UseEntryGuards with NumEntryGuards set to 0");
 
+  if (options->MyFamily && options->BridgeRelay) {
+    log_warn(LD_CONFIG, "Listing a family for a bridge relay is not "
+             "supported: it can reveal bridge fingerprints to censors. "
+             "You should also make sure you aren't listing this bridge's "
+             "fingerprint in any other MyFamily.");
+  }
   if (check_nickname_list(options->MyFamily, "MyFamily", msg))
     return -1;
   for (cl = options->NodeFamilies; cl; cl = cl->next) {
@@ -4324,8 +4353,8 @@ get_windows_conf_root(void)
 }
 #endif
 
-/** Return the default location for our torrc file.
- * DOCDOC defaults_file */
+/** Return the default location for our torrc file (if <b>defaults_file</b> is
+ * false), or for the torrc-defaults file (if <b>defaults_file</b> is true). */
 static const char *
 get_default_conf_file(int defaults_file)
 {
@@ -4375,12 +4404,21 @@ check_nickname_list(const char *lst, const char *name, char **msg)
   return r;
 }
 
-/** Learn config file name from command line arguments, or use the default,
- * DOCDOC defaults_file */
+/** Learn config file name from command line arguments, or use the default.
+ *
+ * If <b>defaults_file</b> is true, we're looking for torrc-defaults;
+ * otherwise, we're looking for the regular torrc_file.
+ *
+ * Set *<b>using_default_fname</b> to true if we're using the default
+ * configuration file name; or false if we've set it from the command line.
+ *
+ * Set *<b>ignore_missing_torrc</b> to true if we should ignore the resulting
+ * filename if it doesn't exist.
+ */
 static char *
 find_torrc_filename(int argc, char **argv,
                     int defaults_file,
-                    int *using_default_torrc, int *ignore_missing_torrc)
+                    int *using_default_fname, int *ignore_missing_torrc)
 {
   char *fname=NULL;
   int i;
@@ -4406,14 +4444,14 @@ find_torrc_filename(int argc, char **argv,
         fname = absfname;
       }
 
-      *using_default_torrc = 0;
+      *using_default_fname = 0;
       ++i;
     } else if (ignore_opt && !strcmp(argv[i],ignore_opt)) {
       *ignore_missing_torrc = 1;
     }
   }
 
-  if (*using_default_torrc) {
+  if (*using_default_fname) {
     /* didn't find one, try CONFDIR */
     const char *dflt = get_default_conf_file(defaults_file);
     if (dflt && file_status(dflt) == FN_FILE) {
@@ -4437,8 +4475,13 @@ find_torrc_filename(int argc, char **argv,
   return fname;
 }
 
-/** Load torrc from disk, setting torrc_fname if successful.
- * DOCDOC defaults_file */
+/** Load a configuration file from disk, setting torrc_fname or
+ * torrc_defaults_fname if successful.
+ *
+ * If <b>defaults_file</b> is true, load torrc-defaults; otherwise load torrc.
+ *
+ * Return the contents of the file on success, and NULL on failure.
+ */
 static char *
 load_torrc_from_disk(int argc, char **argv, int defaults_file)
 {
@@ -5099,7 +5142,7 @@ parse_client_transport_line(const char *line, int validate_only)
         *tmp++ = smartlist_get(items, 2);
         smartlist_del_keeporder(items, 2);
       }
-      *tmp = NULL; /*terminated with NUL pointer, just like execve() likes it*/
+      *tmp = NULL; /*terminated with NULL, just like execve() likes it*/
 
       /* kickstart the thing */
       pt_kickstart_client_proxy(transport_list, proxy_argv);
@@ -5222,7 +5265,7 @@ parse_server_transport_line(const char *line, int validate_only)
         *tmp++ = smartlist_get(items, 2);
         smartlist_del_keeporder(items, 2);
       }
-      *tmp = NULL; /*terminated with NUL pointer, just like execve() likes it*/
+      *tmp = NULL; /*terminated with NULL, just like execve() likes it*/
 
       /* kickstart the thing */
       pt_kickstart_server_proxy(transport_list, proxy_argv);
@@ -5434,7 +5477,10 @@ warn_nonlocal_client_ports(const smartlist_t *ports, const char *portname)
   } SMARTLIST_FOREACH_END(port);
 }
 
-/** DOCDOC */
+/** Given a list of port_cfg_t in <b>ports</b>, warn any controller port there
+ * is listening on any non-loopback address.  If <b>forbid</b> is true,
+ * then emit a stronger warning and remove the port from the list.
+ */
 static void
 warn_nonlocal_controller_ports(smartlist_t *ports, unsigned forbid)
 {
@@ -5818,10 +5864,12 @@ parse_port_config(smartlist_t *out,
   return retval;
 }
 
-/** DOCDOC */
+/** Parse a list of config_line_t for an AF_UNIX unix socket listener option
+ * from <b>cfg</b> and add them to <b>out</b>.  No fancy options are
+ * supported: the line contains nothing but the path to the AF_UNIX socket. */
 static int
-parse_socket_config(smartlist_t *out, const config_line_t *cfg,
-                    int listener_type)
+parse_unix_socket_config(smartlist_t *out, const config_line_t *cfg,
+                         int listener_type)
 {
 
   if (!out)
@@ -5907,9 +5955,9 @@ parse_ports(const or_options_t *options, int validate_only,
                         "configuration");
       goto err;
     }
-    if (parse_socket_config(ports,
-                            options->ControlSocket,
-                            CONN_TYPE_CONTROL_LISTENER) < 0) {
+    if (parse_unix_socket_config(ports,
+                                 options->ControlSocket,
+                                 CONN_TYPE_CONTROL_LISTENER) < 0) {
       *msg = tor_strdup("Invalid ControlSocket configuration");
       goto err;
     }
@@ -5959,7 +6007,8 @@ parse_ports(const or_options_t *options, int validate_only,
   return retval;
 }
 
-/** DOCDOC */
+/** Given a list of <b>port_cfg_t</b> in <b>ports</b>, check them for internal
+ * consistency and warn as appropriate. */
 static int
 check_server_ports(const smartlist_t *ports,
                    const or_options_t *options)
@@ -6038,6 +6087,65 @@ get_configured_ports(void)
   if (!configured_ports)
     configured_ports = smartlist_new();
   return configured_ports;
+}
+
+/** Return an address:port string representation of the address
+ *  where the first <b>listener_type</b> listener waits for
+ *  connections. Return NULL if we couldn't find a listener. The
+ *  string is allocated on the heap and it's the responsibility of the
+ *  caller to free it after use.
+ *
+ *  This function is meant to be used by the pluggable transport proxy
+ *  spawning code, please make sure that it fits your purposes before
+ *  using it. */
+char *
+get_first_listener_addrport_string(int listener_type)
+{
+  static const char *ipv4_localhost = "127.0.0.1";
+  static const char *ipv6_localhost = "[::1]";
+  const char *address;
+  uint16_t port;
+  char *string = NULL;
+
+  if (!configured_ports)
+    return NULL;
+
+  SMARTLIST_FOREACH_BEGIN(configured_ports, const port_cfg_t *, cfg) {
+    if (cfg->no_listen)
+      continue;
+
+    if (cfg->type == listener_type &&
+        tor_addr_family(&cfg->addr) != AF_UNSPEC) {
+
+      /* We found the first listener of the type we are interested in! */
+
+      /* If a listener is listening on INADDR_ANY, assume that it's
+         also listening on 127.0.0.1, and point the transport proxy
+         there: */
+      if (tor_addr_is_null(&cfg->addr))
+        address = tor_addr_is_v4(&cfg->addr) ? ipv4_localhost : ipv6_localhost;
+      else
+        address = fmt_and_decorate_addr(&cfg->addr);
+
+      /* If a listener is configured with port 'auto', we are forced
+         to iterate all listener connections and find out in which
+         port it ended up listening: */
+      if (cfg->port == CFG_AUTO_PORT) {
+        port = router_get_active_listener_port_by_type(listener_type);
+        if (!port)
+          return NULL;
+      } else {
+        port = cfg->port;
+      }
+
+      tor_asprintf(&string, "%s:%u", address, port);
+
+      return string;
+    }
+
+  } SMARTLIST_FOREACH_END(cfg);
+
+  return NULL;
 }
 
 /** Return the first advertised port of type <b>listener_type</b> in

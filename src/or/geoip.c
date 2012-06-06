@@ -1,4 +1,4 @@
-/* Copyright (c) 2007-2011, The Tor Project, Inc. */
+/* Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -613,6 +613,7 @@ dirreq_map_ent_eq(const dirreq_map_entry_t *a,
   return a->dirreq_id == b->dirreq_id && a->type == b->type;
 }
 
+/* DOCDOC dirreq_map_ent_hash */
 static unsigned
 dirreq_map_ent_hash(const dirreq_map_entry_t *entry)
 {
@@ -1024,9 +1025,9 @@ geoip_format_dirreq_stats(time_t now)
 #undef RESPONSE_GRANULARITY
 
   if (!geoip_get_mean_shares(now, &v2_share, &v3_share)) {
-    tor_asprintf(&v2_share_string, "dirreq-v2-share %0.2lf%%\n",
+    tor_asprintf(&v2_share_string, "dirreq-v2-share %0.2f%%\n",
                  v2_share*100);
-    tor_asprintf(&v3_share_string, "dirreq-v3-share %0.2lf%%\n",
+    tor_asprintf(&v3_share_string, "dirreq-v3-share %0.2f%%\n",
                  v3_share*100);
   }
 

@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2011, The Tor Project, Inc. */
+ * Copyright (c) 2007-2012, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -80,6 +80,7 @@ static int get_proxy_type(void);
  * XXX024 We should really use the entire list of interfaces here.
  **/
 static tor_addr_t *last_interface_ipv4 = NULL;
+/* DOCDOC last_interface_ipv6 */
 static tor_addr_t *last_interface_ipv6 = NULL;
 /** A list of tor_addr_t for addresses we've used in outgoing connections.
  * Used to detect IP address changes. */
@@ -731,7 +732,7 @@ connection_expire_held_open(void)
   });
 }
 
-#ifdef HAVE_SYS_UN_H
+#if defined(HAVE_SYS_UN_H) || defined(RUNNING_DOXYGEN)
 /** Create an AF_UNIX listenaddr struct.
  * <b>listenaddress</b> provides the path to the Unix socket.
  *
@@ -777,8 +778,9 @@ create_unix_sockaddr(const char *listenaddress, char **readable_address,
   log_fn(LOG_ERR, LD_BUG,
          "Unix domain sockets not supported, yet we tried to create one.");
   *len_out = 0;
-  tor_assert(0);
-};
+  tor_fragile_assert();
+  return NULL;
+}
 #endif /* HAVE_SYS_UN_H */
 
 /** Warn that an accept or a connect has failed because we're running up
@@ -1415,9 +1417,6 @@ connection_connect(connection_t *conn, const char *address,
     }
   }
 
-  if (!server_mode(options))
-    client_check_address_changed(s);
-
   /* it succeeded. we're connected. */
   log_fn(inprogress?LOG_DEBUG:LOG_INFO, LD_NET,
          "Connection to %s:%u %s (sock %d).",
@@ -1661,7 +1660,8 @@ connection_send_socks5_connect(connection_t *conn)
   conn->proxy_state = PROXY_SOCKS5_WANT_CONNECT_OK;
 }
 
-/** DOCDOC */
+/** Wrapper around fetch_from_(buf/evbuffer)_socks_client: see those functions
+ * for documentation of its behavior. */
 static int
 connection_fetch_from_buf_socks_client(connection_t *conn,
                                        int state, char **reason)
@@ -1811,17 +1811,28 @@ connection_read_proxy_handshake(connection_t *conn)
  * entry in <b>ports</b>.  Add to <b>new_conns</b> new every connection we
  * launch.
  *
+ * If <b>control_listeners_only</b> is true, then we only open control
+ * listeners, and we do not remove any noncontrol listeners from old_conns.
+ *
  * Return 0 on success, -1 on failure.
  **/
 static int
 retry_listener_ports(smartlist_t *old_conns,
                      const smartlist_t *ports,
-                     smartlist_t *new_conns)
+                     smartlist_t *new_conns,
+                     int control_listeners_only)
 {
   smartlist_t *launch = smartlist_new();
   int r = 0;
 
-  smartlist_add_all(launch, ports);
+  if (control_listeners_only) {
+    SMARTLIST_FOREACH(ports, port_cfg_t *, p, {
+        if (p->type == CONN_TYPE_CONTROL_LISTENER)
+          smartlist_add(launch, p);
+    });
+  } else {
+    smartlist_add_all(launch, ports);
+  }
 
   /* Iterate through old_conns, comparing it to launch: remove from both lists
    * each pair of elements that corresponds to the same port. */
@@ -1921,10 +1932,13 @@ retry_listener_ports(smartlist_t *old_conns,
  *
  * Add all old conns that should be closed to <b>replaced_conns</b>.
  * Add all new connections to <b>new_conns</b>.
+ *
+ * If <b>close_all_noncontrol</b> is true, then we only open control
+ * listeners, and we close all other listeners.
  */
 int
 retry_all_listeners(smartlist_t *replaced_conns,
-                    smartlist_t *new_conns)
+                    smartlist_t *new_conns, int close_all_noncontrol)
 {
   smartlist_t *listeners = smartlist_new();
   const or_options_t *options = get_options();
@@ -1939,7 +1953,8 @@ retry_all_listeners(smartlist_t *replaced_conns,
 
   if (retry_listener_ports(listeners,
                            get_configured_ports(),
-                           new_conns) < 0)
+                           new_conns,
+                           close_all_noncontrol) < 0)
     retval = -1;
 
   /* Any members that were still in 'listeners' don't correspond to
@@ -2226,7 +2241,9 @@ global_write_bucket_low(connection_t *conn, size_t attempt, int priority)
   return 0;
 }
 
-/** DOCDOC */
+/** Helper: adjusts our bandwidth history and informs the controller as
+ * appropriate, given that we have just read <b>num_read</b> bytes and written
+ * <b>num_written</b> bytes on <b>conn</b>. */
 static void
 record_num_bytes_transferred_impl(connection_t *conn,
                              time_t now, size_t num_read, size_t num_written)
@@ -2257,7 +2274,8 @@ record_num_bytes_transferred_impl(connection_t *conn,
 }
 
 #ifdef USE_BUFFEREVENTS
-/** DOCDOC */
+/** Wrapper around fetch_from_(buf/evbuffer)_socks_client: see those functions
+ * for documentation of its behavior. */
 static void
 record_num_bytes_transferred(connection_t *conn,
                              time_t now, size_t num_read, size_t num_written)
@@ -2579,7 +2597,8 @@ connection_get_rate_limit_totals(uint64_t *read_out, uint64_t *written_out)
   }
 }
 
-/** DOCDOC */
+/** Perform whatever operations are needed on <b>conn</b> to enable
+ * rate-limiting. */
 void
 connection_enable_rate_limiting(connection_t *conn)
 {
@@ -2712,6 +2731,7 @@ connection_handle_read_impl(connection_t *conn)
   return 0;
 }
 
+/* DOCDOC connection_handle_read */
 int
 connection_handle_read(connection_t *conn)
 {
@@ -3304,6 +3324,7 @@ connection_handle_write_impl(connection_t *conn, int force)
   return 0;
 }
 
+/* DOCDOC connection_handle_write */
 int
 connection_handle_write(connection_t *conn, int force)
 {
@@ -3882,6 +3903,14 @@ static int
 connection_finished_connecting(connection_t *conn)
 {
   tor_assert(conn);
+
+  if (!server_mode(get_options())) {
+    /* See whether getsockname() says our address changed.  We need to do this
+     * now that the connection has finished, because getsockname() on Windows
+     * won't work until then. */
+    client_check_address_changed(conn->s);
+  }
+
   switch (conn->type)
     {
     case CONN_TYPE_OR:
