@@ -151,7 +151,7 @@ install: build
 	install -m 644 contrib/tor-tsocks.conf $(CURDIR)/debian/tor/etc/tor
 	install -m 644 debian/tor-service-defaults-torrc $(CURDIR)/debian/tor/usr/share/tor
 
-	install -m 644 debian/apparmor-profile $(CURDIR)/debian/tor/etc/apparmor.d/usr.sbin.tor
+	install -m 644 debian/tor.apparmor-profile $(CURDIR)/debian/tor/etc/apparmor.d/usr.sbin.tor
 	if type dh_apparmor >/dev/null 2>&1; \
 	then dh_apparmor --profile-name=usr.sbin.tor -ptor; fi
 
