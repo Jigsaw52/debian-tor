@@ -1,3 +1,14 @@
+tor (0.2.3.16-alpha-1) experimental; urgency=medium
+
+  * New upstream version.
+    - Work around a bug in OpenSSL that broke renegotiation with TLS
+      1.1 and TLS 1.2. Without this workaround, all attempts to speak
+      the v2 Tor connection protocol when both sides were using OpenSSL
+      1.0.1 would fail. Resolves ticket 6033.
+    - and more - please consult upstream changelog.
+
+ -- Peter Palfrader <weasel@debian.org>  Wed, 06 Jun 2012 11:02:55 +0200
+
 tor (0.2.3.15-alpha-1) experimental; urgency=low
 
   * New upstream version.
