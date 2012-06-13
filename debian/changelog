@@ -1,3 +1,9 @@
+tor (0.2.3.16-alpha-1.tor1) experimental; urgency=low
+
+  * Fix apparmor for some backports.
+
+ -- Peter Palfrader <weasel@debian.org>  Wed, 13 Jun 2012 15:13:47 +0200
+
 tor (0.2.3.16-alpha-1) experimental; urgency=medium
 
   * New upstream version.
