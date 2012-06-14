@@ -1,3 +1,11 @@
+tor (0.2.3.16-alpha-1.tor2) experimental; urgency=low
+
+  * apparmor policy:
+    - allow access to /var/log/tor/* and not just /var/log/tor/log*,
+    - restrict such access to append instead of general writes.
+
+ -- Peter Palfrader <weasel@debian.org>  Thu, 14 Jun 2012 13:55:35 +0200
+
 tor (0.2.3.16-alpha-1.tor1) experimental; urgency=low
 
   * Fix apparmor for some backports.
