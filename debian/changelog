@@ -3,8 +3,10 @@ tor (0.2.3.16-alpha-X) Xxperimental; urgency=low
   * apparmor policy:
     - allow access to /var/log/tor/* and not just /var/log/tor/log*,
     - restrict such access to append instead of general writes.
+  * No longer create /var/run/tor in postint if it does not exist -
+    the init script should take care of that.
 
- -- Peter Palfrader <weasel@debian.org>  Thu, 14 Jun 2012 13:55:35 +0200
+ -- Peter Palfrader <weasel@debian.org>  Thu, 14 Jun 2012 19:45:27 +0200
 
 tor (0.2.3.16-alpha-1) experimental; urgency=medium
 
