@@ -5,8 +5,16 @@ tor (0.2.3.16-alpha-X) Xxperimental; urgency=low
     - restrict such access to append instead of general writes.
   * No longer create /var/run/tor in postint if it does not exist -
     the init script should take care of that.
+  * Change the output of the init script to use lsb* functions:
+    - Depend on lsb-base.
+    - Makes the output pretty (closes: #676843)
+  * Also, in the init script we are now less verbose, unless VERBOSE is
+    set to yes in /etc/default/rcS (see the rcS(5) manual page):
+    - pass --hush to tor on startup, so only warnings and errors are
+      displayed, hiding any notice level log output,
+    - do not report raising ulimit -n.
 
- -- Peter Palfrader <weasel@debian.org>  Thu, 14 Jun 2012 19:45:27 +0200
+ -- Peter Palfrader <weasel@debian.org>  Thu, 14 Jun 2012 20:50:08 +0200
 
 tor (0.2.3.16-alpha-1) experimental; urgency=medium
 

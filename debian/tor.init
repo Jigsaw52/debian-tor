@@ -14,7 +14,11 @@
 #                    transport.
 ### END INIT INFO
 
-set -e
+# Load the VERBOSE setting and other rcS variables
+. /lib/init/vars.sh
+
+# Define LSB log_* functions.
+. /lib/lsb/init-functions
 
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 DAEMON=/usr/sbin/tor
@@ -27,6 +31,10 @@ WAITFORDAEMON=60
 DEFAULT_ARGS="--defaults-torrc /usr/share/tor/tor-service-defaults-torrc"
 VERIFY_ARGS="--verify-config $DEFAULT_ARGS"
 ARGS=""
+if [ "${VERBOSE:-}" != "yes" ]; then
+	ARGS="$ARGS --hush"
+fi
+
 # Let's try to figure our some sane defaults:
 if [ -r /proc/sys/fs/file-max ]; then
 	system_max=`cat /proc/sys/fs/file-max`
@@ -69,41 +77,38 @@ wait_for_deaddaemon () {
 	then
 		if kill -0 $pid 2>/dev/null
 		then
-			echo -n "."
 			cnt=0
 			while kill -0 $pid 2>/dev/null
 			do
 				cnt=`expr $cnt + 1`
 				if [ $cnt -gt $WAITFORDAEMON ]
 				then
-					echo " FAILED."
-					return 1
+					log_action_end_msg 1 "still running"
 				fi
 				sleep 1
-				echo -n "."
+				[ "`expr $cnt % 3`" != 2 ] || log_action_cont_msg ""
 			done
 		fi
 	fi
-	return 0
+	log_action_end_msg 0
 }
 
 
 check_torpiddir () {
 	if test ! -d $TORPIDDIR; then
-		#echo "There is no $TORPIDDIR directory.  Creating one for you."
 		mkdir -m 02750 "$TORPIDDIR"
 		chown debian-tor:debian-tor "$TORPIDDIR"
 	fi
 
 	if test ! -x $TORPIDDIR; then
-		echo "Cannot access $TORPIDDIR directory, are you root?" >&2
+		log_action_end_msg 1 "cannot access $TORPIDDIR directory, are you root?"
 		exit 1
 	fi
 }
 
 check_config () {
 	if ! $DAEMON $VERIFY_ARGS > /dev/null; then
-		echo "ABORTED: Tor configuration invalid:" >&2
+		log_failure_msg "Checking if $NAME configuration is valid"
 		$DAEMON --verify-config >&2
 		exit 1
 	fi
@@ -113,68 +118,73 @@ check_config () {
 case "$1" in
   start)
 	if [ "$RUN_DAEMON" != "yes" ]; then
-		echo "Not starting $DESC (Disabled in $DEFAULTSFILE)."
+		log_action_msg "Not starting $DESC (Disabled in $DEFAULTSFILE)."
 		exit 0
 	fi
 
 	if [ -n "$MAX_FILEDESCRIPTORS" ]; then
-		echo -n "Raising maximum number of filedescriptors (ulimit -n) to $MAX_FILEDESCRIPTORS"
+		[ "${VERBOSE:-}" != "yes" ] || log_action_begin_msg "Raising maximum number of filedescriptors (ulimit -n) for tor to $MAX_FILEDESCRIPTORS"
 		if ulimit -n "$MAX_FILEDESCRIPTORS" ; then
-			echo "."
+			[ "${VERBOSE:-}" != "yes" ] || log_action_end_msg 0
 		else
-			echo ": FAILED."
+			[ "${VERBOSE:-}" != "yes" ] || log_action_end_msg 1
 		fi
 	fi
 
 	check_torpiddir
-
-	echo "Starting $DESC: $NAME..."
 	check_config
 
-	start-stop-daemon --start --quiet --oknodo \
-		--pidfile $TORPID \
-		$NICE \
-		--exec $DAEMON -- $DEFAULT_ARGS $ARGS
-	echo "done."
+	log_action_begin_msg "Starting $DESC"
+
+	if start-stop-daemon --stop --signal 0 --quiet --pidfile $TORPID --exec $DAEMON; then
+		log_action_end_msg 0 "already running"
+	else
+		if start-stop-daemon --start --quiet \
+			--pidfile $TORPID \
+			$NICE \
+			--exec $DAEMON -- $DEFAULT_ARGS $ARGS
+		then
+			log_action_end_msg 0
+		else
+			log_action_end_msg 1
+		fi
+	fi
 	;;
   stop)
-	echo -n "Stopping $DESC: "
+	log_action_begin_msg "Stopping $DESC"
 	pid=`cat $TORPID 2>/dev/null` || true
 
 	if test ! -f $TORPID -o -z "$pid"; then
-		echo "not running (there is no $TORPID)."
+		log_action_end_msg 0 "not running - there is no $TORPID"
 		exit 0
 	fi
 
 	if start-stop-daemon --stop --signal INT --quiet --pidfile $TORPID --exec $DAEMON; then
 		wait_for_deaddaemon $pid
-		echo "$NAME."
-	elif kill -0 $pid 2>/dev/null
-	then
-		echo "FAILED (Is $pid not $NAME?  Is $DAEMON a different binary now?)."
+	elif kill -0 $pid 2>/dev/null; then
+		log_action_end_msg 1 "Is $pid not $NAME?  Is $DAEMON a different binary now?"
 	else
-		echo "FAILED ($DAEMON died: process $pid not running; or permission denied)."
+		log_action_end_msg 1 "$DAEMON died: process $pid not running; or permission denied"
 	fi
 	;;
   reload|force-reload)
-	echo -n "Reloading $DESC configuration: "
+	check_config
+
+	log_action_begin_msg "Reloading $DESC configuration"
 	pid=`cat $TORPID 2>/dev/null` || true
 
 	if test ! -f $TORPID -o -z "$pid"; then
-		echo "not running (there is no $TORPID)."
+		log_action_end_msg 1 "not running - there is no $TORPID"
 		exit 0
 	fi
 
-	check_config
-
 	if start-stop-daemon --stop --signal 1 --quiet --pidfile $TORPID --exec $DAEMON
 	then
-		echo "$NAME."
-	elif kill -0 $pid 2>/dev/null
-	then
-		echo "FAILED (Is $pid not $NAME?  Is $DAEMON a different binary now?)."
+		log_action_end_msg 0
+	elif kill -0 $pid 2>/dev/null; then
+		log_action_end_msg 1 "Is $pid not $NAME?  Is $DAEMON a different binary now?"
 	else
-		echo "FAILED ($DAEMON died: process $pid not running; or permission denied)."
+		log_action_end_msg 1 "$DAEMON died: process $pid not running; or permission denied"
 	fi
 	;;
   restart)
@@ -186,24 +196,24 @@ case "$1" in
 	;;
   status)
 	if test ! -r $(dirname $TORPID); then
-		echo "cannot read tor PID file"
+		log_failure_msg "cannot read PID file $TORPID"
 		exit 4
 	fi
 	pid=`cat $TORPID 2>/dev/null` || true
 	if test ! -f $TORPID -o -z "$pid"; then
-		echo "tor is not running"
+		log_failure_msg "$NAME is not running"
 		exit 3
 	fi
 	if ps "$pid" >/dev/null 2>&1; then
-		echo "tor is running"
+		log_success_msg "$NAME is running"
 		exit 0
 	else
-		echo "tor is not running"
+		log_failure_msg "$NAME is not running"
 		exit 1
 	fi
 	;;
   *)
-	echo "Usage: $0 {start|stop|restart|reload|force-reload|status}" >&2
+	log_action_msg "Usage: $0 {start|stop|restart|reload|force-reload|status}" >&2
 	exit 1
 	;;
 esac
