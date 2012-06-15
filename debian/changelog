@@ -3,7 +3,6 @@ tor (0.2.3.17-beta-1) unstable; urgency=low
   * New upstream version.
   * apparmor policy:
     - allow access to /var/log/tor/* and not just /var/log/tor/log*,
-    - restrict such access to append instead of general writes.
   * No longer create /var/run/tor in postint if it does not exist -
     the init script should take care of that.
   * Change the output of the init script to use lsb* functions:
@@ -15,7 +14,7 @@ tor (0.2.3.17-beta-1) unstable; urgency=low
       displayed, hiding any notice level log output,
     - do not report raising ulimit -n.
 
- -- Peter Palfrader <weasel@debian.org>  Fri, 15 Jun 2012 15:25:31 +0200
+ -- Peter Palfrader <weasel@debian.org>  Fri, 15 Jun 2012 15:26:38 +0200
 
 tor (0.2.3.16-alpha-1) experimental; urgency=medium
 
