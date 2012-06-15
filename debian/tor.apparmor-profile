@@ -23,7 +23,7 @@
   /usr/share/tor/** r,
 
   owner /var/lib/tor/** rwk,
-  owner /var/log/tor/* a,
+  owner /var/log/tor/* w,
 
   /{,var/}run/tor/control w,
   /{,var/}run/tor/tor.pid w,
