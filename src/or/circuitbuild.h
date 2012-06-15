@@ -121,6 +121,7 @@ int circuit_build_times_needs_circuits(circuit_build_times_t *cbt);
 
 int circuit_build_times_needs_circuits_now(circuit_build_times_t *cbt);
 void circuit_build_times_init(circuit_build_times_t *cbt);
+void circuit_build_times_free_timeouts(circuit_build_times_t *cbt);
 void circuit_build_times_new_consensus_params(circuit_build_times_t *cbt,
                                               networkstatus_t *ns);
 double circuit_build_times_timeout_rate(const circuit_build_times_t *cbt);
@@ -165,8 +166,6 @@ const char *find_transport_name_by_bridge_addrport(const tor_addr_t *addr,
 int find_transport_by_bridge_addrport(const tor_addr_t *addr, uint16_t port,
                                       const transport_t **transport);
 transport_t *transport_get_by_name(const char *name);
-
-int validate_pluggable_transports_config(void);
 
 #endif
 
