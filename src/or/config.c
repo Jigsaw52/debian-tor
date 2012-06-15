@@ -50,6 +50,7 @@ typedef enum config_type_t {
   CONFIG_TYPE_STRING = 0,   /**< An arbitrary string. */
   CONFIG_TYPE_FILENAME,     /**< A filename: some prefixes get expanded. */
   CONFIG_TYPE_UINT,         /**< A non-negative integer less than MAX_INT */
+  CONFIG_TYPE_INT,          /**< Any integer. */
   CONFIG_TYPE_PORT,         /**< A port from 1...65535, 0 for "not set", or
                              * "auto".  */
   CONFIG_TYPE_INTERVAL,     /**< A number of seconds, with optional units*/
@@ -257,7 +258,7 @@ static config_var_t _option_vars[] = {
   V(DisableAllSwap,              BOOL,     "0"),
   V(DisableDebuggerAttachment,   BOOL,     "1"),
   V(DisableIOCP,                 BOOL,     "1"),
-  V(DynamicDHGroups,             BOOL,     "1"),
+  V(DynamicDHGroups,             BOOL,     "0"),
   V(DNSPort,                     LINELIST, NULL),
   V(DNSListenAddress,            LINELIST, NULL),
   V(DownloadExtraInfo,           BOOL,     "0"),
@@ -354,6 +355,13 @@ static config_var_t _option_vars[] = {
   V(ORListenAddress,             LINELIST, NULL),
   V(ORPort,                      LINELIST, NULL),
   V(OutboundBindAddress,         STRING,   NULL),
+
+  V(PathBiasCircThreshold,       INT,      "-1"),
+  V(PathBiasNoticeRate,          DOUBLE,   "-1"),
+  V(PathBiasDisableRate,         DOUBLE,   "-1"),
+  V(PathBiasScaleThreshold,      INT,      "-1"),
+  V(PathBiasScaleFactor,         INT,      "-1"),
+
   OBSOLETE("PathlenCoinWeight"),
   V(PerConnBWBurst,              MEMUNIT,  "0"),
   V(PerConnBWRate,               MEMUNIT,  "0"),
@@ -498,6 +506,7 @@ static config_var_t _state_vars[] = {
   VAR("EntryGuardDownSince",     LINELIST_S,  EntryGuards,             NULL),
   VAR("EntryGuardUnlistedSince", LINELIST_S,  EntryGuards,             NULL),
   VAR("EntryGuardAddedBy",       LINELIST_S,  EntryGuards,             NULL),
+  VAR("EntryGuardPathBias",      LINELIST_S,  EntryGuards,             NULL),
   V(EntryGuards,                 LINELIST_V,  NULL),
 
   VAR("TransportProxy",               LINELIST_S, TransportProxies, NULL),
@@ -2114,8 +2123,10 @@ config_assign_value(const config_format_t *fmt, or_options_t *options,
       break;
     }
     /* fall through */
+  case CONFIG_TYPE_INT:
   case CONFIG_TYPE_UINT:
-    i = (int)tor_parse_long(c->value, 10, 0,
+    i = (int)tor_parse_long(c->value, 10,
+                            var->type==CONFIG_TYPE_INT ? INT_MIN : 0,
                             var->type==CONFIG_TYPE_PORT ? 65535 : INT_MAX,
                             &ok, NULL);
     if (!ok) {
@@ -2498,6 +2509,7 @@ get_assigned_option(const config_format_t *fmt, const void *options,
     case CONFIG_TYPE_INTERVAL:
     case CONFIG_TYPE_MSEC_INTERVAL:
     case CONFIG_TYPE_UINT:
+    case CONFIG_TYPE_INT:
       /* This means every or_options_t uint or bool element
        * needs to be an int. Not, say, a uint16_t or char. */
       tor_asprintf(&result->value, "%d", *(int*)value);
@@ -2741,6 +2753,7 @@ option_clear(const config_format_t *fmt, or_options_t *options,
     case CONFIG_TYPE_INTERVAL:
     case CONFIG_TYPE_MSEC_INTERVAL:
     case CONFIG_TYPE_UINT:
+    case CONFIG_TYPE_INT:
     case CONFIG_TYPE_PORT:
     case CONFIG_TYPE_BOOL:
       *(int*)lvalue = 0;
@@ -3320,6 +3333,13 @@ compute_publishserverdescriptor(or_options_t *options)
  * expose more information than we're comfortable with. */
 #define MIN_HEARTBEAT_PERIOD (30*60)
 
+/** Lowest recommended value for CircuitBuildTimeout; if it is set too low
+ * and LearnCircuitBuildTimeout is off, the failure rate for circuit
+ * construction may be very high.  In that case, if it is set below this
+ * threshold emit a warning.
+ * */
+#define RECOMMENDED_MIN_CIRCUIT_BUILD_TIMEOUT (10)
+
 /** Return 0 if every setting in <b>options</b> is reasonable, and a
  * permissible transition from <b>old_options</b>. Else return -1.
  * Should have no side effects, except for normalizing the contents of
@@ -3716,6 +3736,17 @@ options_validate(or_options_t *old_options, or_options_t *options,
     options->LearnCircuitBuildTimeout = 0;
   }
 
+  if (!(options->LearnCircuitBuildTimeout) &&
+        options->CircuitBuildTimeout < RECOMMENDED_MIN_CIRCUIT_BUILD_TIMEOUT) {
+    log_warn(LD_CONFIG,
+        "CircuitBuildTimeout is shorter (%d seconds) than recommended "
+        "(%d seconds), and LearnCircuitBuildTimeout is disabled.  "
+        "If tor isn't working, raise this value or enable "
+        "LearnCircuitBuildTimeout.",
+        options->CircuitBuildTimeout,
+        RECOMMENDED_MIN_CIRCUIT_BUILD_TIMEOUT );
+  }
+
   if (options->MaxCircuitDirtiness < MIN_MAX_CIRCUIT_DIRTINESS) {
     log_warn(LD_CONFIG, "MaxCircuitDirtiness option is too short; "
              "raising to %d seconds.", MIN_MAX_CIRCUIT_DIRTINESS);
@@ -3870,6 +3901,15 @@ options_validate(or_options_t *old_options, or_options_t *options,
       !!options->HTTPSProxy + !!options->ClientTransportPlugin > 1)
     REJECT("You have configured more than one proxy type. "
            "(Socks4Proxy|Socks5Proxy|HTTPSProxy|ClientTransportPlugin)");
+
+  /* Check if the proxies will give surprising behavior. */
+  if (options->HTTPProxy && !(options->Socks4Proxy ||
+                              options->Socks5Proxy ||
+                              options->HTTPSProxy)) {
+    log_warn(LD_CONFIG, "HTTPProxy configured, but no SOCKS proxy or "
+             "HTTPS proxy configured. Watch out: this configuration will "
+             "proxy unencrypted directory connections only.");
+  }
 
   if (options->Socks5ProxyUsername) {
     size_t len;
@@ -4302,7 +4342,7 @@ static char *
 get_windows_conf_root(void)
 {
   static int is_set = 0;
-  static char path[MAX_PATH+1];
+  static char path[MAX_PATH*2+1];
   TCHAR tpath[MAX_PATH] = {0};
 
   LPITEMIDLIST idl;
@@ -4332,7 +4372,8 @@ get_windows_conf_root(void)
   /* Convert the path from an "ID List" (whatever that is!) to a path. */
   result = SHGetPathFromIDList(idl, tpath);
 #ifdef UNICODE
-  wcstombs(path,tpath,MAX_PATH);
+  wcstombs(path,tpath,sizeof(path));
+  path[sizeof(path)-1] = '\0';
 #else
   strlcpy(path,tpath,sizeof(path));
 #endif
@@ -7114,6 +7155,7 @@ getinfo_helper_config(control_connection_t *conn,
         case CONFIG_TYPE_STRING: type = "String"; break;
         case CONFIG_TYPE_FILENAME: type = "Filename"; break;
         case CONFIG_TYPE_UINT: type = "Integer"; break;
+        case CONFIG_TYPE_INT: type = "SignedInteger"; break;
         case CONFIG_TYPE_PORT: type = "Port"; break;
         case CONFIG_TYPE_INTERVAL: type = "TimeInterval"; break;
         case CONFIG_TYPE_MSEC_INTERVAL: type = "TimeMsecInterval"; break;
