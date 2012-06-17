@@ -2,6 +2,8 @@ tor (0.2.3.17-beta-2) unstable; urgency=low
 
   * No longer install apparmor policy by default.  It can be found in
     /usr/share/doc/tor if anybody is interested.
+  * Also, clean up and remove old /etc/apparmor.d/usr.sbin.tor files
+    on upgrade if they have not been changed by the user.
 
  -- Peter Palfrader <weasel@debian.org>  Mon, 18 Jun 2012 00:05:24 +0200
 

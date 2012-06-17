@@ -115,6 +115,29 @@ EOF
 	fi
 fi
 
+# clean out apparmor policy files that we shipped with
+# Tor 0.2.3.16-alpha-1 in experimental and
+# Tor 0.2.3.17-beta-1 in unstable.
+if [ "$1" = "configure" ] &&
+   [ -e /etc/apparmor.d/usr.sbin.tor ] &&
+   [ ! -z "$2" ] &&
+   dpkg --compare-versions "$2" le 0.2.3.17-beta-1; then
+	checksum="`md5sum /etc/apparmor.d/usr.sbin.tor | awk '{print $1}'`"
+	pkg_md5="`dpkg-query -W -f='${Conffiles}' tor | awk '$1=="/etc/apparmor.d/usr.sbin.tor" {print $2}'`"
+	if [ "$checksum" = "$pkg_md5" ]; then
+		if [ -x /sbin/apparmor_parser ] ; then
+			apparmor_parser --remove -T -W /etc/apparmor.d/usr.sbin.tor || true
+		fi
+
+		rm -f "/etc/apparmor.d/usr.sbin.tor"
+		rm -f "/etc/apparmor.d/disable/usr.sbin.tor" || true
+		rm -f "/etc/apparmor.d/force-complain/usr.sbin.tor" || true
+		rm -f "/etc/apparmor.d/local/usr.sbin.tor" || true
+		rmdir /etc/apparmor.d/local 2>/dev/null || true
+		rmdir /etc/apparmor.d 2>/dev/null || true
+	fi
+fi
+
 tor_error_init() {
 	echo "Tor was unable to start due to configuration errors.";
 	echo "Please fix them and manually restart the tor daemon using";
