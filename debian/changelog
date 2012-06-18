@@ -1,11 +1,20 @@
 tor (0.2.3.17-beta-2) unstable; urgency=low
 
-  * No longer install apparmor policy by default.  It can be found in
-    /usr/share/doc/tor if anybody is interested.
-  * Also, clean up and remove old /etc/apparmor.d/usr.sbin.tor files
-    on upgrade if they have not been changed by the user.
+  * Shipping and enabling the apparmor policy by default causes Tor to
+    break for users who have apparmor enabled in enforcind mode and
+    that, either in addition to or instead of running Tor as a system
+    service (i.e. /etc/init.d/tor), also run Tor as their user or in
+    some other means like launched from vidalia.  Therefore:
+    .
+    - No longer install apparmor policy by default.  It can be found in
+      /usr/share/doc/tor if anybody is interested.
+    - No longer build-depend on dh-apparmor, or suggest apparmor.
+    - Also, clean up and remove old /etc/apparmor.d/usr.sbin.tor files
+      on upgrade if they have not been changed by the user.
+    .
+    These changes relate to Debian Bug #670525 and fixes Tor ticket #6188.
 
- -- Peter Palfrader <weasel@debian.org>  Mon, 18 Jun 2012 00:05:24 +0200
+ -- Peter Palfrader <weasel@debian.org>  Mon, 18 Jun 2012 14:21:36 +0200
 
 tor (0.2.3.17-beta-1) unstable; urgency=low
 
