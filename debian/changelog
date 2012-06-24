@@ -1,3 +1,10 @@
+tor (0.2.3.17-beta-3) unstable; urgency=low
+
+  * Apply the correct SE-Linux label to /var/run/tor when creating the
+    directory in the init script (closes: #678362).  Thanks to Russell Coker.
+
+ -- Peter Palfrader <weasel@debian.org>  Sun, 24 Jun 2012 15:19:13 +0200
+
 tor (0.2.3.17-beta-2) unstable; urgency=low
 
   * Shipping and enabling the apparmor policy by default causes Tor to

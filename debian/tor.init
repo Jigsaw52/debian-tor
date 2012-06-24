@@ -98,6 +98,7 @@ check_torpiddir () {
 	if test ! -d $TORPIDDIR; then
 		mkdir -m 02750 "$TORPIDDIR"
 		chown debian-tor:debian-tor "$TORPIDDIR"
+		! [ -x /sbin/restorecon ] || /sbin/restorecon "$TORPIDDIR"
 	fi
 
 	if test ! -x $TORPIDDIR; then
