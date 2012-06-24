@@ -2,8 +2,11 @@ tor (0.2.3.17-beta-3) unstable; urgency=low
 
   * Apply the correct SE-Linux label to /var/run/tor when creating the
     directory in the init script (closes: #678362).  Thanks to Russell Coker.
+  * Hack up the unit tests to wait longer for the thread test to finish.
+    This is not a real fix, but it will probably make it more likely that
+    we successfully build on our mips/octeon machines (Re: Tor#6227).
 
- -- Peter Palfrader <weasel@debian.org>  Sun, 24 Jun 2012 15:19:13 +0200
+ -- Peter Palfrader <weasel@debian.org>  Sun, 24 Jun 2012 16:13:35 +0200
 
 tor (0.2.3.17-beta-2) unstable; urgency=low
 
