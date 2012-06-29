@@ -1,8 +1,10 @@
 tor (0.2.3.18-beta-1) unstable; urgency=low
 
   * New upstream version.
+  * Remove debian/patches/15_longer_test_timeout - something similar has been
+    incorporated upstream (Re: Tor#6227).
 
- -- Peter Palfrader <weasel@debian.org>  Fri, 29 Jun 2012 11:46:54 +0200
+ -- Peter Palfrader <weasel@debian.org>  Fri, 29 Jun 2012 11:47:31 +0200
 
 tor (0.2.3.17-beta-3) unstable; urgency=low
 

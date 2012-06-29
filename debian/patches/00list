@@ -1,4 +1,3 @@
 # 02_add_debian_files_in_manpage.dpatch
 03_tor_manpage_in_section_8.dpatch
 14_fix_geoip_warning
-15_longer_test_timeout
