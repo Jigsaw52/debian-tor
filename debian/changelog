@@ -1,4 +1,4 @@
-tor (0.2.3.18-beta-1) unstable; urgency=low
+tor (0.2.3.18-rc-1) unstable; urgency=low
 
   * New upstream version.
   * Remove debian/patches/15_longer_test_timeout - something similar has been
@@ -8,7 +8,7 @@ tor (0.2.3.18-beta-1) unstable; urgency=low
     script.  We do this by calling aa-exec with the appropriate flags, if it
     is installed.  Therefore also suggest apparmor-utils.
 
- -- Peter Palfrader <weasel@debian.org>  Fri, 29 Jun 2012 11:53:37 +0200
+ -- Peter Palfrader <weasel@debian.org>  Fri, 29 Jun 2012 12:03:30 +0200
 
 tor (0.2.3.17-beta-3) unstable; urgency=low
 
