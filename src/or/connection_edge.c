@@ -76,7 +76,7 @@ _connection_mark_unattached_ap(entry_connection_t *conn, int endreason,
    * being attached to a circuit, assume that an attempt to connect to
    * the destination hidden service has just ended.
    *
-   * XXX023 This condition doesn't limit to only streams failing
+   * XXXX This condition doesn't limit to only streams failing
    * without ever being attached.  That sloppiness should be harmless,
    * but we should fix it someday anyway. */
   if ((edge_conn->on_circuit != NULL || edge_conn->edge_has_sent_end) &&
@@ -622,7 +622,7 @@ connection_ap_expire_beginning(void)
     /* kludge to make us not try this circuit again, yet to allow
      * current streams on it to survive if they can: make it
      * unattractive to use for new streams */
-    /* XXXX023 this is a kludgy way to do this. */
+    /* XXXX024 this is a kludgy way to do this. */
     tor_assert(circ->timestamp_dirty);
     circ->timestamp_dirty -= options->MaxCircuitDirtiness;
     /* give our stream another 'cutoff' seconds to try */
@@ -664,7 +664,7 @@ connection_ap_attach_pending(void)
 
 /** Tell any AP streams that are waiting for a one-hop tunnel to
  * <b>failed_digest</b> that they are going to fail. */
-/* XXX023 We should get rid of this function, and instead attach
+/* XXX024 We should get rid of this function, and instead attach
  * one-hop streams to circ->p_streams so they get marked in
  * circuit_mark_for_close like normal p_streams. */
 void
@@ -1100,8 +1100,8 @@ addressmap_match_superdomains(char *address)
  * address starts out as a non-exit address, and we remap it to an .exit
  * address at any point, then set *<b>exit_source_out</b> to the
  * address_entry_source_t of the first such rule.  Set *<b>exit_source_out</b>
- * to ADDRMAPSRC_NONE if there is no such rewrite.
- *
+ * to ADDRMAPSRC_NONE if there is no such rewrite, or if the original address
+ * was a .exit.
  */
 int
 addressmap_rewrite(char *address, size_t maxlen, time_t *expires_out,
@@ -1111,10 +1111,12 @@ addressmap_rewrite(char *address, size_t maxlen, time_t *expires_out,
   int rewrites;
   time_t expires = TIME_MAX;
   addressmap_entry_source_t exit_source = ADDRMAPSRC_NONE;
+  char *addr_orig = tor_strdup(address);
+  char *log_addr_orig = NULL;
 
   for (rewrites = 0; rewrites < 16; rewrites++) {
     int exact_match = 0;
-    char *addr_orig = tor_strdup(escaped_safe_str_client(address));
+    log_addr_orig = tor_strdup(escaped_safe_str_client(address));
 
     ent = strmap_get(addressmap, address);
 
@@ -1125,7 +1127,6 @@ addressmap_rewrite(char *address, size_t maxlen, time_t *expires_out,
           !strcasecmp(address, ent->new_address)) {
         /* This is a rule like *.example.com example.com, and we just got
          * "example.com" */
-        tor_free(addr_orig);
         goto done;
       }
 
@@ -1133,7 +1134,6 @@ addressmap_rewrite(char *address, size_t maxlen, time_t *expires_out,
     }
 
     if (!ent || !ent->new_address) {
-      tor_free(addr_orig);
       goto done;
     }
 
@@ -1151,10 +1151,11 @@ addressmap_rewrite(char *address, size_t maxlen, time_t *expires_out,
     }
 
     log_info(LD_APP, "Addressmap: rewriting %s to %s",
-             addr_orig, escaped_safe_str_client(address));
+             log_addr_orig, escaped_safe_str_client(address));
     if (ent->expires > 1 && ent->expires < expires)
       expires = ent->expires;
-    tor_free(addr_orig);
+
+    tor_free(log_addr_orig);
   }
   log_warn(LD_CONFIG,
            "Loop detected: we've rewritten %s 16 times! Using it as-is.",
@@ -1162,6 +1163,8 @@ addressmap_rewrite(char *address, size_t maxlen, time_t *expires_out,
   /* it's fine to rewrite a rewrite, but don't loop forever */
 
  done:
+  tor_free(addr_orig);
+  tor_free(log_addr_orig);
   if (exit_source_out)
     *exit_source_out = exit_source;
   if (expires_out)
@@ -1699,17 +1702,22 @@ addressmap_get_mappings(smartlist_t *sl, time_t min_expires,
          addressmap_ent_remove(key, val);
          continue;
        } else if (val->new_address) {
+         const char *src_wc = val->src_wildcard ? "*." : "";
+         const char *dst_wc = val->dst_wildcard ? "*." : "";
          if (want_expiry) {
            if (val->expires < 3 || val->expires == TIME_MAX)
-             smartlist_add_asprintf(sl, "%s %s NEVER", key, val->new_address);
+             smartlist_add_asprintf(sl, "%s%s %s%s NEVER",
+                                    src_wc, key, dst_wc, val->new_address);
            else {
              char time[ISO_TIME_LEN+1];
              format_iso_time(time, val->expires);
-             smartlist_add_asprintf(sl, "%s %s \"%s\"", key, val->new_address,
-                          time);
+             smartlist_add_asprintf(sl, "%s%s %s%s \"%s\"",
+                                    src_wc, key, dst_wc, val->new_address,
+                                    time);
            }
          } else {
-           smartlist_add_asprintf(sl, "%s %s", key, val->new_address);
+           smartlist_add_asprintf(sl, "%s%s %s%s",
+                                  src_wc, key, dst_wc, val->new_address);
          }
        }
      }
@@ -1991,7 +1999,7 @@ connection_ap_handshake_rewrite_and_attach(entry_connection_t *conn,
       connection_mark_unattached_ap(conn, END_STREAM_REASON_TORPROTOCOL);
       return -1;
     }
-    /* XXXX022-1090 Should we also allow foo.bar.exit if ExitNodes is set and
+    /* XXXX024-1090 Should we also allow foo.bar.exit if ExitNodes is set and
        Bar is not listed in it?  I say yes, but our revised manpage branch
        implies no. */
   }
@@ -2572,12 +2580,12 @@ connection_ap_handshake_send_begin(entry_connection_t *ap_conn)
 
   edge_conn->stream_id = get_unique_stream_id_by_circ(circ);
   if (edge_conn->stream_id==0) {
-    /* XXXX023 Instead of closing this stream, we should make it get
+    /* XXXX024 Instead of closing this stream, we should make it get
      * retried on another circuit. */
     connection_mark_unattached_ap(ap_conn, END_STREAM_REASON_INTERNAL);
 
     /* Mark this circuit "unusable for new streams". */
-    /* XXXX023 this is a kludgy way to do this. */
+    /* XXXX024 this is a kludgy way to do this. */
     tor_assert(circ->_base.timestamp_dirty);
     circ->_base.timestamp_dirty -= get_options()->MaxCircuitDirtiness;
     return -1;
@@ -2657,12 +2665,12 @@ connection_ap_handshake_send_resolve(entry_connection_t *ap_conn)
 
   edge_conn->stream_id = get_unique_stream_id_by_circ(circ);
   if (edge_conn->stream_id==0) {
-    /* XXXX023 Instead of closing this stream, we should make it get
+    /* XXXX024 Instead of closing this stream, we should make it get
      * retried on another circuit. */
     connection_mark_unattached_ap(ap_conn, END_STREAM_REASON_INTERNAL);
 
     /* Mark this circuit "unusable for new streams". */
-    /* XXXX023 this is a kludgy way to do this. */
+    /* XXXX024 this is a kludgy way to do this. */
     tor_assert(circ->_base.timestamp_dirty);
     circ->_base.timestamp_dirty -= get_options()->MaxCircuitDirtiness;
     return -1;
@@ -2834,7 +2842,7 @@ tell_controller_about_resolved_result(entry_connection_t *conn,
  * certain errors or for values that didn't come via DNS.  <b>expires</b> is
  * a time when the answer expires, or -1 or TIME_MAX if there's a good TTL.
  **/
-/* XXXX023 the use of the ttl and expires fields is nutty.  Let's make this
+/* XXXX the use of the ttl and expires fields is nutty.  Let's make this
  * interface and those that use it less ugly. */
 void
 connection_ap_handshake_socks_resolved(entry_connection_t *conn,
