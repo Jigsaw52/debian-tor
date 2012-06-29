@@ -3,8 +3,12 @@ tor (0.2.3.18-beta-1) unstable; urgency=low
   * New upstream version.
   * Remove debian/patches/15_longer_test_timeout - something similar has been
     incorporated upstream (Re: Tor#6227).
+  * Re-enable apparmor, if available:  Instead of confining /usr/sbin/tor by
+    default, we now only confine the daemon that is launched from the init
+    script.  We do this by calling aa-exec with the appropriate flags, if it
+    is installed.  Therefore also suggest apparmor-utils.
 
- -- Peter Palfrader <weasel@debian.org>  Fri, 29 Jun 2012 11:47:31 +0200
+ -- Peter Palfrader <weasel@debian.org>  Fri, 29 Jun 2012 11:53:37 +0200
 
 tor (0.2.3.17-beta-3) unstable; urgency=low
 
