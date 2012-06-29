@@ -1,3 +1,4 @@
+etc/apparmor.d/abstractions
 etc/tor
 var/lib/tor
 var/log/tor

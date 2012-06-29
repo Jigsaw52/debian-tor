@@ -151,6 +151,10 @@ install: build
 	install -m 644 contrib/tor-tsocks.conf $(CURDIR)/debian/tor/etc/tor
 	install -m 644 debian/tor-service-defaults-torrc $(CURDIR)/debian/tor/usr/share/tor
 
+	install -m 644 debian/tor.apparmor-profile $(CURDIR)/debian/tor/etc/apparmor.d/system_tor
+	install -m 644 debian/tor.apparmor-profile.abstraction $(CURDIR)/debian/tor/etc/apparmor.d/abstractions/system_tor
+	dh_apparmor --profile-name=system_tor -ptor
+
 	dh_link usr/share/man/man8/tor.8 usr/share/man/man5/torrc.5
 
 	rm -f $(CURDIR)/debian/tor/usr/bin/tor-control.py

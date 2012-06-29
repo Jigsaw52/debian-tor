@@ -30,6 +30,7 @@ DEFAULTSFILE=/etc/default/$NAME
 WAITFORDAEMON=60
 DEFAULT_ARGS="--defaults-torrc /usr/share/tor/tor-service-defaults-torrc"
 VERIFY_ARGS="--verify-config $DEFAULT_ARGS"
+USE_AA_EXEC="yes"
 ARGS=""
 if [ "${VERBOSE:-}" != "yes" ]; then
 	ARGS="$ARGS --hush"
@@ -140,10 +141,22 @@ case "$1" in
 	if start-stop-daemon --stop --signal 0 --quiet --pidfile $TORPID --exec $DAEMON; then
 		log_action_end_msg 0 "already running"
 	else
+		if [ "$USE_AA_EXEC" = "yes" ] &&
+		   [ -x /usr/sbin/aa-status ] && \
+		   [ -x /usr/sbin/aa-exec ] && \
+		   [ -e /etc/apparmor.d/system_tor ] && \
+		   /usr/sbin/aa-status --enabled ; then
+			AA_EXEC="--startas /usr/sbin/aa-exec"
+			AA_EXEC_ARGS="--profile=system_tor -- $DAEMON"
+		else
+			AA_EXEC=""
+			AA_EXEC_ARGS=""
+		fi
 		if start-stop-daemon --start --quiet \
 			--pidfile $TORPID \
 			$NICE \
-			--exec $DAEMON -- $DEFAULT_ARGS $ARGS
+			$AA_EXEC \
+			--exec $DAEMON -- $AA_EXEC_ARGS $DEFAULT_ARGS $ARGS
 		then
 			log_action_end_msg 0
 		else

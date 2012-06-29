@@ -53,6 +53,14 @@ RUN_DAEMON="yes"
 #
 CLEANUP_OLD_COREFILES=y
 
+#
+# By default the tor init script will launch Tor using apparmor iff
+# /usr/sbin/aa-status exists and is executable and calling it with --enabled
+# returns true, /usr/sbin/aa-exec is executable, there is a
+# /etc/apparmor.d/system_tor policy, and USE_AA_EXEC is set to 'yes'.
+#
+# USE_AA_EXEC="yes"  # default
+# USE_AA_EXEC="no"
 
 # Let the vidalia package override some of our settings.
 # People who have vidalia installed might not want to run Tor as a system

@@ -1,7 +1,5 @@
 # vim:syntax=apparmor
-#include <tunables/global>
 
-/usr/sbin/tor {
   #include <abstractions/base>
   #include <abstractions/nameservice>
 
@@ -15,21 +13,11 @@
   capability setgid,
   capability setuid,
 
+  /usr/sbin/tor r,
+
   /proc/sys/kernel/random/uuid r,
   /sys/devices/system/cpu/ r,
   /sys/devices/system/cpu/** r,
 
   /etc/tor/* r,
   /usr/share/tor/** r,
-
-  owner /var/lib/tor/** rwk,
-  owner /var/log/tor/* w,
-
-  /{,var/}run/tor/control w,
-  /{,var/}run/tor/tor.pid w,
-  /{,var/}run/tor/control.authcookie w,
-  /{,var/}run/tor/control.authcookie.tmp rw,
-
-  # Site-specific additions and overrides. See local/README for details.
-  #include <local/usr.sbin.tor>
-}
