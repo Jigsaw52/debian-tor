@@ -1,3 +1,9 @@
+tor (0.2.3.18-beta-1) unstable; urgency=low
+
+  * New upstream version.
+
+ -- Peter Palfrader <weasel@debian.org>  Fri, 29 Jun 2012 11:46:54 +0200
+
 tor (0.2.3.17-beta-3) unstable; urgency=low
 
   * Apply the correct SE-Linux label to /var/run/tor when creating the

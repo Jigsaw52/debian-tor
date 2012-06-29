@@ -44,12 +44,12 @@
 
 /********* START VARIABLES **********/
 /** Global list of circuit build times */
-// XXXX023: Add this as a member for entry_guard_t instead of global?
+// XXXX: Add this as a member for entry_guard_t instead of global?
 // Then we could do per-guard statistics, as guards are likely to
 // vary in their own latency. The downside of this is that guards
 // can change frequently, so we'd be building a lot more circuits
 // most likely.
-/* XXXX023 Make this static; add accessor functions. */
+/* XXXX024 Make this static; add accessor functions. */
 circuit_build_times_t circ_times;
 
 /** A global list of all circuits at this hop. */
@@ -158,14 +158,14 @@ circuit_build_times_disabled(void)
 
     if (consensus_disabled || config_disabled || dirauth_disabled ||
            state_disabled) {
-      log_info(LD_CIRC,
+      log_debug(LD_CIRC,
                "CircuitBuildTime learning is disabled. "
                "Consensus=%d, Config=%d, AuthDir=%d, StateFile=%d",
                consensus_disabled, config_disabled, dirauth_disabled,
                state_disabled);
       return 1;
     } else {
-      log_debug(LD_BUG,
+      log_debug(LD_CIRC,
                 "CircuitBuildTime learning is not disabled. "
                 "Consensus=%d, Config=%d, AuthDir=%d, StateFile=%d",
                 consensus_disabled, config_disabled, dirauth_disabled,
@@ -3503,7 +3503,7 @@ choose_good_entry_server(uint8_t purpose, cpath_build_state_t *state)
 
   if (state && options->UseEntryGuards &&
       (purpose != CIRCUIT_PURPOSE_TESTING || options->BridgeRelay)) {
-    /* This is request for an entry server to use for a regular circuit,
+    /* This request is for an entry server to use for a regular circuit,
      * and we use entry guard nodes.  Just return one of the guard nodes.  */
     return choose_random_entry(state);
   }
@@ -4238,7 +4238,7 @@ entry_guards_compute_status(const or_options_t *options, time_t now)
  * If <b>mark_relay_status</b>, also call router_set_status() on this
  * relay.
  *
- * XXX023 change succeeded and mark_relay_status into 'int flags'.
+ * XXX024 change succeeded and mark_relay_status into 'int flags'.
  */
 int
 entry_guard_register_connect_status(const char *digest, int succeeded,
@@ -4763,7 +4763,7 @@ entry_guards_parse_state(or_state_t *state, int set, char **msg)
     }
     entry_guards = new_entry_guards;
     entry_guards_dirty = 0;
-    /* XXX023 hand new_entry_guards to this func, and move it up a
+    /* XXX024 hand new_entry_guards to this func, and move it up a
      * few lines, so we don't have to re-dirty it */
     if (remove_obsolete_entry_guards(now))
       entry_guards_dirty = 1;
@@ -5602,8 +5602,7 @@ rewrite_node_address_for_bridge(const bridge_info_t *bridge, node_t *node)
 
     /* XXXipv6 we lack support for falling back to another address for
        the same relay, warn the user */
-    if (!tor_addr_is_null(&ri->ipv6_addr))
-    {
+    if (!tor_addr_is_null(&ri->ipv6_addr)) {
       tor_addr_port_t ap;
       router_get_pref_orport(ri, &ap);
       log_notice(LD_CONFIG,

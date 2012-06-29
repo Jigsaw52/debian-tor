@@ -3191,6 +3191,68 @@ tor_join_win_cmdline(const char *argv[])
   return joined_argv;
 }
 
+/**
+ * Helper function to output hex numbers, called by
+ * format_helper_exit_status().  This writes the hexadecimal digits of x into
+ * buf, up to max_len digits, and returns the actual number of digits written.
+ * If there is insufficient space, it will write nothing and return 0.
+ *
+ * This function DOES NOT add a terminating NUL character to its output: be
+ * careful!
+ *
+ * This accepts an unsigned int because format_helper_exit_status() needs to
+ * call it with a signed int and an unsigned char, and since the C standard
+ * does not guarantee that an int is wider than a char (an int must be at
+ * least 16 bits but it is permitted for a char to be that wide as well), we
+ * can't assume a signed int is sufficient to accomodate an unsigned char.
+ * Thus, format_helper_exit_status() will still need to emit any require '-'
+ * on its own.
+ *
+ * For most purposes, you'd want to use tor_snprintf("%x") instead of this
+ * function; it's designed to be used in code paths where you can't call
+ * arbitrary C functions.
+ */
+int
+format_hex_number_for_helper_exit_status(unsigned int x, char *buf,
+                                         int max_len)
+{
+  int len;
+  unsigned int tmp;
+  char *cur;
+
+  /* Sanity check */
+  if (!buf || max_len <= 0)
+    return 0;
+
+  /* How many chars do we need for x? */
+  if (x > 0) {
+    len = 0;
+    tmp = x;
+    while (tmp > 0) {
+      tmp >>= 4;
+      ++len;
+    }
+  } else {
+    len = 1;
+  }
+
+  /* Bail if we would go past the end of the buffer */
+  if (len > max_len)
+    return 0;
+
+  /* Point to last one */
+  cur = buf + len - 1;
+
+  /* Convert x to hex */
+  do {
+    *cur-- = "0123456789ABCDEF"[x & 0xf];
+    x >>= 4;
+  } while (x != 0 && cur >= buf);
+
+  /* Return len */
+  return len;
+}
+
 /** Format <b>child_state</b> and <b>saved_errno</b> as a hex string placed in
  * <b>hex_errno</b>.  Called between fork and _exit, so must be signal-handler
  * safe.
@@ -3202,15 +3264,19 @@ tor_join_win_cmdline(const char *argv[])
  * in the processs of starting the child process did the failure occur (see
  * CHILD_STATE_* macros for definition), and SAVED_ERRNO is the value of
  * errno when the failure occurred.
+ *
+ * On success return the number of characters added to hex_errno, not counting
+ * the terminating NUL; return -1 on error.
  */
-
-void
+int
 format_helper_exit_status(unsigned char child_state, int saved_errno,
                           char *hex_errno)
 {
   unsigned int unsigned_errno;
+  int written, left;
   char *cur;
   size_t i;
+  int res = -1;
 
   /* Fill hex_errno with spaces, and a trailing newline (memset may
      not be signal handler safe, so we can't use it) */
@@ -3225,35 +3291,75 @@ format_helper_exit_status(unsigned char child_state, int saved_errno,
     unsigned_errno = (unsigned int) saved_errno;
   }
 
-  /* Convert errno to hex (start before \n) */
-  cur = hex_errno + HEX_ERRNO_SIZE - 2;
+  /*
+   * Count how many chars of space we have left, and keep a pointer into the
+   * current point in the buffer.
+   */
+  left = HEX_ERRNO_SIZE;
+  cur = hex_errno;
 
-  /* Check for overflow on first iteration of the loop */
-  if (cur < hex_errno)
-    return;
+  /* Emit child_state */
+  written = format_hex_number_for_helper_exit_status(child_state,
+                                                     cur, left);
+  if (written <= 0)
+    goto err;
 
-  do {
-    *cur-- = "0123456789ABCDEF"[unsigned_errno % 16];
-    unsigned_errno /= 16;
-  } while (unsigned_errno != 0 && cur >= hex_errno);
+  /* Adjust left and cur */
+  left -= written;
+  cur += written;
+  if (left <= 0)
+    goto err;
 
-  /* Prepend the minus sign if errno was negative */
-  if (saved_errno < 0 && cur >= hex_errno)
-    *cur-- = '-';
+  /* Now the '/' */
+  *cur = '/';
 
-  /* Leave a gap */
-  if (cur >= hex_errno)
-    *cur-- = '/';
+  /* Adjust left and cur */
+  ++cur;
+  --left;
+  if (left <= 0)
+    goto err;
 
-  /* Check for overflow on first iteration of the loop */
-  if (cur < hex_errno)
-    return;
+  /* Need minus? */
+  if (saved_errno < 0) {
+    *cur = '-';
+    ++cur;
+    --left;
+    if (left <= 0)
+      goto err;
+  }
 
-  /* Convert child_state to hex */
-  do {
-    *cur-- = "0123456789ABCDEF"[child_state % 16];
-    child_state /= 16;
-  } while (child_state != 0 && cur >= hex_errno);
+  /* Emit unsigned_errno */
+  written = format_hex_number_for_helper_exit_status(unsigned_errno,
+                                                     cur, left);
+
+  if (written <= 0)
+    goto err;
+
+  /* Adjust left and cur */
+  left -= written;
+  cur += written;
+
+  /* Check that we have enough space left for a newline */
+  if (left <= 0)
+    goto err;
+
+  /* Emit the newline and NUL */
+  *cur++ = '\n';
+  *cur++ = '\0';
+
+  res = (int)(cur - hex_errno - 1);
+
+  goto done;
+
+ err:
+  /*
+   * In error exit, just write a '\0' in the first char so whatever called
+   * this at least won't fall off the end.
+   */
+  *hex_errno = '\0';
+
+ done:
+  return res;
 }
 
 /* Maximum number of file descriptors, if we cannot get it via sysconf() */
@@ -3595,15 +3701,20 @@ tor_spawn_background(const char *const filename, const char **argv,
     child_state = CHILD_STATE_FAILEXEC;
 
   error:
-    /* XXX: are we leaking fds from the pipe? */
+    {
+      /* XXX: are we leaking fds from the pipe? */
+      int n;
 
-    format_helper_exit_status(child_state, errno, hex_errno);
+      n = format_helper_exit_status(child_state, errno, hex_errno);
 
-    /* Write the error message. GCC requires that we check the return
-       value, but there is nothing we can do if it fails */
-    /* TODO: Don't use STDOUT, use a pipe set up just for this purpose */
-    nbytes = write(STDOUT_FILENO, error_message, error_message_length);
-    nbytes = write(STDOUT_FILENO, hex_errno, sizeof(hex_errno));
+      if (n >= 0) {
+        /* Write the error message. GCC requires that we check the return
+           value, but there is nothing we can do if it fails */
+        /* TODO: Don't use STDOUT, use a pipe set up just for this purpose */
+        nbytes = write(STDOUT_FILENO, error_message, error_message_length);
+        nbytes = write(STDOUT_FILENO, hex_errno, n);
+      }
+    }
 
     (void) nbytes;
 
@@ -3776,13 +3887,26 @@ tor_get_exit_code(const process_handle_t *process_handle,
   return PROCESS_EXIT_EXITED;
 }
 
+/** Helper: return the number of characters in <b>s</b> preceding the first
+ * occurrence of <b>ch</b>. If <b>ch</b> does not occur in <b>s</b>, return
+ * the length of <b>s</b>. Should be equivalent to strspn(s, "ch"). */
+static INLINE size_t
+str_num_before(const char *s, char ch)
+{
+  const char *cp = strchr(s, ch);
+  if (cp)
+    return cp - s;
+  else
+    return strlen(s);
+}
+
 /** Return non-zero iff getenv would consider <b>s1</b> and <b>s2</b>
  * to have the same name as strings in a process's environment. */
 int
 environment_variable_names_equal(const char *s1, const char *s2)
 {
-  size_t s1_name_len = strcspn(s1, "=");
-  size_t s2_name_len = strcspn(s2, "=");
+  size_t s1_name_len = str_num_before(s1, '=');
+  size_t s2_name_len = str_num_before(s2, '=');
 
   return (s1_name_len == s2_name_len &&
           tor_memeq(s1, s2, s1_name_len));
@@ -3857,7 +3981,7 @@ process_environment_make(struct smartlist_t *env_vars)
     for (i = 0; i < n_env_vars; ++i) {
       const char *s = smartlist_get(env_vars_sorted, i);
       size_t slen = strlen(s);
-      size_t s_name_len = strcspn(s, "=");
+      size_t s_name_len = str_num_before(s, '=');
 
       if (s_name_len == slen) {
         log_warn(LD_GENERAL,
@@ -4275,7 +4399,10 @@ get_string_from_pipe(FILE *stream, char *buf_out, size_t count)
     }
   } else {
     len = strlen(buf_out);
-    tor_assert(len>0);
+    if (len == 0) {
+      /* this probably means we got a NUL at the start of the string. */
+      return IO_STREAM_EAGAIN;
+    }
 
     if (buf_out[len - 1] == '\n') {
       /* Remove the trailing newline */
