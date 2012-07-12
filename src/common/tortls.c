@@ -68,6 +68,16 @@
 
 #define ADDR(tls) (((tls) && (tls)->address) ? tls->address : "peer")
 
+#if (OPENSSL_VERSION_NUMBER  <  0x0090813fL ||    \
+     (OPENSSL_VERSION_NUMBER >= 0x00909000L &&    \
+      OPENSSL_VERSION_NUMBER <  0x1000006fL))
+/* This is a version of OpenSSL before 0.9.8s/1.0.0f. It does not have
+ * the CVE-2011-4576 fix, and as such it can't use RELEASE_BUFFERS and
+ * SSL3 safely at the same time.
+ */
+#define DISABLE_SSL3_HANDSHAKE
+#endif
+
 /* We redefine these so that we can run correctly even if the vendor gives us
  * a version of OpenSSL that does not match its header files.  (Apple: I am
  * looking at you.)
@@ -766,16 +776,52 @@ tor_tls_context_new(crypto_pk_env_t *identity, unsigned int key_lifetime,
     result->key = crypto_pk_dup_key(rsa);
   }
 
-#ifdef EVERYONE_HAS_AES
-  /* Tell OpenSSL to only use TLS1 */
+#if 0
+  /* Tell OpenSSL to only use TLS1.  This may have subtly different results
+   * from SSLv23_method() with SSLv2 and SSLv3 disabled, so we need to do some
+   * investigation before we consider adjusting it. It should be compatible
+   * with existing Tors. */
   if (!(result->ctx = SSL_CTX_new(TLSv1_method())))
     goto error;
-#else
+#endif
+
   /* Tell OpenSSL to use SSL3 or TLS1 but not SSL2. */
   if (!(result->ctx = SSL_CTX_new(SSLv23_method())))
     goto error;
   SSL_CTX_set_options(result->ctx, SSL_OP_NO_SSLv2);
+
+  /* Disable TLS1.1 and TLS1.2 if they exist.  We need to do this to
+   * workaround a bug present in all OpenSSL 1.0.1 versions (as of 1
+   * June 2012), wherein renegotiating while using one of these TLS
+   * protocols will cause the client to send a TLS 1.0 ServerHello
+   * rather than a ServerHello written with the appropriate protocol
+   * version.  Once some version of OpenSSL does TLS1.1 and TLS1.2
+   * renegotiation properly, we can turn them back on when built with
+   * that version. */
+#ifdef SSL_OP_NO_TLSv1_2
+  SSL_CTX_set_options(result->ctx, SSL_OP_NO_TLSv1_2);
 #endif
+#ifdef SSL_OP_NO_TLSv1_1
+  SSL_CTX_set_options(result->ctx, SSL_OP_NO_TLSv1_1);
+#endif
+
+  if (
+#ifdef DISABLE_SSL3_HANDSHAKE
+      1 ||
+#endif
+      SSLeay()  <  0x0090813fL ||
+      (SSLeay() >= 0x00909000L &&
+       SSLeay() <  0x1000006fL)) {
+    /* And not SSL3 if it's subject to CVE-2011-4576. */
+    log_info(LD_NET, "Disabling SSLv3 because this OpenSSL version "
+             "might otherwise be vulnerable to CVE-2011-4576 "
+             "(compile-time version %08lx (%s); "
+             "runtime version %08lx (%s))",
+             (unsigned long)OPENSSL_VERSION_NUMBER, OPENSSL_VERSION_TEXT,
+             (unsigned long)SSLeay(), SSLeay_version(SSLEAY_VERSION));
+    SSL_CTX_set_options(result->ctx, SSL_OP_NO_SSLv3);
+  }
+
   SSL_CTX_set_options(result->ctx, SSL_OP_SINGLE_DH_USE);
 
 #ifdef SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION

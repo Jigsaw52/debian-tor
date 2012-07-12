@@ -1,3 +1,24 @@
+tor (0.2.2.37-1) unstable; urgency=medium
+
+  * New upstream version, including:
+    - Work around a bug in OpenSSL that broke renegotiation with TLS
+      1.1 and TLS 1.2. Without this workaround, all attempts to speak
+      the v2 Tor connection protocol when both sides were using OpenSSL
+      1.0.1 would fail. Resolves ticket 6033.
+    - When waiting for a client to renegotiate, don't allow it to add
+      any bytes to the input buffer. This fixes a potential DoS issue.
+      Fixes bugs 5934 and 6007; bugfix on 0.2.0.20-rc.
+    - and more.  See upstream's changelog.
+
+ -- Peter Palfrader <weasel@debian.org>  Tue, 12 Jun 2012 14:22:48 +0200
+
+tor (0.2.2.36-1) unstable; urgency=low
+
+  * New upstream version, including updates to authority addresses, and
+    a couple minor security issues, see upstream's changelog.
+
+ -- Peter Palfrader <weasel@debian.org>  Thu, 24 May 2012 11:08:24 +0200
+
 tor (0.2.2.35-1~squeeze+1) stable-security; urgency=low
 
   * Upload tor 0.2.2.x to squeeze security as the old 0.2.1.x tree
