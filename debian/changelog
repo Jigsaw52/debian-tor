@@ -1,3 +1,21 @@
+tor (0.2.2.37-1~squeeze+1) stable; urgency=low
+
+  * Update tor in stable to 0.2.2.37 as per discussion in #679224:
+    - This version fixes a couple of minor security issues, like no longer
+      leaking uninitialized memory, properly rejecting inputs where the number
+      exceeds valid values for its storage types, or not adding more bytes to
+      input buffers while renegotiating.
+    - Furthermore, a few issues are resolved that might affect a user's
+      anonymity.  These include things such as only building circuits when a
+      client knows a sufficient number of "exit" nodes, never using a bridge
+      as an exit, or reusing circuits in an unsafe manner.
+    - Additionaly it updates the list of directory authorities, makes building
+      with newer and older openssl libraries safer (probably not important for
+      us) and makes building on a few other platforms more robust.
+    - For details please consult the upstream changelog entries.
+
+ -- Peter Palfrader <weasel@debian.org>  Thu, 12 Jul 2012 22:40:41 +0200
+
 tor (0.2.2.37-1) unstable; urgency=medium
 
   * New upstream version, including:
