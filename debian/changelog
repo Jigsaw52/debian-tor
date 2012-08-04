@@ -2,8 +2,9 @@ tor (0.2.3.19-rc-X) Xnstable; urgency=low
 
   * Suggest the tor-arm controller.
   * Improve long descriptions with Roger's help.
+  * Use https:// instead of git:// for the Vcs-Git URL.
 
- -- Peter Palfrader <weasel@debian.org>  Sat, 04 Aug 2012 11:26:41 +0200
+ -- Peter Palfrader <weasel@debian.org>  Sat, 04 Aug 2012 11:27:10 +0200
 
 tor (0.2.3.19-rc-1) unstable; urgency=low
 
