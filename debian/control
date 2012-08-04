@@ -60,8 +60,8 @@ Package: tor-geoipdb
 Architecture: all
 Priority: extra
 Depends: tor (>= ${source:Version}), ${misc:Depends}
-Description: geoIP database for Tor
- This package provides a geoIP database for Tor, i.e. it maps IPv4 addresses
+Description: GeoIP database for Tor
+ This package provides a GeoIP database for Tor, i.e. it maps IPv4 addresses
  to countries.
  .
  Bridge relays (special Tor relays that aren't listed in the main Tor
