@@ -13,7 +13,7 @@ Architecture: any
 Depends: ${shlibs:Depends}, adduser, ${misc:Depends}, lsb-base
 Conflicts: libssl0.9.8 (<< 0.9.8g-9)
 Recommends: logrotate, tor-geoipdb, torsocks
-Suggests: mixmaster, xul-ext-torbutton, socat, tor-arm, polipo (>= 1) | privoxy, apparmor-utils
+Suggests: mixmaster, xul-ext-torbutton, socat, tor-arm, polipo (>= 1) | privoxy, apparmor-utils, tor-arm
 Description: anonymizing overlay network for TCP
  Tor is a connection-based low-latency anonymous communication system which
  addresses many flaws in the original onion routing design.
