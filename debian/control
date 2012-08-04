@@ -69,6 +69,6 @@ Description: GeoIP database for Tor
  connections from.  These statistics enable the Tor network operators to
  learn when certain countries start blocking access to bridges.
  .
- Clients can also use this to learn what country each relay is in, to
- tell Tor controllers like arm or Vidalia, or to configure preferences
- for path selection.
+ Clients can also use this to learn what country each relay is in, so
+ Tor controllers like arm or Vidalia can use it, or if they want to
+ configure path selection preferences.
