@@ -64,10 +64,10 @@ Description: geoIP database for Tor
  This package provides a geoIP database for Tor, i.e. it maps IPv4 addresses
  to countries.
  .
- Bridges (special Tor relays that aren't listed in the main Tor
- directory) use this information to report which countries they get
- access from.  This allows the Tor network operators to learn if certain
- countries started blocking access to bridges.
+ Bridge relays (special Tor relays that aren't listed in the main Tor
+ directory) use this information to report which countries they see
+ connections from.  These statistics enable the Tor network operators to
+ learn when certain countries started blocking access to bridges.
  .
  Clients can also use this to learn what country each relay is in, to
  tell Tor controllers like arm or Vidalia, or to configure preferences
