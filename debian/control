@@ -67,7 +67,7 @@ Description: GeoIP database for Tor
  Bridge relays (special Tor relays that aren't listed in the main Tor
  directory) use this information to report which countries they see
  connections from.  These statistics enable the Tor network operators to
- learn when certain countries started blocking access to bridges.
+ learn when certain countries start blocking access to bridges.
  .
  Clients can also use this to learn what country each relay is in, to
  tell Tor controllers like arm or Vidalia, or to configure preferences
