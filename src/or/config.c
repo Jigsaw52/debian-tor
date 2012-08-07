@@ -594,6 +594,7 @@ static void option_reset(const config_format_t *fmt, or_options_t *options,
                          const config_var_t *var, int use_defaults);
 static void config_free(const config_format_t *fmt, void *options);
 static int config_lines_eq(config_line_t *a, config_line_t *b);
+static int config_count_key(const config_line_t *a, const char *key);
 static int option_is_same(const config_format_t *fmt,
                           const or_options_t *o1, const or_options_t *o2,
                           const char *name);
@@ -1464,7 +1465,7 @@ options_act(const or_options_t *old_options)
     }
   }
 
-  if (options->ServerTransportPlugin) {
+  if (options->ServerTransportPlugin && server_mode(options)) {
     for (cl = options->ServerTransportPlugin; cl; cl = cl->next) {
       if (parse_server_transport_line(cl->value, 0)<0) {
         log_warn(LD_BUG,
@@ -3066,6 +3067,20 @@ config_lines_eq(config_line_t *a, config_line_t *b)
   return 1;
 }
 
+/** Return the number of lines in <b>a</b> whose key is <b>key</b>. */
+static int
+config_count_key(const config_line_t *a, const char *key)
+{
+  int n = 0;
+  while (a) {
+    if (!strcasecmp(a->key, key)) {
+      ++n;
+    }
+    a = a->next;
+  }
+  return n;
+}
+
 /** Return true iff the option <b>name</b> has the same value in <b>o1</b>
  * and <b>o2</b>.  Must not be called for LINELIST_S or OBSOLETE options.
  */
@@ -3288,7 +3303,7 @@ compute_publishserverdescriptor(or_options_t *options)
   *auth = NO_DIRINFO;
   if (!list) /* empty list, answer is none */
     return 0;
-  SMARTLIST_FOREACH(list, const char *, string, {
+  SMARTLIST_FOREACH_BEGIN(list, const char *, string) {
     if (!strcasecmp(string, "v1"))
       *auth |= V1_DIRINFO;
     else if (!strcmp(string, "1"))
@@ -3310,7 +3325,7 @@ compute_publishserverdescriptor(or_options_t *options)
       /* no authority */;
     else
       return -1;
-    });
+  } SMARTLIST_FOREACH_END(string);
   return 0;
 }
 
@@ -3646,7 +3661,7 @@ options_validate(or_options_t *old_options, or_options_t *options,
 
   options->_AllowInvalid = 0;
   if (options->AllowInvalidNodes) {
-    SMARTLIST_FOREACH(options->AllowInvalidNodes, const char *, cp, {
+    SMARTLIST_FOREACH_BEGIN(options->AllowInvalidNodes, const char *, cp) {
         if (!strcasecmp(cp, "entry"))
           options->_AllowInvalid |= ALLOW_INVALID_ENTRY;
         else if (!strcasecmp(cp, "exit"))
@@ -3662,7 +3677,7 @@ options_validate(or_options_t *old_options, or_options_t *options,
               "Unrecognized value '%s' in AllowInvalidNodes", cp);
           return -1;
         }
-      });
+    } SMARTLIST_FOREACH_END(cp);
   }
 
   if (!options->SafeLogging ||
@@ -3848,6 +3863,20 @@ options_validate(or_options_t *old_options, or_options_t *options,
   if (accounting_parse_options(options, 1)<0)
     REJECT("Failed to parse accounting options. See logs for details.");
 
+  if (options->AccountingMax) {
+    if (options->RendConfigLines && server_mode(options)) {
+      log_warn(LD_CONFIG, "Using accounting with a hidden service and an "
+               "ORPort is risky: your hidden service(s) and your public "
+               "address will all turn off at the same time, which may alert "
+               "observers that they are being run by the same party.");
+    } else if (config_count_key(options->RendConfigLines,
+                                "HiddenServiceDir") > 1) {
+      log_warn(LD_CONFIG, "Using accounting with multiple hidden services is "
+               "risky: they will all turn off at the same time, which may "
+               "alert observers that they are being run by the same party.");
+    }
+  }
+
   if (options->HTTPProxy) { /* parse it now */
     if (tor_addr_port_lookup(options->HTTPProxy,
                         &options->HTTPProxyAddr, &options->HTTPProxyPort) < 0)
@@ -4019,6 +4048,13 @@ options_validate(or_options_t *old_options, or_options_t *options,
       REJECT("Server transport line did not parse. See logs for details.");
   }
 
+  if (options->ServerTransportPlugin && !server_mode(options)) {
+    log_notice(LD_GENERAL, "Tor is not configured as a relay but you specified"
+               " a ServerTransportPlugin line (%s). The ServerTransportPlugin "
+               "line will be ignored.",
+               esc_for_log(options->ServerTransportPlugin->value));
+  }
+
   if (options->ConstrainedSockets) {
     /* If the user wants to constrain socket buffer use, make sure the desired
      * limit is between MIN|MAX_TCPSOCK_BUFFER in k increments. */
@@ -4091,9 +4127,13 @@ options_validate(or_options_t *old_options, or_options_t *options,
     });
   }
 
-  if (options->TestingTorNetwork && !options->DirServers) {
+  if (options->TestingTorNetwork &&
+      !(options->DirServers ||
+        (options->AlternateDirAuthority &&
+         options->AlternateBridgeAuthority))) {
     REJECT("TestingTorNetwork may only be configured in combination with "
-           "a non-default set of DirServers.");
+           "a non-default set of DirServer or both of AlternateDirAuthority "
+           "and AlternateBridgeAuthority configured.");
   }
 
   if (options->AllowSingleHopExits && !options->DirServers) {
@@ -5638,7 +5678,7 @@ parse_port_config(smartlist_t *out,
         mainport = (int)tor_parse_long(ports->value, 10, 0, 65535, &ok, NULL);
         if (!ok) {
           log_warn(LD_CONFIG, "%sListenAddress can only be used with a single "
-                   "%sPort with value \"auto\" or 1-65535.",
+                   "%sPort with value \"auto\" or 1-65535 and no options set.",
                    portname, portname);
           return -1;
         }
