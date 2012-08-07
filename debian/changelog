@@ -1,10 +1,18 @@
-tor (0.2.3.19-rc-X) Xnstable; urgency=low
+tor (0.2.3.20-rc-1) unstable; urgency=low
 
+  * New upstream version, including a couple security fixes:
+    - Avoid read-from-freed-memory and double-free bugs that could occur
+      when a DNS request fails while launching it. Fixes bug 6480.
+    - Avoid an uninitialized memory read when reading a vote or consensus
+      document that has an unrecognized flavor name. This read could
+      lead to a remote crash bug. Fixes bug 6530.
+    - Try to leak less information about what relays a client is
+      choosing to a side-channel attacker.
   * Suggest the tor-arm controller.
   * Improve long descriptions with Roger's help.
   * Use https:// instead of git:// for the Vcs-Git URL.
 
- -- Peter Palfrader <weasel@debian.org>  Sat, 04 Aug 2012 11:27:10 +0200
+ -- Peter Palfrader <weasel@debian.org>  Tue, 07 Aug 2012 23:13:18 +0200
 
 tor (0.2.3.19-rc-1) unstable; urgency=low
 
