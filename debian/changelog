@@ -1,3 +1,30 @@
+tor (0.2.2.38-1) stable; urgency=low
+
+  * New upstream version, fixing three security issues, as discussed
+    in #684763:
+    - Avoid read-from-freed-memory and double-free bugs that could occur
+      when a DNS request fails while launching it. Fixes bug 6480;
+      bugfix on 0.2.0.1-alpha.
+      [CVE-2012-3517]
+    - Avoid an uninitialized memory read when reading a vote or consensus
+      document that has an unrecognized flavor name. This read could
+      lead to a remote crash bug. Fixes bug 6530; bugfix on 0.2.2.6-alpha.
+      [CVE-2012-3518]
+    - Try to leak less information about what relays a client is
+      choosing to a side-channel attacker. Previously, a Tor client would
+      stop iterating through the list of available relays as soon as it
+      had chosen one, thus finishing a little earlier when it picked
+      a router earlier in the list. If an attacker can recover this
+      timing information (nontrivial but not proven to be impossible),
+      they could learn some coarse-grained information about which relays
+      a client was picking (middle nodes in particular are likelier to
+      be affected than exits). The timing attack might be mitigated by
+      other factors (see bug 6537 for some discussion), but it's best
+      not to take chances. Fixes bug 6537; bugfix on 0.0.8rc1.
+      [CVE-2012-3519]
+
+ -- Peter Palfrader <weasel@debian.org>  Wed, 22 Aug 2012 08:49:43 +0200
+
 tor (0.2.2.37-1~squeeze+1) stable; urgency=low
 
   * Update tor in stable to 0.2.2.37 as per discussion in #679224:
