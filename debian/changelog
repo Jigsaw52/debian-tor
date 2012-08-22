@@ -2,10 +2,6 @@ tor (0.2.2.38-1) stable; urgency=low
 
   * New upstream version, fixing three security issues, as discussed
     in #684763:
-    - Avoid read-from-freed-memory and double-free bugs that could occur
-      when a DNS request fails while launching it. Fixes bug 6480;
-      bugfix on 0.2.0.1-alpha.
-      [CVE-2012-3517]
     - Avoid an uninitialized memory read when reading a vote or consensus
       document that has an unrecognized flavor name. This read could
       lead to a remote crash bug. Fixes bug 6530; bugfix on 0.2.2.6-alpha.
@@ -22,6 +18,13 @@ tor (0.2.2.38-1) stable; urgency=low
       other factors (see bug 6537 for some discussion), but it's best
       not to take chances. Fixes bug 6537; bugfix on 0.0.8rc1.
       [CVE-2012-3519]
+  * Note that contrary to the upstream release notes and changelog the
+    folloiwng issue is not fixed by this release.  Discussion in the
+    upstream bug tracker suggests it is not triggerable in practice.
+    - Avoid read-from-freed-memory and double-free bugs that could occur
+      when a DNS request fails while launching it. Fixes bug 6480;
+      bugfix on 0.2.0.1-alpha.
+      [CVE-2012-3517; https://bugs.torproject.org/6480]
 
  -- Peter Palfrader <weasel@debian.org>  Wed, 22 Aug 2012 08:49:43 +0200
 
