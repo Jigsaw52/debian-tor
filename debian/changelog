@@ -1,3 +1,20 @@
+tor (0.2.3.21-rc-1) unstable; urgency=low
+
+  * New upstream version, changes including:
+    - Tear down the circuit if we get an unexpected SENDME cell. Clients
+      could use this trick to make their circuits receive cells faster
+      than our flow control would have allowed, or to gum up the network,
+      or possibly to do targeted memory denial-of-service attacks on
+      entry nodes.
+    - Reject any attempt to extend to an internal address. Without
+      this fix, a router could be used to probe addresses on an internal
+      network to see whether they were accepting connections.
+    - Do not crash when comparing an address with port value 0 to an
+      address policy.
+    For details please see the upstream changelog.
+
+ -- Peter Palfrader <weasel@debian.org>  Fri, 07 Sep 2012 12:25:17 +0200
+
 tor (0.2.3.20-rc-1) unstable; urgency=low
 
   * New upstream version, including a couple security fixes:
