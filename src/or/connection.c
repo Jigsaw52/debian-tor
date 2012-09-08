@@ -34,6 +34,7 @@
 #include "rendcommon.h"
 #include "rephist.h"
 #include "router.h"
+#include "transports.h"
 #include "routerparse.h"
 
 #ifdef USE_BUFFEREVENTS
@@ -238,7 +239,16 @@ dir_connection_new(int socket_family)
 }
 
 /** Allocate and return a new or_connection_t, initialized as by
- * connection_init(). */
+ * connection_init().
+ *
+ * Set timestamp_last_added_nonpadding to now.
+ *
+ * Assign a pseudorandom next_circ_id between 0 and 2**15.
+ *
+ * Initialize active_circuit_pqueue.
+ *
+ * Set active_circuit_pqueue_last_recalibrated to current cell_ewma tick.
+ */
 or_connection_t *
 or_connection_new(int socket_family)
 {
@@ -256,7 +266,10 @@ or_connection_new(int socket_family)
 }
 
 /** Allocate and return a new entry_connection_t, initialized as by
- * connection_init(). */
+ * connection_init().
+ *
+ * Allocate space to store the socks_request.
+ */
 entry_connection_t *
 entry_connection_new(int type, int socket_family)
 {
@@ -338,13 +351,10 @@ connection_new(int type, int socket_family)
 /** Initializes conn. (you must call connection_add() to link it into the main
  * array).
  *
+ * Set conn-\>magic to the correct value.
+ *
  * Set conn-\>type to <b>type</b>. Set conn-\>s and conn-\>conn_array_index to
  * -1 to signify they are not yet assigned.
- *
- * If conn is not a listener type, allocate buffers for it. If it's
- * an AP type, allocate space to store the socks_request.
- *
- * Assign a pseudorandom next_circ_id between 0 and 2**15.
  *
  * Initialize conn's timestamps to now.
  */
@@ -1089,7 +1099,7 @@ connection_listener_new(const struct sockaddr *listensockaddr,
  * nmap does).  We want to detect that, and not go on with the connection.
  */
 static int
-check_sockaddr(struct sockaddr *sa, int len, int level)
+check_sockaddr(const struct sockaddr *sa, int len, int level)
 {
   int ok = 1;
 
@@ -1198,11 +1208,6 @@ connection_handle_listener_read(connection_t *conn, int new_type)
     if (check_sockaddr(remote, remotelen, LOG_INFO)<0) {
       log_info(LD_NET,
                "accept() returned a strange address; closing connection.");
-      tor_close_socket(news);
-      return 0;
-    }
-
-    if (check_sockaddr_family_match(remote->sa_family, conn) < 0) {
       tor_close_socket(news);
       return 0;
     }
@@ -3360,13 +3365,6 @@ connection_flush(connection_t *conn)
   return connection_handle_write(conn, 1);
 }
 
-/** OpenSSL TLS record size is 16383; this is close. The goal here is to
- * push data out as soon as we know there's enough for a TLS record, so
- * during periods of high load we won't read entire megabytes from
- * input before pushing any data out. It also has the feature of not
- * growing huge outbufs unless something is slow. */
-#define MIN_TLS_FLUSHLEN 15872
-
 /** Append <b>len</b> bytes of <b>string</b> onto <b>conn</b>'s
  * outbuf, and ask it to start writing.
  *
@@ -3375,10 +3373,9 @@ connection_flush(connection_t *conn)
  * negative, this is the last data to be compressed, and the connection's zlib
  * state should be flushed.
  *
- * If it's an OR conn and an entire TLS record is ready, then try to
- * flush the record now. Similarly, if it's a local control connection
- * and a 64k chunk is ready, try to flush it all, so we don't end up with
- * many megabytes of controller info queued at once.
+ * If it's a local control connection and a 64k chunk is ready, try to flush
+ * it all, so we don't end up with many megabytes of controller info queued at
+ * once.
  */
 void
 _connection_write_to_buf_impl(const char *string, size_t len,
@@ -3446,7 +3443,6 @@ _connection_write_to_buf_impl(const char *string, size_t len,
   if (zlib) {
     conn->outbuf_flushlen += buf_datalen(conn->outbuf) - old_datalen;
   } else {
-    ssize_t extra = 0;
     conn->outbuf_flushlen += len;
 
     /* Should we try flushing the outbuf now? */
@@ -3456,14 +3452,7 @@ _connection_write_to_buf_impl(const char *string, size_t len,
       return;
     }
 
-    if (conn->type == CONN_TYPE_OR &&
-        conn->outbuf_flushlen-len < MIN_TLS_FLUSHLEN &&
-        conn->outbuf_flushlen >= MIN_TLS_FLUSHLEN) {
-      /* We just pushed outbuf_flushlen to MIN_TLS_FLUSHLEN or above;
-       * we can send out a full TLS frame now if we like. */
-      extra = conn->outbuf_flushlen - MIN_TLS_FLUSHLEN;
-      conn->outbuf_flushlen = MIN_TLS_FLUSHLEN;
-    } else if (conn->type == CONN_TYPE_CONTROL &&
+    if (conn->type == CONN_TYPE_CONTROL &&
                !connection_is_rate_limited(conn) &&
                conn->outbuf_flushlen-len < 1<<16 &&
                conn->outbuf_flushlen >= 1<<16) {
@@ -3482,10 +3471,6 @@ _connection_write_to_buf_impl(const char *string, size_t len,
         connection_close_immediate(conn);
       }
       return;
-    }
-    if (extra) {
-      conn->outbuf_flushlen += extra;
-      connection_start_writing(conn);
     }
   }
 }

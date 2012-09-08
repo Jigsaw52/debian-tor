@@ -1175,7 +1175,7 @@ connection_edge_process_relay_cell(cell_t *cell, circuit_t *circ,
     case RELAY_COMMAND_EXTEND: {
       static uint64_t total_n_extend=0, total_nonearly=0;
       total_n_extend++;
-      if (conn) {
+      if (rh.stream_id) {
         log_fn(LOG_PROTOCOL_WARN, domain,
                "'extend' cell received for non-zero stream. Dropping.");
         return 0;
@@ -1267,7 +1267,8 @@ connection_edge_process_relay_cell(cell_t *cell, circuit_t *circ,
         if (layer_hint) {
           if (layer_hint->package_window + CIRCWINDOW_INCREMENT >
                 CIRCWINDOW_START_MAX) {
-            log_fn(LOG_PROTOCOL_WARN, LD_PROTOCOL,
+            /*XXXX024: Downgrade this back to LOG_PROTOCOL_WARN after a while*/
+            log_fn(LOG_WARN, LD_PROTOCOL,
                    "Bug/attack: unexpected sendme cell from exit relay. "
                    "Closing circ.");
             return -END_CIRC_REASON_TORPROTOCOL;
@@ -1279,7 +1280,8 @@ connection_edge_process_relay_cell(cell_t *cell, circuit_t *circ,
         } else {
           if (circ->package_window + CIRCWINDOW_INCREMENT >
                 CIRCWINDOW_START_MAX) {
-            log_fn(LOG_PROTOCOL_WARN, LD_PROTOCOL,
+            /*XXXX024: Downgrade this back to LOG_PROTOCOL_WARN after a while*/
+            log_fn(LOG_WARN, LD_PROTOCOL,
                    "Bug/attack: unexpected sendme cell from client. "
                    "Closing circ.");
             return -END_CIRC_REASON_TORPROTOCOL;

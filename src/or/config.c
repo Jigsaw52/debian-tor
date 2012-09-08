@@ -204,6 +204,7 @@ static config_var_t _option_vars[] = {
   V(AuthDirListBadExits,         BOOL,     "0"),
   V(AuthDirMaxServersPerAddr,    UINT,     "2"),
   V(AuthDirMaxServersPerAuthAddr,UINT,     "5"),
+  V(AuthDirHasIPv6Connectivity,  BOOL,     "0"),
   VAR("AuthoritativeDirectory",  BOOL, AuthoritativeDir,    "0"),
   V(AutomapHostsOnResolve,       BOOL,     "0"),
   V(AutomapHostsSuffixes,        CSV,      ".onion,.exit"),
@@ -223,8 +224,10 @@ static config_var_t _option_vars[] = {
   V(CircuitPriorityHalflife,     DOUBLE,  "-100.0"), /*negative:'Use default'*/
   V(ClientDNSRejectInternalAddresses, BOOL,"1"),
   V(ClientOnly,                  BOOL,     "0"),
+  V(ClientPreferIPv6ORPort,      BOOL,     "0"),
   V(ClientRejectInternalAddresses, BOOL,   "1"),
   V(ClientTransportPlugin,       LINELIST, NULL),
+  V(ClientUseIPv6,               BOOL,     "0"),
   V(ConsensusParams,             STRING,   NULL),
   V(ConnLimit,                   UINT,     "1000"),
   V(ConnDirectionStatistics,     BOOL,     "0"),
@@ -1554,7 +1557,7 @@ options_act(const or_options_t *old_options)
   monitor_owning_controller_process(options->OwningControllerProcess);
 
   /* reload keys as needed for rendezvous services. */
-  if (rend_service_load_keys()<0) {
+  if (rend_service_load_all_keys()<0) {
     log_warn(LD_GENERAL,"Error loading rendezvous service keys");
     return -1;
   }
@@ -4059,7 +4062,7 @@ options_validate(or_options_t *old_options, or_options_t *options,
     log_notice(LD_GENERAL, "Tor is not configured as a relay but you specified"
                " a ServerTransportPlugin line (%s). The ServerTransportPlugin "
                "line will be ignored.",
-               esc_for_log(options->ServerTransportPlugin->value));
+               escaped(options->ServerTransportPlugin->value));
   }
 
   if (options->ConstrainedSockets) {
@@ -7292,6 +7295,20 @@ getinfo_helper_config(control_connection_t *conn,
       if (!type)
         continue;
       smartlist_add_asprintf(sl, "%s %s\n",var->name,type);
+    }
+    *answer = smartlist_join_strings(sl, "", 0, NULL);
+    SMARTLIST_FOREACH(sl, char *, c, tor_free(c));
+    smartlist_free(sl);
+  } else if (!strcmp(question, "config/defaults")) {
+    smartlist_t *sl = smartlist_new();
+    int i;
+    for (i = 0; _option_vars[i].name; ++i) {
+      const config_var_t *var = &_option_vars[i];
+      if (var->initvalue != NULL) {
+          char *val = esc_for_log(var->initvalue);
+          smartlist_add_asprintf(sl, "%s %s\n",var->name,val);
+          tor_free(val);
+      }
     }
     *answer = smartlist_join_strings(sl, "", 0, NULL);
     SMARTLIST_FOREACH(sl, char *, c, tor_free(c));

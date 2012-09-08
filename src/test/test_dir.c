@@ -147,9 +147,9 @@ test_dir_formats(void)
           "platform Tor "VERSION" on ", sizeof(buf2));
   strlcat(buf2, get_uname(), sizeof(buf2));
   strlcat(buf2, "\n"
-          "opt protocols Link 1 2 Circuit 1\n"
+          "protocols Link 1 2 Circuit 1\n"
           "published 1970-01-01 00:00:00\n"
-          "opt fingerprint ", sizeof(buf2));
+          "fingerprint ", sizeof(buf2));
   test_assert(!crypto_pk_get_fingerprint(pk2, fingerprint, 1));
   strlcat(buf2, fingerprint, sizeof(buf2));
   strlcat(buf2, "\nuptime 0\n"
@@ -161,7 +161,7 @@ test_dir_formats(void)
   strlcat(buf2, pk1_str, sizeof(buf2));
   strlcat(buf2, "signing-key\n", sizeof(buf2));
   strlcat(buf2, pk2_str, sizeof(buf2));
-  strlcat(buf2, "opt hidden-service-dir\n", sizeof(buf2));
+  strlcat(buf2, "hidden-service-dir\n", sizeof(buf2));
   strlcat(buf2, "reject *:*\nrouter-signature\n", sizeof(buf2));
   buf[strlen(buf2)] = '\0'; /* Don't compare the sig; it's never the same
                              * twice */
@@ -797,6 +797,7 @@ test_dir_v3_networkstatus(void)
   networkstatus_t *vote=NULL, *v1=NULL, *v2=NULL, *v3=NULL, *con=NULL,
     *con_md=NULL;
   vote_routerstatus_t *vrs;
+  tor_addr_t addr_ipv6;
   routerstatus_t *rs;
   char *v1_text=NULL, *v2_text=NULL, *v3_text=NULL, *consensus_text=NULL, *cp;
   smartlist_t *votes = smartlist_new();
@@ -893,6 +894,9 @@ test_dir_v3_networkstatus(void)
   rs->addr = 0x99009901;
   rs->or_port = 443;
   rs->dir_port = 0;
+  tor_addr_parse(&addr_ipv6, "[1:2:3::4]");
+  tor_addr_copy(&rs->ipv6_addr, &addr_ipv6);
+  rs->ipv6_orport = 4711;
   rs->is_exit = rs->is_stable = rs->is_fast = rs->is_flagged_running =
     rs->is_valid = rs->is_v2_dir = rs->is_possible_guard = 1;
   smartlist_add(vote->routerstatus_list, vrs);
@@ -987,6 +991,8 @@ test_dir_v3_networkstatus(void)
   test_eq(rs->addr, 0x99009901);
   test_eq(rs->or_port, 443);
   test_eq(rs->dir_port, 0);
+  test_assert(tor_addr_eq(&rs->ipv6_addr, &addr_ipv6));
+  test_eq(rs->ipv6_orport, 4711);
   test_eq(vrs->flags, U64_LITERAL(254)); // all flags except "authority."
 
   {
@@ -1169,6 +1175,8 @@ test_dir_v3_networkstatus(void)
   test_eq(rs->addr, 0x99009901);
   test_eq(rs->or_port, 443);
   test_eq(rs->dir_port, 0);
+  test_assert(tor_addr_eq(&rs->ipv6_addr, &addr_ipv6));
+  test_eq(rs->ipv6_orport, 4711);
   test_assert(!rs->is_authority);
   test_assert(rs->is_exit);
   test_assert(rs->is_fast);

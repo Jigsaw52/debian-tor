@@ -62,6 +62,16 @@ static cached_dir_t *the_directory = NULL;
 /** For authoritative directories: the current (v1) network status. */
 static cached_dir_t the_runningrouters;
 
+/** Array of start and end of consensus methods used for supported
+    microdescriptor formats. */
+static const struct consensus_method_range_t {
+  int low;
+  int high;
+} microdesc_consensus_methods[] = {
+  {MIN_METHOD_FOR_MICRODESC, MIN_METHOD_FOR_A_LINES - 1},
+  {MIN_METHOD_FOR_A_LINES, MAX_SUPPORTED_CONSENSUS_METHOD},
+  {-1, -1}};
+
 static void directory_remove_invalid(void);
 static cached_dir_t *dirserv_regenerate_directory(void);
 static char *format_versions_list(config_line_t *ln);
@@ -980,6 +990,7 @@ dirserv_set_router_is_running(routerinfo_t *router, time_t now)
     unreachable.
    */
   int answer;
+  const or_options_t *options = get_options();
   node_t *node = node_get_mutable_by_id(router->cache_info.identity_digest);
   tor_assert(node);
 
@@ -988,17 +999,27 @@ dirserv_set_router_is_running(routerinfo_t *router, time_t now)
     answer = ! we_are_hibernating();
   } else if (router->is_hibernating &&
              (router->cache_info.published_on +
-              HIBERNATION_PUBLICATION_SKEW) > router->last_reachable) {
+              HIBERNATION_PUBLICATION_SKEW) > node->last_reachable) {
     /* A hibernating router is down unless we (somehow) had contact with it
      * since it declared itself to be hibernating. */
     answer = 0;
-  } else if (get_options()->AssumeReachable) {
+  } else if (options->AssumeReachable) {
     /* If AssumeReachable, everybody is up unless they say they are down! */
     answer = 1;
   } else {
-    /* Otherwise, a router counts as up if we found it reachable in the last
-       REACHABLE_TIMEOUT seconds. */
-    answer = (now < router->last_reachable + REACHABLE_TIMEOUT);
+    /* Otherwise, a router counts as up if we found all announced OR
+       ports reachable in the last REACHABLE_TIMEOUT seconds.
+
+       XXX prop186 For now there's always one IPv4 and at most one
+       IPv6 OR port.
+
+       If we're not on IPv6, don't consider reachability of potential
+       IPv6 OR port since that'd kill all dual stack relays until a
+       majority of the dir auths have IPv6 connectivity. */
+    answer = (now < node->last_reachable + REACHABLE_TIMEOUT &&
+              (options->AuthDirHasIPv6Connectivity != 1 ||
+               tor_addr_is_null(&router->ipv6_addr) ||
+               now < node->last_reachable6 + REACHABLE_TIMEOUT));
   }
 
   if (!answer && running_long_enough_to_decide_unreachable()) {
@@ -1008,11 +1029,13 @@ dirserv_set_router_is_running(routerinfo_t *router, time_t now)
        REACHABILITY_TEST_CYCLE_PERIOD seconds, then the router has probably
        been down since at least that time after we last successfully reached
        it.
+
+       XXX ipv6
      */
     time_t when = now;
-    if (router->last_reachable &&
-        router->last_reachable + REACHABILITY_TEST_CYCLE_PERIOD < now)
-      when = router->last_reachable + REACHABILITY_TEST_CYCLE_PERIOD;
+    if (node->last_reachable &&
+        node->last_reachable + REACHABILITY_TEST_CYCLE_PERIOD < now)
+      when = node->last_reachable + REACHABILITY_TEST_CYCLE_PERIOD;
     rep_hist_note_router_unreachable(router->cache_info.identity_digest, when);
   }
 
@@ -2040,7 +2063,7 @@ version_from_platform(const char *platform)
  * non-NULL, add a "v" line for the platform.  Return 0 on success, -1 on
  * failure.
  *
- * The format argument has three possible values:
+ * The format argument has one of the following values:
  *   NS_V2 - Output an entry suitable for a V2 NS opinion document
  *   NS_V3_CONSENSUS - Output the first portion of a V3 NS consensus entry
  *   NS_V3_CONSENSUS_MICRODESC - Output the first portion of a V3 microdesc
@@ -2079,15 +2102,34 @@ routerstatus_format_entry(char *buf, size_t buf_len,
     log_warn(LD_BUG, "Not enough space in buffer.");
     return -1;
   }
+  cp = buf + strlen(buf);
 
   /* TODO: Maybe we want to pass in what we need to build the rest of
    * this here, instead of in the caller. Then we could use the
    * networkstatus_type_t values, with an additional control port value
    * added -MP */
-  if (format == NS_V3_CONSENSUS || format == NS_V3_CONSENSUS_MICRODESC)
+
+  /* V3 microdesc consensuses don't have "a" lines. */
+  if (format == NS_V3_CONSENSUS_MICRODESC)
     return 0;
 
-  cp = buf + strlen(buf);
+  /* Possible "a" line. At most one for now. */
+  if (!tor_addr_is_null(&rs->ipv6_addr)) {
+    const char *addr_str = fmt_and_decorate_addr(&rs->ipv6_addr);
+    r = tor_snprintf(cp, buf_len - (cp-buf),
+                     "a %s:%d\n",
+                     addr_str,
+                     (int)rs->ipv6_orport);
+    if (r<0) {
+      log_warn(LD_BUG, "Not enough space in buffer.");
+      return -1;
+    }
+    cp += strlen(cp);
+  }
+
+  if (format == NS_V3_CONSENSUS)
+    return 0;
+
   /* NOTE: Whenever this list expands, be sure to increase MAX_FLAG_LINE_LEN*/
   r = tor_snprintf(cp, buf_len - (cp-buf),
                    "s%s%s%s%s%s%s%s%s%s%s%s%s%s\n",
@@ -2114,7 +2156,7 @@ routerstatus_format_entry(char *buf, size_t buf_len,
   /* length of "opt v \n" */
 #define V_LINE_OVERHEAD 7
   if (version && strlen(version) < MAX_V_LINE_LEN - V_LINE_OVERHEAD) {
-    if (tor_snprintf(cp, buf_len - (cp-buf), "opt v %s\n", version)<0) {
+    if (tor_snprintf(cp, buf_len - (cp-buf), "v %s\n", version)<0) {
       log_warn(LD_BUG, "Unable to print router version.");
       return -1;
     }
@@ -2453,6 +2495,14 @@ set_routerstatus_from_routerinfo(routerstatus_t *rs,
   strlcpy(rs->nickname, ri->nickname, sizeof(rs->nickname));
   rs->or_port = ri->or_port;
   rs->dir_port = ri->dir_port;
+  if (options->AuthDirHasIPv6Connectivity == 1 &&
+      !tor_addr_is_null(&ri->ipv6_addr) &&
+      node->last_reachable6 >= now - REACHABLE_TIMEOUT) {
+    /* We're configured as having IPv6 connectivity. There's an IPv6
+       OR port and it's reachable so copy it to the routerstatus.  */
+    tor_addr_copy(&rs->ipv6_addr, &ri->ipv6_addr);
+    rs->ipv6_orport = ri->ipv6_orport;
+  }
 }
 
 /** Routerstatus <b>rs</b> is part of a group of routers that are on
@@ -2715,6 +2765,7 @@ dirserv_generate_networkstatus_vote_obj(crypto_pk_t *private_key,
   microdescriptors = smartlist_new();
 
   SMARTLIST_FOREACH_BEGIN(routers, routerinfo_t *, ri) {
+    const struct consensus_method_range_t *cmr = NULL;
     if (ri->cache_info.published_on >= cutoff) {
       routerstatus_t *rs;
       vote_routerstatus_t *vrs;
@@ -2736,15 +2787,20 @@ dirserv_generate_networkstatus_vote_obj(crypto_pk_t *private_key,
         rs->is_flagged_running = 0;
 
       vrs->version = version_from_platform(ri->platform);
-      md = dirvote_create_microdescriptor(ri);
-      if (md) {
-        char buf[128];
-        vote_microdesc_hash_t *h;
-        dirvote_format_microdesc_vote_line(buf, sizeof(buf), md);
-        h = tor_malloc(sizeof(vote_microdesc_hash_t));
-        h->microdesc_hash_line = tor_strdup(buf);
-        h->next = NULL;
-        vrs->microdesc = h;
+      for (cmr = microdesc_consensus_methods;
+           cmr->low != -1 && cmr->high != -1;
+           cmr++) {
+        md = dirvote_create_microdescriptor(ri, cmr->low);
+        if (md) {
+          char buf[128];
+          vote_microdesc_hash_t *h;
+          dirvote_format_microdesc_vote_line(buf, sizeof(buf), md,
+                                             cmr->low, cmr->high);
+          h = tor_malloc_zero(sizeof(vote_microdesc_hash_t));
+          h->microdesc_hash_line = tor_strdup(buf);
+          h->next = vrs->microdesc;
+          vrs->microdesc = h;
+        }
         md->last_listed = now;
         smartlist_add(microdescriptors, md);
       }
@@ -3273,36 +3329,42 @@ dirserv_get_routerdescs(smartlist_t *descs_out, const char *key,
  * Inform the reachability checker that we could get to this guy.
  */
 void
-dirserv_orconn_tls_done(const char *address,
+dirserv_orconn_tls_done(const tor_addr_t *addr,
                         uint16_t or_port,
                         const char *digest_rcvd)
 {
-  routerinfo_t *ri;
+  node_t *node = NULL;
+  tor_addr_port_t orport;
+  routerinfo_t *ri = NULL;
   time_t now = time(NULL);
-  tor_assert(address);
+  tor_assert(addr);
   tor_assert(digest_rcvd);
 
-  ri = router_get_mutable_by_digest(digest_rcvd);
-
-  if (ri == NULL)
+  node = node_get_mutable_by_id(digest_rcvd);
+  if (node == NULL || node->ri == NULL)
     return;
+  ri = node->ri;
 
-  if (!strcasecmp(address, ri->address) && or_port == ri->or_port) {
+  tor_addr_copy(&orport.addr, addr);
+  orport.port = or_port;
+  if (router_has_orport(ri, &orport)) {
     /* Found the right router.  */
     if (!authdir_mode_bridge(get_options()) ||
         ri->purpose == ROUTER_PURPOSE_BRIDGE) {
+      char addrstr[TOR_ADDR_BUF_LEN];
       /* This is a bridge or we're not a bridge authorititative --
          mark it as reachable.  */
-      tor_addr_t addr, *addrp=NULL;
       log_info(LD_DIRSERV, "Found router %s to be reachable at %s:%d. Yay.",
                router_describe(ri),
-               address, ri->or_port);
-      if (tor_addr_parse(&addr, ri->address) != -1)
-        addrp = &addr;
-      else
-        log_warn(LD_BUG, "Couldn't parse IP address \"%s\"", ri->address);
-      rep_hist_note_router_reachable(digest_rcvd, addrp, or_port, now);
-      ri->last_reachable = now;
+               tor_addr_to_str(addrstr, addr, sizeof(addrstr), 1),
+               ri->or_port);
+      if (tor_addr_family(addr) == AF_INET) {
+        rep_hist_note_router_reachable(digest_rcvd, addr, or_port, now);
+        node->last_reachable = now;
+      } else if (tor_addr_family(addr) == AF_INET6) {
+        /* No rephist for IPv6.  */
+        node->last_reachable6 = now;
+      }
     }
   }
 }
@@ -3325,7 +3387,7 @@ dirserv_should_launch_reachability_test(const routerinfo_t *ri,
     /* It just came out of hibernation; launch a reachability test */
     return 1;
   }
-  if (! routers_have_same_or_addr(ri, ri_old)) {
+  if (! routers_have_same_or_addrs(ri, ri_old)) {
     /* Address or port changed; launch a reachability test */
     return 1;
   }
@@ -3338,15 +3400,35 @@ dirserv_should_launch_reachability_test(const routerinfo_t *ri,
 void
 dirserv_single_reachability_test(time_t now, routerinfo_t *router)
 {
+  node_t *node = NULL;
   tor_addr_t router_addr;
+
+  tor_assert(router);
+  node = node_get_mutable_by_id(router->cache_info.identity_digest);
+  tor_assert(node);
+
+  /* IPv4. */
   log_debug(LD_OR,"Testing reachability of %s at %s:%u.",
             router->nickname, router->address, router->or_port);
   /* Remember when we started trying to determine reachability */
-  if (!router->testing_since)
-    router->testing_since = now;
+  if (!node->testing_since)
+    node->testing_since = now;
   tor_addr_from_ipv4h(&router_addr, router->addr);
   connection_or_connect(&router_addr, router->or_port,
                         router->cache_info.identity_digest);
+
+  /* Possible IPv6. */
+  if (!tor_addr_is_null(&router->ipv6_addr)) {
+    char addrstr[TOR_ADDR_BUF_LEN];
+    log_debug(LD_OR, "Testing reachability of %s at %s:%u.",
+              router->nickname,
+              tor_addr_to_str(addrstr, &router->ipv6_addr, sizeof(addrstr), 1),
+              router->ipv6_orport);
+    if (!node->testing_since6)
+      node->testing_since6 = now;
+    connection_or_connect(&router->ipv6_addr, router->ipv6_orport,
+                          router->cache_info.identity_digest);
+  }
 }
 
 /** Auth dir server only: load balance such that we only

@@ -290,37 +290,6 @@ _tor_free(void *mem)
   tor_free(mem);
 }
 
-#if defined(HAVE_MALLOC_GOOD_SIZE) && !defined(HAVE_MALLOC_GOOD_SIZE_PROTOTYPE)
-/* Some version of Mac OSX have malloc_good_size in their libc, but not
- * actually defined in malloc/malloc.h.  We detect this and work around it by
- * prototyping.
- */
-extern size_t malloc_good_size(size_t size);
-#endif
-
-/** Allocate and return a chunk of memory of size at least *<b>size</b>, using
- * the same resources we would use to malloc *<b>sizep</b>.  Set *<b>sizep</b>
- * to the number of usable bytes in the chunk of memory. */
-void *
-_tor_malloc_roundup(size_t *sizep DMALLOC_PARAMS)
-{
-#ifdef HAVE_MALLOC_GOOD_SIZE
-  tor_assert(*sizep < SIZE_T_CEILING);
-  *sizep = malloc_good_size(*sizep);
-  return _tor_malloc(*sizep DMALLOC_FN_ARGS);
-#elif 0 && defined(HAVE_MALLOC_USABLE_SIZE) && !defined(USE_DMALLOC)
-  /* Never use malloc_usable_size(); it makes valgrind really unhappy,
-   * and doesn't win much in terms of usable space where it exists. */
-  void *result;
-  tor_assert(*sizep < SIZE_T_CEILING);
-  result = _tor_malloc(*sizep DMALLOC_FN_ARGS);
-  *sizep = malloc_usable_size(result);
-  return result;
-#else
-  return _tor_malloc(*sizep DMALLOC_FN_ARGS);
-#endif
-}
-
 /** Call the platform malloc info function, and dump the results to the log at
  * level <b>severity</b>.  If no such function exists, do nothing. */
 void
@@ -653,6 +622,16 @@ fast_memcmpstart(const void *mem, size_t memlen,
   if (memlen < plen)
     return -1;
   return fast_memcmp(mem, prefix, plen);
+}
+
+/** Given a nul-terminated string s, set every character before the nul
+ * to zero. */
+void
+tor_strclear(char *s)
+{
+  while (*s) {
+    *s++ = '\0';
+  }
 }
 
 /** Return a pointer to the first char of s that is not whitespace and
@@ -2684,9 +2663,9 @@ digit_to_num(char d)
  * success, store the result in <b>out</b>, advance bufp to the next
  * character, and return 0.  On failure, return -1. */
 static int
-scan_unsigned(const char **bufp, unsigned *out, int width, int base)
+scan_unsigned(const char **bufp, unsigned long *out, int width, int base)
 {
-  unsigned result = 0;
+  unsigned long result = 0;
   int scanned_so_far = 0;
   const int hex = base==16;
   tor_assert(base == 10 || base == 16);
@@ -2698,8 +2677,8 @@ scan_unsigned(const char **bufp, unsigned *out, int width, int base)
   while (**bufp && (hex?TOR_ISXDIGIT(**bufp):TOR_ISDIGIT(**bufp))
          && scanned_so_far < width) {
     int digit = hex?hex_decode_digit(*(*bufp)++):digit_to_num(*(*bufp)++);
-    unsigned new_result = result * base + digit;
-    if (new_result > UINT32_MAX || new_result < result)
+    unsigned long new_result = result * base + digit;
+    if (new_result < result)
       return -1; /* over/underflow. */
     result = new_result;
     ++scanned_so_far;
@@ -2709,6 +2688,89 @@ scan_unsigned(const char **bufp, unsigned *out, int width, int base)
     return -1;
 
   *out = result;
+  return 0;
+}
+
+/** Helper: Read an signed int from *<b>bufp</b> of up to <b>width</b>
+ * characters.  (Handle arbitrary width if <b>width</b> is less than 0.)  On
+ * success, store the result in <b>out</b>, advance bufp to the next
+ * character, and return 0.  On failure, return -1. */
+static int
+scan_signed(const char **bufp, long *out, int width)
+{
+  int neg = 0;
+  unsigned long result = 0;
+
+  if (!bufp || !*bufp || !out)
+    return -1;
+  if (width<0)
+    width=MAX_SCANF_WIDTH;
+
+  if (**bufp == '-') {
+    neg = 1;
+    ++*bufp;
+    --width;
+  }
+
+  if (scan_unsigned(bufp, &result, width, 10) < 0)
+    return -1;
+
+  if (neg) {
+    if (result > ((unsigned long)LONG_MAX) + 1)
+      return -1; /* Underflow */
+    *out = -(long)result;
+  } else {
+    if (result > LONG_MAX)
+      return -1; /* Overflow */
+    *out = (long)result;
+  }
+
+  return 0;
+}
+
+/** Helper: Read a decimal-formatted double from *<b>bufp</b> of up to
+ * <b>width</b> characters.  (Handle arbitrary width if <b>width</b> is less
+ * than 0.)  On success, store the result in <b>out</b>, advance bufp to the
+ * next character, and return 0.  On failure, return -1. */
+static int
+scan_double(const char **bufp, double *out, int width)
+{
+  int neg = 0;
+  double result = 0;
+  int scanned_so_far = 0;
+
+  if (!bufp || !*bufp || !out)
+    return -1;
+  if (width<0)
+    width=MAX_SCANF_WIDTH;
+
+  if (**bufp == '-') {
+    neg = 1;
+    ++*bufp;
+  }
+
+  while (**bufp && TOR_ISDIGIT(**bufp) && scanned_so_far < width) {
+    const int digit = digit_to_num(*(*bufp)++);
+    result = result * 10 + digit;
+    ++scanned_so_far;
+  }
+  if (**bufp == '.') {
+    double fracval = 0, denominator = 1;
+    ++*bufp;
+    ++scanned_so_far;
+    while (**bufp && TOR_ISDIGIT(**bufp) && scanned_so_far < width) {
+      const int digit = digit_to_num(*(*bufp)++);
+      fracval = fracval * 10 + digit;
+      denominator *= 10;
+      ++scanned_so_far;
+    }
+    result += fracval / denominator;
+  }
+
+  if (!scanned_so_far) /* No actual digits scanned */
+    return -1;
+
+  *out = neg ? -result : result;
   return 0;
 }
 
@@ -2748,6 +2810,7 @@ tor_vsscanf(const char *buf, const char *pattern, va_list ap)
       }
     } else {
       int width = -1;
+      int longmod = 0;
       ++pattern;
       if (TOR_ISDIGIT(*pattern)) {
         width = digit_to_num(*pattern++);
@@ -2760,17 +2823,57 @@ tor_vsscanf(const char *buf, const char *pattern, va_list ap)
         if (!width) /* No zero-width things. */
           return -1;
       }
+      if (*pattern == 'l') {
+        longmod = 1;
+        ++pattern;
+      }
       if (*pattern == 'u' || *pattern == 'x') {
-        unsigned *u = va_arg(ap, unsigned *);
+        unsigned long u;
         const int base = (*pattern == 'u') ? 10 : 16;
         if (!*buf)
           return n_matched;
-        if (scan_unsigned(&buf, u, width, base)<0)
+        if (scan_unsigned(&buf, &u, width, base)<0)
           return n_matched;
+        if (longmod) {
+          unsigned long *out = va_arg(ap, unsigned long *);
+          *out = u;
+        } else {
+          unsigned *out = va_arg(ap, unsigned *);
+          if (u > UINT_MAX)
+            return n_matched;
+          *out = (unsigned) u;
+        }
+        ++pattern;
+        ++n_matched;
+      } else if (*pattern == 'f') {
+        double *d = va_arg(ap, double *);
+        if (!longmod)
+          return -1; /* float not supported */
+        if (!*buf)
+          return n_matched;
+        if (scan_double(&buf, d, width)<0)
+          return n_matched;
+        ++pattern;
+        ++n_matched;
+      } else if (*pattern == 'd') {
+        long lng=0;
+        if (scan_signed(&buf, &lng, width)<0)
+          return n_matched;
+        if (longmod) {
+          long *out = va_arg(ap, long *);
+          *out = lng;
+        } else {
+          int *out = va_arg(ap, int *);
+          if (lng < INT_MIN || lng > INT_MAX)
+            return n_matched;
+          *out = (int)lng;
+        }
         ++pattern;
         ++n_matched;
       } else if (*pattern == 's') {
         char *s = va_arg(ap, char *);
+        if (longmod)
+          return -1;
         if (width < 0)
           return -1;
         if (scan_string(&buf, s, width)<0)
@@ -2779,6 +2882,8 @@ tor_vsscanf(const char *buf, const char *pattern, va_list ap)
         ++n_matched;
       } else if (*pattern == 'c') {
         char *ch = va_arg(ap, char *);
+        if (longmod)
+          return -1;
         if (width != -1)
           return -1;
         if (!*buf)
@@ -2789,6 +2894,8 @@ tor_vsscanf(const char *buf, const char *pattern, va_list ap)
       } else if (*pattern == '%') {
         if (*buf != '%')
           return n_matched;
+        if (longmod)
+          return -1;
         ++buf;
         ++pattern;
       } else {
@@ -2802,9 +2909,14 @@ tor_vsscanf(const char *buf, const char *pattern, va_list ap)
 
 /** Minimal sscanf replacement: parse <b>buf</b> according to <b>pattern</b>
  * and store the results in the corresponding argument fields.  Differs from
- * sscanf in that it: Only handles %u, %x, %c and %Ns.  Does not handle
- * arbitrarily long widths. %u and %x do not consume any space.  Is
- * locale-independent.  Returns -1 on malformed patterns.
+ * sscanf in that:
+ * <ul><li>It only handles %u, %lu, %x, %lx, %<NUM>s, %d, %ld, %lf, and %c.
+ *     <li>It only handles decimal inputs for %lf. (12.3, not 1.23e1)
+ *     <li>It does not handle arbitrarily long widths.
+ *     <li>Numbers do not consume any space characters.
+ *     <li>It is locale-independent.
+ *     <li>%u and %x do not consume any space.
+ *     <li>It returns -1 on malformed patterns.</ul>
  *
  * (As with other locale-independent functions, we need this to parse data that
  * is in ASCII without worrying that the C library's locale-handling will make
