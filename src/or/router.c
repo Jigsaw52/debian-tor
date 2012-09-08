@@ -27,6 +27,7 @@
 #include "router.h"
 #include "routerlist.h"
 #include "routerparse.h"
+#include "transports.h"
 
 /**
  * \file router.c
@@ -879,6 +880,21 @@ decide_to_advertise_dirport(const or_options_t *options, uint16_t dir_port)
   return advertising ? dir_port : 0;
 }
 
+/** Allocate and return a new extend_info_t that can be used to build
+ * a circuit to or through the router <b>r</b>. Use the primary
+ * address of the router unless <b>for_direct_connect</b> is true, in
+ * which case the preferred address is used instead. */
+static extend_info_t *
+extend_info_from_router(const routerinfo_t *r)
+{
+  tor_addr_port_t ap;
+  tor_assert(r);
+
+  router_get_prim_orport(r, &ap);
+  return extend_info_alloc(r->nickname, r->cache_info.identity_digest,
+                           r->onion_pkey, &ap.addr, ap.port);
+}
+
 /** Some time has passed, or we just got new directory information.
  * See if we currently believe our ORPort or DirPort to be
  * unreachable. If so, launch a new test for it.
@@ -920,12 +936,11 @@ consider_testing_reachability(int test_or, int test_dir)
   }
 
   if (test_or && (!orport_reachable || !circuit_enough_testing_circs())) {
-    extend_info_t *ei;
+    extend_info_t *ei = extend_info_from_router(me);
+    /* XXX IPv6 self testing */
     log_info(LD_CIRC, "Testing %s of my ORPort: %s:%d.",
              !orport_reachable ? "reachability" : "bandwidth",
              me->address, me->or_port);
-    /* XXX IPv6 self testing IPv6 orports will need pref_addr */
-    ei = extend_info_from_router(me, 0);
     circuit_launch_by_extend_info(CIRCUIT_PURPOSE_TESTING, ei,
                             CIRCLAUNCH_NEED_CAPACITY|CIRCLAUNCH_IS_INTERNAL);
     extend_info_free(ei);
@@ -1539,8 +1554,9 @@ router_rebuild_descriptor(int force)
   ri->cache_info.published_on = time(NULL);
   ri->onion_pkey = crypto_pk_dup_key(get_onion_key()); /* must invoke from
                                                         * main thread */
-  if (options->BridgeRelay) {
-    /* For now, only bridges advertise an ipv6 or-address.  And only one. */
+
+  /* For now, at most one IPv6 or-address is being advertised. */
+  {
     const port_cfg_t *ipv6_orport = NULL;
     SMARTLIST_FOREACH_BEGIN(get_configured_ports(), const port_cfg_t *, p) {
       if (p->type == CONN_TYPE_OR_LISTENER &&
@@ -1565,6 +1581,7 @@ router_rebuild_descriptor(int force)
       ri->ipv6_orport = ipv6_orport->port;
     }
   }
+
   ri->identity_pkey = crypto_pk_dup_key(get_server_identity_key());
   if (crypto_pk_get_digest(ri->identity_pkey,
                            ri->cache_info.identity_digest)<0) {
@@ -2054,9 +2071,9 @@ router_dump_router_to_string(char *s, size_t maxlen, routerinfo_t *router,
                     "router %s %s %d 0 %d\n"
                     "%s"
                     "platform %s\n"
-                    "opt protocols Link 1 2 Circuit 1\n"
+                    "protocols Link 1 2 Circuit 1\n"
                     "published %s\n"
-                    "opt fingerprint %s\n"
+                    "fingerprint %s\n"
                     "uptime %ld\n"
                     "bandwidth %d %d %d\n"
                     "%s%s%s%s"
@@ -2075,15 +2092,15 @@ router_dump_router_to_string(char *s, size_t maxlen, routerinfo_t *router,
     (int) router->bandwidthrate,
     (int) router->bandwidthburst,
     (int) router->bandwidthcapacity,
-    has_extra_info_digest ? "opt extra-info-digest " : "",
+    has_extra_info_digest ? "extra-info-digest " : "",
     has_extra_info_digest ? extra_info_digest : "",
     has_extra_info_digest ? "\n" : "",
-    options->DownloadExtraInfo ? "opt caches-extra-info\n" : "",
+    options->DownloadExtraInfo ? "caches-extra-info\n" : "",
     onion_pkey, identity_pkey,
     family_line,
-    we_are_hibernating() ? "opt hibernating 1\n" : "",
-    options->HidServDirectoryV2 ? "opt hidden-service-dir\n" : "",
-    options->AllowSingleHopExits ? "opt allow-single-hop-exits\n" : "");
+    we_are_hibernating() ? "hibernating 1\n" : "",
+    options->HidServDirectoryV2 ? "hidden-service-dir\n" : "",
+    options->AllowSingleHopExits ? "allow-single-hop-exits\n" : "");
 
   tor_free(family_line);
   tor_free(onion_pkey);
@@ -2194,40 +2211,24 @@ router_get_prim_orport(const routerinfo_t *router, tor_addr_port_t *ap_out)
   ap_out->port = router->or_port;
 }
 
-/** Return 1 if we prefer the IPv6 address and OR TCP port of
- * <b>router</b>, else 0.
- *
- *  We prefer the IPv6 address if the router has one and
- *  i) the routerinfo_t says so
- *  or
- *  ii) the router has no IPv4 address.  */
+/** Return 1 if any of <b>router</b>'s addresses are <b>addr</b>.
+ *   Otherwise return 0. */
 int
-router_ipv6_preferred(const routerinfo_t *router)
+router_has_addr(const routerinfo_t *router, const tor_addr_t *addr)
 {
-  return (!tor_addr_is_null(&router->ipv6_addr)
-          && (router->ipv6_preferred || router->addr == 0));
+  return
+    tor_addr_eq_ipv4h(addr, router->addr) ||
+    tor_addr_eq(&router->ipv6_addr, addr);
 }
 
-/** Copy the preferred OR port (IP address and TCP port) for
- * <b>router</b> into *<b>addr_out</b>.  */
-void
-router_get_pref_orport(const routerinfo_t *router, tor_addr_port_t *ap_out)
+int
+router_has_orport(const routerinfo_t *router, const tor_addr_port_t *orport)
 {
-  if (router_ipv6_preferred(router))
-    router_get_pref_ipv6_orport(router, ap_out);
-  else
-    router_get_prim_orport(router, ap_out);
-}
-
-/** Copy the preferred IPv6 OR port (IP address and TCP port) for
- * <b>router</b> into *<b>ap_out</b>. */
-void
-router_get_pref_ipv6_orport(const routerinfo_t *router,
-                            tor_addr_port_t *ap_out)
-{
-  tor_assert(ap_out != NULL);
-  tor_addr_copy(&ap_out->addr, &router->ipv6_addr);
-  ap_out->port = router->ipv6_orport;
+  return
+    (tor_addr_eq_ipv4h(&orport->addr, router->addr) &&
+     orport->port == router->or_port) ||
+    (tor_addr_eq(&orport->addr, &router->ipv6_addr) &&
+     orport->port == router->ipv6_orport);
 }
 
 /** Load the contents of <b>filename</b>, find the last line starting with
@@ -2343,6 +2344,13 @@ extrainfo_dump_to_string(char **s_out, extrainfo_t *extrainfo,
                         "conn-bi-direct", now, &contents) > 0) {
       smartlist_add(chunks, contents);
     }
+  }
+
+  /* Add information about the pluggable transports we support. */
+  if (options->ServerTransportPlugin) {
+    char *pluggable_transports = pt_get_extra_info_descriptor_string();
+    if (pluggable_transports)
+      smartlist_add(chunks, pluggable_transports);
   }
 
   if (should_record_bridge_info(options) && write_stats_to_extrainfo) {
@@ -2752,5 +2760,32 @@ router_free_all(void)
     SMARTLIST_FOREACH(warned_nonexistent_family, char *, cp, tor_free(cp));
     smartlist_free(warned_nonexistent_family);
   }
+}
+
+/** Return a smartlist of tor_addr_port_t's with all the OR ports of
+    <b>ri</b>. Note that freeing of the items in the list as well as
+    the smartlist itself is the callers responsibility.
+
+    XXX duplicating code from node_get_all_orports(). */
+smartlist_t *
+router_get_all_orports(const routerinfo_t *ri)
+{
+  smartlist_t *sl = smartlist_new();
+  tor_assert(ri);
+
+  if (ri->addr != 0) {
+    tor_addr_port_t *ap = tor_malloc(sizeof(tor_addr_port_t));
+    tor_addr_from_ipv4h(&ap->addr, ri->addr);
+    ap->port = ri->or_port;
+    smartlist_add(sl, ap);
+  }
+  if (!tor_addr_is_null(&ri->ipv6_addr)) {
+    tor_addr_port_t *ap = tor_malloc(sizeof(tor_addr_port_t));
+    tor_addr_copy(&ap->addr, &ri->ipv6_addr);
+    ap->port = ri->or_port;
+    smartlist_add(sl, ap);
+  }
+
+  return sl;
 }
 

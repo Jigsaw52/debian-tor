@@ -1343,9 +1343,11 @@ mark_all_trusteddirservers_up(void)
 
 /** Return true iff r1 and r2 have the same address and OR port. */
 int
-routers_have_same_or_addr(const routerinfo_t *r1, const routerinfo_t *r2)
+routers_have_same_or_addrs(const routerinfo_t *r1, const routerinfo_t *r2)
 {
-  return r1->addr == r2->addr && r1->or_port == r2->or_port;
+  return r1->addr == r2->addr && r1->or_port == r2->or_port &&
+    tor_addr_eq(&r1->ipv6_addr, &r2->ipv6_addr) &&
+    r1->ipv6_orport == r2->ipv6_orport;
 }
 
 /** Reset all internal variables used to count failed downloads of network
@@ -2890,7 +2892,7 @@ routerlist_insert(routerlist_t *rl, routerinfo_t *ri)
               &ri->cache_info);
   smartlist_add(rl->routers, ri);
   ri->cache_info.routerlist_index = smartlist_len(rl->routers) - 1;
-  nodelist_add_routerinfo(ri);
+  nodelist_set_routerinfo(ri, NULL);
   router_dir_info_changed();
 #ifdef DEBUG_ROUTERLIST
   routerlist_assert_ok(rl);
@@ -3119,8 +3121,11 @@ routerlist_replace(routerlist_t *rl, routerinfo_t *ri_old,
   tor_assert(0 <= idx && idx < smartlist_len(rl->routers));
   tor_assert(smartlist_get(rl->routers, idx) == ri_old);
 
-  nodelist_remove_routerinfo(ri_old);
-  nodelist_add_routerinfo(ri_new);
+  {
+    routerinfo_t *ri_old_tmp=NULL;
+    nodelist_set_routerinfo(ri_new, &ri_old_tmp);
+    tor_assert(ri_old == ri_old_tmp);
+  }
 
   router_dir_info_changed();
   if (idx >= 0) {
@@ -3457,11 +3462,6 @@ router_add_to_routerlist(routerinfo_t *router, const char **msg,
       /* Same key, and either new, or listed in the consensus. */
       log_debug(LD_DIR, "Replacing entry for router %s",
                 router_describe(router));
-      if (routers_have_same_or_addr(router, old_router)) {
-        /* these carry over when the address and orport are unchanged. */
-        router->last_reachable = old_router->last_reachable;
-        router->testing_since = old_router->testing_since;
-      }
       routerlist_replace(routerlist, old_router, router);
       if (!from_cache) {
         signed_desc_append_to_journal(&router->cache_info,
@@ -4440,11 +4440,6 @@ launch_descriptor_downloads(int purpose,
       }
     }
   }
-  /* XXX should we consider having even the dir mirrors delay
-   * a little bit, so we don't load the authorities as much? -RD
-   * I don't think so.  If we do, clients that want those descriptors may
-   * not actually find them if the caches haven't got them yet. -NM
-   */
 
   if (! should_delay && n_downloadable) {
     int i, n_per_request;
@@ -4484,9 +4479,9 @@ launch_descriptor_downloads(int purpose,
       rtr_plural = "s";
 
     log_info(LD_DIR,
-             "Launching %d request%s for %d router%s, %d at a time",
-             CEIL_DIV(n_downloadable, n_per_request),
-             req_plural, n_downloadable, rtr_plural, n_per_request);
+             "Launching %d request%s for %d %s%s, %d at a time",
+             CEIL_DIV(n_downloadable, n_per_request), req_plural,
+             n_downloadable, descname, rtr_plural, n_per_request);
     smartlist_sort_digests(downloadable);
     for (i=0; i < n_downloadable; i += n_per_request) {
       initiate_descriptor_downloads(source, purpose,

@@ -2,6 +2,8 @@
 // See LICENSE for licensing information
 // This is an asciidoc file used to generate the manpage/html reference.
 // Learn asciidoc on http://www.methods.co.nz/asciidoc/userguide.html
+:man source:   Tor
+:man manual:   Tor Manual
 TOR(1)
 ======
 
@@ -1169,6 +1171,18 @@ The following options are useful only for clients (that is, if
     If no defaults are available there, these options default to 20, .70,
     0.0, 200, and 4 respectively.
 
+**ClientUseIPv6** **0**|**1**::
+    If this option is set to 1, Tor might connect to entry nodes over
+    IPv6. Note that clients configured with an IPv6 address in a
+    **Bridge** line will try connecting over IPv6 even if
+    **ClientUseIPv6** is set to 0. (Default: 0)
+
+**ClientPreferIPv6ORPort** **0**|**1**::
+    If this option is set to 1, Tor prefers an OR port with an IPv6
+    address over one with IPv4 if a given entry node has both. Other
+    things may influence the choice. This option breaks a tie to the
+    favor of IPv6. (Default: 0)
+
 
 SERVER OPTIONS
 --------------
@@ -1732,6 +1746,12 @@ DIRECTORY AUTHORITY SERVER OPTIONS
     When this option is set in addition to **AuthoritativeDirectory**, Tor
     votes on whether to accept relays as hidden service directories.
     (Default: 1)
+
+**AuthDirHasIPv6Connectivity** **0**|**1**::
+    Authoritative directories only. When set to 0, OR ports with an
+    IPv6 address are being accepted without reachability testing.
+    When set to 1, IPv6 OR ports are being tested just like IPv4 OR
+    ports. (Default: 0)
 
 HIDDEN SERVICE OPTIONS
 ----------------------

@@ -3,9 +3,11 @@ dnl Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson
 dnl Copyright (c) 2007-2012, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
-AC_INIT
-AM_INIT_AUTOMAKE(tor, 0.2.3.21-rc)
-AM_CONFIG_HEADER(orconfig.h)
+AC_INIT([tor],[0.2.4.1-alpha])
+AC_CONFIG_SRCDIR([src/or/main.c])
+AM_INIT_AUTOMAKE
+m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
+AC_CONFIG_HEADERS([orconfig.h])
 
 AC_CANONICAL_HOST
 
@@ -316,18 +318,6 @@ AC_CHECK_FUNCS(
         uname \
         vasprintf \
 )
-
-using_custom_malloc=no
-if test x$enable_openbsd_malloc = xyes ; then
-   AC_DEFINE(HAVE_MALLOC_GOOD_SIZE, 1, [Defined if we have the malloc_good_size function])
-   using_custom_malloc=yes
-fi
-if test x$tcmalloc = xyes ; then
-   using_custom_malloc=yes
-fi
-if test $using_custom_malloc = no ; then
-   AC_CHECK_FUNCS(mallinfo malloc_good_size malloc_usable_size)
-fi
 
 if test "$enable_threads" = "yes"; then
   AC_CHECK_HEADERS(pthread.h)
@@ -703,14 +693,6 @@ AC_CHECK_HEADERS(
 
 AC_CHECK_HEADERS(sys/param.h)
 
-TOR_CHECK_PROTOTYPE(malloc_good_size, HAVE_MALLOC_GOOD_SIZE_PROTOTYPE,
-[#ifdef HAVE_MALLOC_H
-#include <malloc.h>
-#endif
-#ifdef HAVE_MALLOC_MALLOC_H
-#include <malloc/malloc.h>
-#endif])
-
 AC_CHECK_HEADERS(net/if.h, net_if_found=1, net_if_found=0,
 [#ifdef HAVE_SYS_TYPES_H
 #include <sys/types.h>
@@ -1032,6 +1014,17 @@ if test x$tcmalloc = xyes ; then
    LDFLAGS="-ltcmalloc $LDFLAGS"
 fi
 
+using_custom_malloc=no
+if test x$enable_openbsd_malloc = xyes ; then
+   using_custom_malloc=yes
+fi
+if test x$tcmalloc = xyes ; then
+   using_custom_malloc=yes
+fi
+if test $using_custom_malloc = no ; then
+   AC_CHECK_FUNCS(mallinfo)
+fi
+
 # By default, we're going to assume we don't have mlockall()
 # bionic and other platforms have various broken mlockall subsystems.
 # Some systems don't have a working mlockall, some aren't linkable,
@@ -1317,23 +1310,12 @@ CPPFLAGS="$CPPFLAGS $TOR_CPPFLAGS_libevent $TOR_CPPFLAGS_openssl $TOR_CPPFLAGS_z
 AC_CONFIG_FILES([
         Doxyfile
         Makefile
-        contrib/Makefile
-        contrib/suse/Makefile
         contrib/suse/tor.sh
         contrib/tor.logrotate
         contrib/tor.sh
         contrib/torctl
         contrib/torify
-        doc/Makefile
-        src/Makefile
-        src/common/Makefile
-        src/config/Makefile
         src/config/torrc.sample
-        src/or/Makefile
-        src/test/Makefile
-        src/tools/Makefile
-        src/tools/tor-fw-helper/Makefile
-        src/win32/Makefile
         tor.spec
 ])
 
@@ -1342,4 +1324,3 @@ AC_OUTPUT
 if test -x /usr/bin/perl && test -x ./contrib/updateVersions.pl ; then
   ./contrib/updateVersions.pl
 fi
-

@@ -40,7 +40,7 @@ typedef struct tor_addr_port_t
   uint16_t port;
 } tor_addr_port_t;
 
-#define TOR_ADDR_NULL {AF_UNSPEC, {0}};
+#define TOR_ADDR_NULL {AF_UNSPEC, {0}}
 
 static INLINE const struct in6_addr *tor_addr_to_in6(const tor_addr_t *a);
 static INLINE uint32_t tor_addr_to_ipv4n(const tor_addr_t *a);
@@ -220,6 +220,8 @@ int addr_mask_cmp_bits(uint32_t a1, uint32_t a2, maskbits_t bits);
 int tor_inet_ntoa(const struct in_addr *in, char *buf, size_t buf_len);
 char *tor_dup_ip(uint32_t addr) ATTR_MALLOC;
 int get_interface_address(int severity, uint32_t *addr);
+
+tor_addr_port_t *tor_addr_port_new(const tor_addr_t *addr, uint16_t port);
 
 #endif
 

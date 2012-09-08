@@ -2608,12 +2608,12 @@ pathbias_get_scale_threshold(const or_options_t *options)
 static int
 pathbias_get_scale_factor(const or_options_t *options)
 {
-#define DFLT_PATH_BIAS_SCALE_FACTOR 4
+#define DFLT_PATH_BIAS_SCALE_FACTOR 2
   if (options->PathBiasScaleFactor >= 1)
     return options->PathBiasScaleFactor;
   else
     return networkstatus_get_param(NULL, "pb_scalefactor",
-                                DFLT_PATH_BIAS_SCALE_THRESHOLD, 1, INT32_MAX);
+                                DFLT_PATH_BIAS_SCALE_FACTOR, 1, INT32_MAX);
 }
 
 static const char *
@@ -2644,6 +2644,14 @@ pathbias_count_first_hop(origin_circuit_t *circ)
   static ratelim_t first_hop_notice_limit =
     RATELIM_INIT(FIRST_HOP_NOTICE_INTERVAL);
   char *rate_msg = NULL;
+
+  /* We can't do path bias accounting without entry guards.
+   * Testing and controller circuits also have no guards. */
+  if (get_options()->UseEntryGuards == 0 ||
+          circ->_base.purpose == CIRCUIT_PURPOSE_TESTING ||
+          circ->_base.purpose == CIRCUIT_PURPOSE_CONTROLLER) {
+    return 0;
+  }
 
   /* Completely ignore one hop circuits */
   if (circ->build_state->onehop_tunnel) {
@@ -2739,6 +2747,14 @@ pathbias_count_success(origin_circuit_t *circ)
     RATELIM_INIT(SUCCESS_NOTICE_INTERVAL);
   char *rate_msg = NULL;
 
+  /* We can't do path bias accounting without entry guards.
+   * Testing and controller circuits also have no guards. */
+  if (get_options()->UseEntryGuards == 0 ||
+          circ->_base.purpose == CIRCUIT_PURPOSE_TESTING ||
+          circ->_base.purpose == CIRCUIT_PURPOSE_CONTROLLER) {
+    return;
+  }
+
   /* Ignore one hop circuits */
   if (circ->build_state->onehop_tunnel) {
     tor_assert(circ->build_state->desired_path_len == 1);
@@ -2772,12 +2788,15 @@ pathbias_count_success(origin_circuit_t *circ)
       }
 
       if (guard->first_hops < guard->circuit_successes) {
-        log_info(LD_BUG, "Unexpectedly high circuit_successes (%u/%u) "
+        log_notice(LD_BUG, "Unexpectedly high circuit_successes (%u/%u) "
                  "for guard %s=%s",
                  guard->circuit_successes, guard->first_hops,
                  guard->nickname, hex_str(guard->identity, DIGEST_LEN));
       }
-    } else {
+    /* In rare cases, CIRCUIT_PURPOSE_TESTING can get converted to
+     * CIRCUIT_PURPOSE_C_MEASURE_TIMEOUT and have no guards here.
+     * No need to log that case. */
+    } else if (circ->_base.purpose != CIRCUIT_PURPOSE_C_MEASURE_TIMEOUT) {
       if ((rate_msg = rate_limit_log(&success_notice_limit,
               approx_time()))) {
         log_info(LD_BUG,
@@ -2822,9 +2841,11 @@ entry_guard_inc_first_hop_count(entry_guard_t *guard)
     if (guard->circuit_successes/((double)guard->first_hops)
         < pathbias_get_disable_rate(options)) {
 
-      log_info(LD_PROTOCOL,
+      /* This message is currently disabled by default. */
+      log_warn(LD_PROTOCOL,
                "Extremely low circuit success rate %u/%u for guard %s=%s. "
-               "This might indicate an attack, or a bug.",
+               "This indicates either an overloaded guard, an attack, or "
+               "a bug.",
                guard->circuit_successes, guard->first_hops, guard->nickname,
                hex_str(guard->identity, DIGEST_LEN));
 
@@ -2835,7 +2856,7 @@ entry_guard_inc_first_hop_count(entry_guard_t *guard)
                < pathbias_get_notice_rate(options)
                && !guard->path_bias_notice) {
       guard->path_bias_notice = 1;
-      log_info(LD_PROTOCOL,
+      log_notice(LD_PROTOCOL,
                  "Low circuit success rate %u/%u for guard %s=%s.",
                  guard->circuit_successes, guard->first_hops, guard->nickname,
                  hex_str(guard->identity, DIGEST_LEN));
@@ -2845,8 +2866,18 @@ entry_guard_inc_first_hop_count(entry_guard_t *guard)
   /* If we get a ton of circuits, just scale everything down */
   if (guard->first_hops > (unsigned)pathbias_get_scale_threshold(options)) {
     const int scale_factor = pathbias_get_scale_factor(options);
-    guard->first_hops /= scale_factor;
-    guard->circuit_successes /= scale_factor;
+    /* For now, only scale if there will be no rounding error...
+     * XXX024: We want to switch to a real moving average for 0.2.4. */
+    if ((guard->first_hops % scale_factor) == 0 &&
+        (guard->circuit_successes % scale_factor) == 0) {
+      log_info(LD_PROTOCOL,
+               "Scaling pathbias counts to (%u/%u)/%d for guard %s=%s",
+               guard->circuit_successes, guard->first_hops,
+               scale_factor, guard->nickname, hex_str(guard->identity,
+               DIGEST_LEN));
+      guard->first_hops /= scale_factor;
+      guard->circuit_successes /= scale_factor;
+    }
   }
   guard->first_hops++;
   log_info(LD_PROTOCOL, "Got success count %u/%u for guard %s=%s",
@@ -3761,12 +3792,10 @@ onion_extend_cpath(origin_circuit_t *circ)
   } else if (cur_len == 0) { /* picking first node */
     const node_t *r = choose_good_entry_server(purpose, state);
     if (r) {
-      /* If we're extending to a bridge, use the preferred address
-         rather than the primary, for potentially extending to an IPv6
-         bridge.  */
-      int use_pref_addr = (r->ri != NULL &&
-                           r->ri->purpose == ROUTER_PURPOSE_BRIDGE);
-      info = extend_info_from_node(r, use_pref_addr);
+      /* If we're a client, use the preferred address rather than the
+         primary address, for potentially connecting to an IPv6 OR
+         port. */
+      info = extend_info_from_node(r, server_mode(get_options()) == 0);
       tor_assert(info);
     }
   } else {
@@ -3832,47 +3861,45 @@ extend_info_alloc(const char *nickname, const char *digest,
   return info;
 }
 
-/** Allocate and return a new extend_info_t that can be used to build
- * a circuit to or through the router <b>r</b>. Use the primary
- * address of the router unless <b>for_direct_connect</b> is true, in
- * which case the preferred address is used instead. */
-extend_info_t *
-extend_info_from_router(const routerinfo_t *r, int for_direct_connect)
-{
-  tor_addr_port_t ap;
-  tor_assert(r);
-
-  if (for_direct_connect)
-    router_get_pref_orport(r, &ap);
-  else
-    router_get_prim_orport(r, &ap);
-  return extend_info_alloc(r->nickname, r->cache_info.identity_digest,
-                           r->onion_pkey, &ap.addr, ap.port);
-}
-
 /** Allocate and return a new extend_info that can be used to build a
  * circuit to or through the node <b>node</b>. Use the primary address
- * of the node unless <b>for_direct_connect</b> is true, in which case
- * the preferred address is used instead. May return NULL if there is
- * not enough info about <b>node</b> to extend to it--for example, if
- * there is no routerinfo_t or microdesc_t.
+ * of the node (i.e. its IPv4 address) unless
+ * <b>for_direct_connect</b> is true, in which case the preferred
+ * address is used instead. May return NULL if there is not enough
+ * info about <b>node</b> to extend to it--for example, if there is no
+ * routerinfo_t or microdesc_t.
  **/
 extend_info_t *
 extend_info_from_node(const node_t *node, int for_direct_connect)
 {
-  if (node->ri) {
-    return extend_info_from_router(node->ri, for_direct_connect);
-  } else if (node->rs && node->md) {
-    tor_addr_t addr;
-    tor_addr_from_ipv4h(&addr, node->rs->addr);
+  tor_addr_port_t ap;
+
+  if (node->ri == NULL && (node->rs == NULL || node->md == NULL))
+    return NULL;
+
+  if (for_direct_connect)
+    node_get_pref_orport(node, &ap);
+  else
+    node_get_prim_orport(node, &ap);
+
+  log_debug(LD_CIRC, "using %s:%d for %s",
+            fmt_and_decorate_addr(&ap.addr), ap.port,
+            node->ri ? node->ri->nickname : node->rs->nickname);
+
+  if (node->ri)
+    return extend_info_alloc(node->ri->nickname,
+                             node->identity,
+                             node->ri->onion_pkey,
+                             &ap.addr,
+                             ap.port);
+  else if (node->rs && node->md)
     return extend_info_alloc(node->rs->nickname,
                              node->identity,
                              node->md->onion_pkey,
-                             &addr,
-                             node->rs->or_port);
-  } else {
+                             &ap.addr,
+                             ap.port);
+  else
     return NULL;
-  }
 }
 
 /** Release storage held by an extend_info_t struct. */
@@ -5150,203 +5177,37 @@ bridge_free(bridge_info_t *bridge)
   tor_free(bridge);
 }
 
-/** A list of pluggable transports found in torrc. */
-static smartlist_t *transport_list = NULL;
-
-/** Mark every entry of the transport list to be removed on our next call to
- * sweep_transport_list unless it has first been un-marked. */
-void
-mark_transport_list(void)
+/** If we have a bridge configured whose digest matches <b>digest</b>, or a
+ * bridge with no known digest whose address matches any of the
+ * tor_addr_port_t's in <b>orports</b>, return that bridge.  Else return
+ * NULL. */
+static bridge_info_t *
+get_configured_bridge_by_orports_digest(const char *digest,
+                                        const smartlist_t *orports)
 {
-  if (!transport_list)
-    transport_list = smartlist_new();
-  SMARTLIST_FOREACH(transport_list, transport_t *, t,
-                    t->marked_for_removal = 1);
-}
-
-/** Remove every entry of the transport list that was marked with
- * mark_transport_list if it has not subsequently been un-marked. */
-void
-sweep_transport_list(void)
-{
-  if (!transport_list)
-    transport_list = smartlist_new();
-  SMARTLIST_FOREACH_BEGIN(transport_list, transport_t *, t) {
-    if (t->marked_for_removal) {
-      SMARTLIST_DEL_CURRENT(transport_list, t);
-      transport_free(t);
-    }
-  } SMARTLIST_FOREACH_END(t);
-}
-
-/** Initialize the pluggable transports list to empty, creating it if
- *  needed. */
-void
-clear_transport_list(void)
-{
-  if (!transport_list)
-    transport_list = smartlist_new();
-  SMARTLIST_FOREACH(transport_list, transport_t *, t, transport_free(t));
-  smartlist_clear(transport_list);
-}
-
-/** Free the pluggable transport struct <b>transport</b>. */
-void
-transport_free(transport_t *transport)
-{
-  if (!transport)
-    return;
-
-  tor_free(transport->name);
-  tor_free(transport);
-}
-
-/** Returns the transport in our transport list that has the name <b>name</b>.
- *  Else returns NULL. */
-transport_t *
-transport_get_by_name(const char *name)
-{
-  tor_assert(name);
-
-  if (!transport_list)
+  if (!bridge_list)
     return NULL;
-
-  SMARTLIST_FOREACH_BEGIN(transport_list, transport_t *, transport) {
-    if (!strcmp(transport->name, name))
-      return transport;
-  } SMARTLIST_FOREACH_END(transport);
-
+  SMARTLIST_FOREACH_BEGIN(bridge_list, bridge_info_t *, bridge)
+    {
+      if (tor_digest_is_zero(bridge->identity)) {
+        SMARTLIST_FOREACH_BEGIN(orports, tor_addr_port_t *, ap)
+          {
+            if (tor_addr_compare(&bridge->addr, &ap->addr, CMP_EXACT) == 0 &&
+                bridge->port == ap->port)
+              return bridge;
+          }
+        SMARTLIST_FOREACH_END(ap);
+      }
+      if (digest && tor_memeq(bridge->identity, digest, DIGEST_LEN))
+        return bridge;
+    }
+  SMARTLIST_FOREACH_END(bridge);
   return NULL;
 }
 
-/** Returns a transport_t struct for a transport proxy supporting the
-    protocol <b>name</b> listening at <b>addr</b>:<b>port</b> using
-    SOCKS version <b>socks_ver</b>. */
-transport_t *
-transport_new(const tor_addr_t *addr, uint16_t port,
-                 const char *name, int socks_ver)
-{
-  transport_t *t = tor_malloc_zero(sizeof(transport_t));
-
-  tor_addr_copy(&t->addr, addr);
-  t->port = port;
-  t->name = tor_strdup(name);
-  t->socks_version = socks_ver;
-
-  return t;
-}
-
-/** Resolve any conflicts that the insertion of transport <b>t</b>
- *  might cause.
- *  Return 0 if <b>t</b> is OK and should be registered, 1 if there is
- *  a transport identical to <b>t</b> already registered and -1 if
- *  <b>t</b> cannot be added due to conflicts. */
-static int
-transport_resolve_conflicts(transport_t *t)
-{
-  /* This is how we resolve transport conflicts:
-
-     If there is already a transport with the same name and addrport,
-     we either have duplicate torrc lines OR we are here post-HUP and
-     this transport was here pre-HUP as well. In any case, mark the
-     old transport so that it doesn't get removed and ignore the new
-     one. Our caller has to free the new transport so we return '1' to
-     signify this.
-
-     If there is already a transport with the same name but different
-     addrport:
-     * if it's marked for removal, it means that it either has a lower
-     priority than 't' in torrc (otherwise the mark would have been
-     cleared by the paragraph above), or it doesn't exist at all in
-     the post-HUP torrc. We destroy the old transport and register 't'.
-     * if it's *not* marked for removal, it means that it was newly
-     added in the post-HUP torrc or that it's of higher priority, in
-     this case we ignore 't'. */
-  transport_t *t_tmp = transport_get_by_name(t->name);
-  if (t_tmp) { /* same name */
-    if (tor_addr_eq(&t->addr, &t_tmp->addr) && (t->port == t_tmp->port)) {
-      /* same name *and* addrport */
-      t_tmp->marked_for_removal = 0;
-      return 1;
-    } else { /* same name but different addrport */
-      if (t_tmp->marked_for_removal) { /* marked for removal */
-        log_notice(LD_GENERAL, "You tried to add transport '%s' at '%s:%u' "
-                   "but there was already a transport marked for deletion at "
-                   "'%s:%u'. We deleted the old transport and registered the "
-                   "new one.", t->name, fmt_addr(&t->addr), t->port,
-                   fmt_addr(&t_tmp->addr), t_tmp->port);
-        smartlist_remove(transport_list, t_tmp);
-        transport_free(t_tmp);
-      } else { /* *not* marked for removal */
-        log_notice(LD_GENERAL, "You tried to add transport '%s' at '%s:%u' "
-                   "but the same transport already exists at '%s:%u'. "
-                   "Skipping.", t->name, fmt_addr(&t->addr), t->port,
-                   fmt_addr(&t_tmp->addr), t_tmp->port);
-        return -1;
-      }
-    }
-  }
-
-  return 0;
-}
-
-/** Add transport <b>t</b> to the internal list of pluggable
- *  transports.
- *  Returns 0 if the transport was added correctly, 1 if the same
- *  transport was already registered (in this case the caller must
- *  free the transport) and -1 if there was an error.  */
-int
-transport_add(transport_t *t)
-{
-  int r;
-  tor_assert(t);
-
-  r = transport_resolve_conflicts(t);
-
-  switch (r) {
-  case 0: /* should register transport */
-    if (!transport_list)
-      transport_list = smartlist_new();
-    smartlist_add(transport_list, t);
-    return 0;
-  default: /* let our caller know the return code */
-    return r;
-  }
-}
-
-/** Remember a new pluggable transport proxy at <b>addr</b>:<b>port</b>.
- *  <b>name</b> is set to the name of the protocol this proxy uses.
- *  <b>socks_ver</b> is set to the SOCKS version of the proxy. */
-int
-transport_add_from_config(const tor_addr_t *addr, uint16_t port,
-                          const char *name, int socks_ver)
-{
-  transport_t *t = transport_new(addr, port, name, socks_ver);
-
-  int r = transport_add(t);
-
-  switch (r) {
-  case -1:
-  default:
-    log_notice(LD_GENERAL, "Could not add transport %s at %s:%u. Skipping.",
-               t->name, fmt_addr(&t->addr), t->port);
-    transport_free(t);
-    return -1;
-  case 1:
-    log_info(LD_GENERAL, "Succesfully registered transport %s at %s:%u.",
-             t->name, fmt_addr(&t->addr), t->port);
-     transport_free(t); /* falling */
-     return 0;
-  case 0:
-    log_info(LD_GENERAL, "Succesfully registered transport %s at %s:%u.",
-             t->name, fmt_addr(&t->addr), t->port);
-    return 0;
-  }
-}
-
-/** Return a bridge pointer if <b>ri</b> is one of our known bridges
- * (either by comparing keys if possible, else by comparing addr/port).
- * Else return NULL. */
+/** If we have a bridge configured whose digest matches <b>digest</b>, or a
+ * bridge with no known digest whose address matches <b>addr</b>:<b>/port</b>,
+ * return that bridge.  Else return NULL. */
 static bridge_info_t *
 get_configured_bridge_by_addr_port_digest(const tor_addr_t *addr,
                                           uint16_t port,
@@ -5372,11 +5233,13 @@ get_configured_bridge_by_addr_port_digest(const tor_addr_t *addr,
 static bridge_info_t *
 get_configured_bridge_by_routerinfo(const routerinfo_t *ri)
 {
-  tor_addr_port_t ap;
-
-  router_get_pref_orport(ri, &ap);
-  return get_configured_bridge_by_addr_port_digest(&ap.addr, ap.port,
-                                               ri->cache_info.identity_digest);
+  bridge_info_t *bi = NULL;
+  smartlist_t *orports = router_get_all_orports(ri);
+  bi = get_configured_bridge_by_orports_digest(ri->cache_info.identity_digest,
+                                               orports);
+  SMARTLIST_FOREACH(orports, tor_addr_port_t *, p, tor_free(p));
+  smartlist_free(orports);
+  return bi;
 }
 
 /** Return 1 if <b>ri</b> is one of our known bridges, else 0. */
@@ -5390,30 +5253,12 @@ routerinfo_is_a_configured_bridge(const routerinfo_t *ri)
 int
 node_is_a_configured_bridge(const node_t *node)
 {
-  int retval = 0;               /* Negative.  */
-  smartlist_t *orports = NULL;
-
-  if (!node)
-    goto out;
-
-  orports = node_get_all_orports(node);
-  if (orports == NULL)
-    goto out;
-
-  SMARTLIST_FOREACH_BEGIN(orports, tor_addr_port_t *, orport) {
-    if (get_configured_bridge_by_addr_port_digest(&orport->addr, orport->port,
-                                                  node->identity) != NULL) {
-      retval = 1;
-      goto out;
-    }
-  } SMARTLIST_FOREACH_END(orport);
-
- out:
-  if (orports != NULL) {
-    SMARTLIST_FOREACH(orports, tor_addr_port_t *, p, tor_free(p));
-    smartlist_free(orports);
-    orports = NULL;
-  }
+  int retval = 0;
+  smartlist_t *orports = node_get_all_orports(node);
+  retval = get_configured_bridge_by_orports_digest(node->identity,
+                                                   orports) != NULL;
+  SMARTLIST_FOREACH(orports, tor_addr_port_t *, p, tor_free(p));
+  smartlist_free(orports);
   return retval;
 }
 
@@ -5775,21 +5620,26 @@ rewrite_node_address_for_bridge(const bridge_info_t *bridge, node_t *node)
       }
     }
 
-    /* Indicate that we prefer connecting to this bridge over the
-       protocol that the bridge address indicates.  Last bridge
-       descriptor handled wins.  */
-    ri->ipv6_preferred = tor_addr_family(&bridge->addr) == AF_INET6;
+    /* Mark bridge as preferably connected to over IPv6 if its IPv6
+       address is in a Bridge line and ClientPreferIPv6ORPort is
+       set. Unless both is true, a potential IPv6 OR port of this
+       bridge won't get selected.
+
+       XXX ipv6_preferred is never reset (#6757) */
+    if (get_options()->ClientPreferIPv6ORPort == 1 &&
+        tor_addr_family(&bridge->addr) == AF_INET6)
+      node->ipv6_preferred = 1;
 
     /* XXXipv6 we lack support for falling back to another address for
        the same relay, warn the user */
     if (!tor_addr_is_null(&ri->ipv6_addr)) {
       tor_addr_port_t ap;
-      router_get_pref_orport(ri, &ap);
+      node_get_pref_orport(node, &ap);
       log_notice(LD_CONFIG,
                  "Bridge '%s' has both an IPv4 and an IPv6 address.  "
                  "Will prefer using its %s address (%s:%d).",
                  ri->nickname,
-                 ri->ipv6_preferred ? "IPv6" : "IPv4",
+                 node->ipv6_preferred ? "IPv6" : "IPv4",
                  fmt_addr(&ap.addr), ap.port);
     }
   }
@@ -5979,10 +5829,7 @@ entry_guards_free_all(void)
     entry_guards = NULL;
   }
   clear_bridge_list();
-  clear_transport_list();
   smartlist_free(bridge_list);
-  smartlist_free(transport_list);
   bridge_list = NULL;
-  transport_list = NULL;
 }
 

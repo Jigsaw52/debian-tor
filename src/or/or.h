@@ -98,6 +98,7 @@
 #include "address.h"
 #include "compat_libevent.h"
 #include "ht.h"
+#include "replaycache.h"
 
 /* These signals are defined to help handle_control_signal work.
  */
@@ -1769,8 +1770,6 @@ typedef struct {
   /** True if, after we have added this router, we should re-launch
    * tests for it. */
   unsigned int needs_retest_if_added:1;
-  /** True if ipv6_addr:ipv6_orport is preferred.  */
-  unsigned int ipv6_preferred:1;
 
 /** Tor can use this router for general positions in circuits; we got it
  * from a directory server as usual, or we're an authority and a server
@@ -1793,15 +1792,6 @@ typedef struct {
    * things; see notes on ROUTER_PURPOSE_* macros above.
    */
   uint8_t purpose;
-
-  /* The below items are used only by authdirservers for
-   * reachability testing. */
-
-  /** When was the last time we could reach this OR? */
-  time_t last_reachable;
-  /** When did we start testing reachability for this OR? */
-  time_t testing_since;
-
 } routerinfo_t;
 
 /** Information needed to keep and cache a signed extra-info document. */
@@ -1833,6 +1823,8 @@ typedef struct routerstatus_t {
   uint32_t addr; /**< IPv4 address for this router. */
   uint16_t or_port; /**< OR port for this router. */
   uint16_t dir_port; /**< Directory port for this router. */
+  tor_addr_t ipv6_addr; /**< IPv6 address for this router. */
+  uint16_t ipv6_orport; /**<IPV6 OR port for this router. */
   unsigned int is_authority:1; /**< True iff this router is an authority. */
   unsigned int is_exit:1; /**< True iff this router is a good exit. */
   unsigned int is_stable:1; /**< True iff this router stays up a long time. */
@@ -1968,6 +1960,10 @@ typedef struct microdesc_t {
 
   /** As routerinfo_t.onion_pkey */
   crypto_pk_t *onion_pkey;
+  /** As routerinfo_t.ipv6_add */
+  tor_addr_t ipv6_addr;
+  /** As routerinfo_t.ipv6_orport */
+  uint16_t ipv6_orport;
   /** As routerinfo_t.family */
   smartlist_t *family;
   /** Exit policy summary */
@@ -2006,13 +2002,13 @@ typedef struct node_t {
   routerstatus_t *rs;
 
   /* local info: copied from routerstatus, then possibly frobbed based
-   * on experience.  Authorities set this stuff directly. */
+   * on experience.  Authorities set this stuff directly.  Note that
+   * these reflect knowledge of the primary (IPv4) OR port only.  */
 
   unsigned int is_running:1; /**< As far as we know, is this OR currently
                               * running? */
   unsigned int is_valid:1; /**< Has a trusted dirserver validated this OR?
-                               *  (For Authdir: Have we validated this OR?)
-                               */
+                            *  (For Authdir: Have we validated this OR?) */
   unsigned int is_fast:1; /** Do we think this is a fast OR? */
   unsigned int is_stable:1; /** Do we think this is a stable OR? */
   unsigned int is_possible_guard:1; /**< Do we think this is an OK guard? */
@@ -2035,8 +2031,23 @@ typedef struct node_t {
 
   /* Local info: derived. */
 
+  /** True if the IPv6 OR port is preferred over the IPv4 OR port.  */
+  unsigned int ipv6_preferred:1;
+
   /** According to the geoip db what country is this router in? */
+  /* XXXprop186 what is this suppose to mean with multiple OR ports? */
   country_t country;
+
+  /* The below items are used only by authdirservers for
+   * reachability testing. */
+
+  /** When was the last time we could reach this OR? */
+  time_t last_reachable;        /* IPv4. */
+  time_t last_reachable6;       /* IPv6. */
+
+  /** When did we start testing reachability for this OR? */
+  time_t testing_since;         /* IPv4. */
+  time_t testing_since6;        /* IPv6. */
 } node_t;
 
 /** How many times will we try to download a router's descriptor before giving
@@ -3312,6 +3323,7 @@ typedef struct {
   int AuthDirMaxServersPerAuthAddr; /**< Do not permit more than this
                                      * number of servers per IP address shared
                                      * with an authority. */
+  int AuthDirHasIPv6Connectivity; /**< Boolean: are we on IPv6?  */
 
   /** If non-zero, always vote the Fast flag for any relay advertising
    * this amount of capacity or more. */
@@ -3477,6 +3489,13 @@ typedef struct {
   /** If true, do not accept any requests to connect to internal addresses
    * over randomly chosen exits. */
   int ClientRejectInternalAddresses;
+
+  /** If true, clients may connect over IPv6. XXX we don't really
+      enforce this -- clients _may_ set up outgoing IPv6 connections
+      even when this option is not set. */
+  int ClientUseIPv6;
+  /** If true, prefer an IPv6 OR port over an IPv4 one. */
+  int ClientPreferIPv6ORPort;
 
   /** The length of time that we think a consensus should be fresh. */
   int V3AuthVotingInterval;
@@ -4251,12 +4270,15 @@ typedef struct rend_intro_point_t {
    * intro point. */
   unsigned int rend_service_note_removing_intro_point_called : 1;
 
-  /** (Service side only) A digestmap recording the INTRODUCE2 cells
-   * this intro point's circuit has received.  Each key is the digest
-   * of the RSA-encrypted part of a received INTRODUCE2 cell; each
-   * value is a pointer to the time_t at which the cell was received.
-   * This digestmap is used to prevent replay attacks. */
-  digestmap_t *accepted_intro_rsa_parts;
+  /** (Service side only) A replay cache recording the RSA-encrypted parts
+   * of INTRODUCE2 cells this intro point's circuit has received.  This is
+   * used to prevent replay attacks. */
+  replaycache_t *accepted_intro_rsa_parts;
+
+  /** (Service side only) Count of INTRODUCE2 cells accepted from this
+   * intro point.
+   */
+  int accepted_introduce2_count;
 
   /** (Service side only) The time at which this intro point was first
    * published, or -1 if this intro point has not yet been

@@ -1136,7 +1136,7 @@ rep_hist_load_mtbf_data(time_t now)
     wfu_timebuf[0] = '\0';
 
     if (format == 1) {
-      n = sscanf(line, "%40s %ld %lf S=%10s %8s",
+      n = tor_sscanf(line, "%40s %ld %lf S=%10s %8s",
                  hexbuf, &wrl, &trw, mtbf_timebuf, mtbf_timebuf+11);
       if (n != 3 && n != 5) {
         log_warn(LD_HIST, "Couldn't scan line %s", escaped(line));
@@ -1153,7 +1153,7 @@ rep_hist_load_mtbf_data(time_t now)
       wfu_idx = find_next_with(lines, i+1, "+WFU ");
       if (mtbf_idx >= 0) {
         const char *mtbfline = smartlist_get(lines, mtbf_idx);
-        n = sscanf(mtbfline, "+MTBF %lu %lf S=%10s %8s",
+        n = tor_sscanf(mtbfline, "+MTBF %lu %lf S=%10s %8s",
                    &wrl, &trw, mtbf_timebuf, mtbf_timebuf+11);
         if (n == 2 || n == 4) {
           have_mtbf = 1;
@@ -1164,7 +1164,7 @@ rep_hist_load_mtbf_data(time_t now)
       }
       if (wfu_idx >= 0) {
         const char *wfuline = smartlist_get(lines, wfu_idx);
-        n = sscanf(wfuline, "+WFU %lu %lu S=%10s %8s",
+        n = tor_sscanf(wfuline, "+WFU %lu %lu S=%10s %8s",
                    &wt_uptime, &total_wt_time,
                    wfu_timebuf, wfu_timebuf+11);
         if (n == 2 || n == 4) {
@@ -1531,7 +1531,7 @@ rep_hist_get_bandwidth_lines(void)
   const char *desc = NULL;
   size_t len;
 
-  /* opt [dirreq-](read|write)-history yyyy-mm-dd HH:MM:SS (n s) n,n,n... */
+  /* [dirreq-](read|write)-history yyyy-mm-dd HH:MM:SS (n s) n,n,n... */
 /* The n,n,n part above. Largest representation of a uint64_t is 20 chars
  * long, plus the comma. */
 #define MAX_HIST_VALUE_LEN 21*NUM_TOTALS
