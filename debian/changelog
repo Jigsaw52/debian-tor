@@ -1,12 +1,13 @@
 tor (0.2.4.1-alpha-1) experimental; urgency=low
 
-  [Peter Palfrader]
+  [ Peter Palfrader ]
   * New upstream version (starts 0.2.4.x tree).
+  * Forward port debian/patches/03_tor_manpage_in_section_8.
 
-  [Stefano Zacchiroli]
+  [ Stefano Zacchiroli ]
   * README.privoxy, README.polipo: explicitly set socks type to socks5.
 
- -- Peter Palfrader <weasel@debian.org>  Sat, 08 Sep 2012 13:06:59 +0200
+ -- Peter Palfrader <weasel@debian.org>  Sat, 08 Sep 2012 13:12:54 +0200
 
 tor (0.2.3.21-rc-1) unstable; urgency=low
 
