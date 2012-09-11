@@ -1547,11 +1547,15 @@ run_scheduled_events(time_t now)
       options->PortForwarding &&
       is_server) {
 #define PORT_FORWARDING_CHECK_INTERVAL 5
-    /* XXXXX this should take a list of ports, not just two! */
-    tor_check_port_forwarding(options->PortForwardingHelper,
-                              get_primary_dir_port(),
-                              get_primary_or_port(),
-                              now);
+    smartlist_t *ports_to_forward = get_list_of_ports_to_forward();
+    if (ports_to_forward) {
+      tor_check_port_forwarding(options->PortForwardingHelper,
+                                ports_to_forward,
+                                now);
+
+      SMARTLIST_FOREACH(ports_to_forward, char *, cp, tor_free(cp));
+      smartlist_free(ports_to_forward);
+    }
     time_to_check_port_forwarding = now+PORT_FORWARDING_CHECK_INTERVAL;
   }
 
@@ -2304,12 +2308,16 @@ tor_init(int argc, char *argv[])
 
   {
     const char *version = get_version();
+    log_notice(LD_GENERAL, "Tor v%s %srunning on %s with Libevent %s "
+               "and OpenSSL %s.", version,
 #ifdef USE_BUFFEREVENTS
-    log_notice(LD_GENERAL, "Tor v%s (with bufferevents) running on %s.",
-                version, get_uname());
+               "(with bufferevents) ",
 #else
-    log_notice(LD_GENERAL, "Tor v%s running on %s.", version, get_uname());
+               "",
 #endif
+               get_uname(),
+               tor_libevent_get_version_str(),
+               crypto_openssl_get_version_str());
 
     log_notice(LD_GENERAL, "Tor can't help you if you use it wrong! "
                "Learn how to be safe at "

@@ -327,7 +327,7 @@ var_cell_t *
 var_cell_new(uint16_t payload_len)
 {
   size_t size = STRUCT_OFFSET(var_cell_t, payload) + payload_len;
-  var_cell_t *cell = tor_malloc(size);
+  var_cell_t *cell = tor_malloc_zero(size);
   cell->payload_len = payload_len;
   cell->command = 0;
   cell->circ_id = 0;
@@ -1152,7 +1152,7 @@ connection_tls_start_handshake(or_connection_t *conn, int receiving)
 
 #ifdef USE_BUFFEREVENTS
   if (connection_type_uses_bufferevent(TO_CONN(conn))) {
-    const int filtering = get_options()->_UseFilteringSSLBufferevents;
+    const int filtering = get_options()->UseFilteringSSLBufferevents;
     struct bufferevent *b =
       tor_tls_init_bufferevent(conn->tls, conn->_base.bufev, conn->_base.s,
                                receiving, filtering);

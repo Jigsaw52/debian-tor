@@ -672,7 +672,7 @@ init_keys(void)
            * we don't really need new keys yet so the descriptor doesn't
            * change and the old one is still fresh. */
           log_info(LD_GENERAL, "Couldn't add own descriptor to directory "
-                   "after key init: %s. This is usually not a problem.",
+                   "after key init: %s This is usually not a problem.",
                    m?m:"<unknown error>");
         }
       }
@@ -891,7 +891,7 @@ extend_info_from_router(const routerinfo_t *r)
   tor_assert(r);
 
   router_get_prim_orport(r, &ap);
-  return extend_info_alloc(r->nickname, r->cache_info.identity_digest,
+  return extend_info_new(r->nickname, r->cache_info.identity_digest,
                            r->onion_pkey, &ap.addr, ap.port);
 }
 
@@ -954,8 +954,7 @@ consider_testing_reachability(int test_or, int test_dir)
     /* ask myself, via tor, for my server descriptor. */
     directory_initiate_command(me->address, &addr,
                                me->or_port, me->dir_port,
-                               0, /* does not matter */
-                               0, me->cache_info.identity_digest,
+                               me->cache_info.identity_digest,
                                DIR_PURPOSE_FETCH_SERVERDESC,
                                ROUTER_PURPOSE_GENERAL,
                                1, "authority.z", NULL, 0, 0);
