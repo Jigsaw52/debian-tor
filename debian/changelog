@@ -1,9 +1,15 @@
-tor (0.2.3.21-rc-2) UNRELEASED; urgency=low
+tor (0.2.3.22-rc-1) unstable; urgency=high
 
-  [Stefano Zacchiroli]
+  [ Peter Palfrader ]
+  * New upstream version:
+    - Fix an assertion failure in tor_timegm() that could be triggered
+      by a badly formatted directory object. Bug found by fuzzing with
+      Radamsa. Fixes bug 6811; bugfix on 0.2.0.20-rc.
+
+  [ Stefano Zacchiroli ]
   * README.privoxy, README.polipo: explicitly set socks type to socks5.
 
- -- Peter Palfrader <weasel@debian.org>  Wed, 29 Aug 2012 11:23:53 +0200
+ -- Peter Palfrader <weasel@debian.org>  Tue, 11 Sep 2012 22:41:41 +0200
 
 tor (0.2.3.21-rc-1) unstable; urgency=low
 
