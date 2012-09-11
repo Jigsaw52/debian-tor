@@ -130,6 +130,7 @@ static config_abbrev_t _option_abbrevs[] = {
   { "HashedControlPassword", "__HashedControlSessionPassword", 1, 0},
   { "StrictEntryNodes", "StrictNodes", 0, 1},
   { "StrictExitNodes", "StrictNodes", 0, 1},
+  { "_UseFilteringSSLBufferevents", "UseFilteringSSLBufferevents", 0, 1},
   { NULL, NULL, 0, 0},
 };
 
@@ -209,8 +210,8 @@ static config_var_t _option_vars[] = {
   V(AutomapHostsOnResolve,       BOOL,     "0"),
   V(AutomapHostsSuffixes,        CSV,      ".onion,.exit"),
   V(AvoidDiskWrites,             BOOL,     "0"),
-  V(BandwidthBurst,              MEMUNIT,  "10 MB"),
-  V(BandwidthRate,               MEMUNIT,  "5 MB"),
+  V(BandwidthBurst,              MEMUNIT,  "1 GB"),
+  V(BandwidthRate,               MEMUNIT,  "1 GB"),
   V(BridgeAuthoritativeDir,      BOOL,     "0"),
   VAR("Bridge",                  LINELIST, Bridges,    NULL),
   V(BridgePassword,              STRING,   NULL),
@@ -449,7 +450,7 @@ static config_var_t _option_vars[] = {
   VAR("VersioningAuthoritativeDirectory",BOOL,VersioningAuthoritativeDir, "0"),
   V(VirtualAddrNetwork,          STRING,   "127.192.0.0/10"),
   V(WarnPlaintextPorts,          CSV,      "23,109,110,143"),
-  V(_UseFilteringSSLBufferevents, BOOL,    "0"),
+  V(UseFilteringSSLBufferevents, BOOL,    "0"),
   VAR("__ReloadTorrcOnSIGHUP",   BOOL,  ReloadTorrcOnSIGHUP,      "1"),
   VAR("__AllDirActionsPrivate",  BOOL,  AllDirActionsPrivate,     "0"),
   VAR("__DisablePredictedCircuits",BOOL,DisablePredictedCircuits, "0"),
@@ -459,7 +460,7 @@ static config_var_t _option_vars[] = {
   VAR("__OwningControllerProcess",STRING,OwningControllerProcess, NULL),
   V(MinUptimeHidServDirectoryV2, INTERVAL, "25 hours"),
   V(VoteOnHidServDirectoriesV2,  BOOL,     "1"),
-  V(_UsingTestNetworkDefaults,   BOOL,     "0"),
+  VAR("___UsingTestNetworkDefaults", BOOL, _UsingTestNetworkDefaults, "0"),
 
   { NULL, CONFIG_TYPE_OBSOLETE, 0, NULL }
 };
@@ -487,7 +488,7 @@ static const config_var_t testing_tor_network_defaults[] = {
   V(TestingAuthDirTimeToLearnReachability, INTERVAL, "0 minutes"),
   V(TestingEstimatedDescriptorPropagationTime, INTERVAL, "0 minutes"),
   V(MinUptimeHidServDirectoryV2, INTERVAL, "0 minutes"),
-  V(_UsingTestNetworkDefaults,   BOOL,     "1"),
+  VAR("___UsingTestNetworkDefaults", BOOL, _UsingTestNetworkDefaults, "1"),
 
   { NULL, CONFIG_TYPE_OBSOLETE, 0, NULL }
 };
@@ -718,7 +719,7 @@ get_dirportfrontpage(void)
 
 /** Allocate an empty configuration object of a given format type. */
 static void *
-config_alloc(const config_format_t *fmt)
+config_new(const config_format_t *fmt)
 {
   void *opts = tor_malloc_zero(fmt->size);
   *(uint32_t*)STRUCT_VAR_P(opts, fmt->magic_offset) = fmt->magic;
@@ -3118,7 +3119,7 @@ options_dup(const config_format_t *fmt, const or_options_t *old)
   int i;
   config_line_t *line;
 
-  newopts = config_alloc(fmt);
+  newopts = config_new(fmt);
   for (i=0; fmt->vars[i].name; ++i) {
     if (fmt->vars[i].type == CONFIG_TYPE_LINELIST_S)
       continue;
@@ -3143,7 +3144,7 @@ options_dup(const config_format_t *fmt, const or_options_t *old)
 or_options_t *
 options_new(void)
 {
-  return config_alloc(&options_format);
+  return config_new(&options_format);
 }
 
 /** Set <b>options</b> to hold reasonable defaults for most options.
@@ -3189,7 +3190,7 @@ config_dump(const config_format_t *fmt, const void *default_options,
   char *msg = NULL;
 
   if (defaults == NULL) {
-    defaults = defaults_tmp = config_alloc(fmt);
+    defaults = defaults_tmp = config_new(fmt);
     config_init(fmt, defaults_tmp);
   }
 
@@ -5514,8 +5515,8 @@ parse_dir_server_line(const char *line, dirinfo_type_t required_type,
 
   fingerprint = smartlist_join_strings(items, "", 0, NULL);
   if (strlen(fingerprint) != HEX_DIGEST_LEN) {
-    log_warn(LD_CONFIG, "Key digest for DirServer is wrong length %d.",
-             (int)strlen(fingerprint));
+    log_warn(LD_CONFIG, "Key digest '%s' for DirServer is wrong length %d.",
+             fingerprint, (int)strlen(fingerprint));
     goto err;
   }
   if (!strcmp(fingerprint, "E623F7625FBE0C87820F11EC5F6D5377ED816294")) {
@@ -7253,6 +7254,43 @@ remove_file_if_very_old(const char *fname, time_t now)
   }
 }
 
+/** Return a smartlist of ports that must be forwarded by
+ *  tor-fw-helper. The smartlist contains the ports in a string format
+ *  that is understandable by tor-fw-helper. */
+smartlist_t *
+get_list_of_ports_to_forward(void)
+{
+  smartlist_t *ports_to_forward = smartlist_new();
+  int port = 0;
+
+  /** XXX TODO tor-fw-helper does not support forwarding ports to
+      other hosts than the local one. If the user is binding to a
+      different IP address, tor-fw-helper won't work.  */
+  port = router_get_advertised_or_port(get_options());  /* Get ORPort */
+  if (port)
+    smartlist_add_asprintf(ports_to_forward, "%d:%d", port, port);
+
+  port = router_get_advertised_dir_port(get_options(), 0); /* Get DirPort */
+  if (port)
+    smartlist_add_asprintf(ports_to_forward, "%d:%d", port, port);
+
+  /* Get ports of transport proxies */
+  {
+    smartlist_t *transport_ports = get_transport_proxy_ports();
+    if (transport_ports) {
+      smartlist_add_all(ports_to_forward, transport_ports);
+      smartlist_free(transport_ports);
+    }
+  }
+
+  if (!smartlist_len(ports_to_forward)) {
+    smartlist_free(ports_to_forward);
+    ports_to_forward = NULL;
+  }
+
+  return ports_to_forward;
+}
+
 /** Helper to implement GETINFO functions about configuration variables (not
  * their values).  Given a "config/names" question, set *<b>answer</b> to a
  * new string describing the supported configuration variables and their
@@ -7270,6 +7308,9 @@ getinfo_helper_config(control_connection_t *conn,
     for (i = 0; _option_vars[i].name; ++i) {
       const config_var_t *var = &_option_vars[i];
       const char *type;
+      /* don't tell controller about triple-underscore options */
+      if (!strncmp(_option_vars[i].name, "___", 3))
+        continue;
       switch (var->type) {
         case CONFIG_TYPE_STRING: type = "String"; break;
         case CONFIG_TYPE_FILENAME: type = "Filename"; break;

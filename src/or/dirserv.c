@@ -398,18 +398,18 @@ dirserv_get_status_impl(const char *id_digest, const char *nickname,
               strmap_size(fingerprint_list->fp_by_name),
               digestmap_size(fingerprint_list->status_by_digest));
 
-  /* Versions before Tor 0.2.1.30 have known security issues that
+  /* Versions before Tor 0.2.2.35 have known security issues that
    * make them unsuitable for the current network. */
-  if (platform && !tor_version_as_new_as(platform,"0.2.1.30")) {
+  if (platform && !tor_version_as_new_as(platform,"0.2.2.35")) {
     if (msg)
-      *msg = "Tor version is insecure. Please upgrade!";
+      *msg = "Tor version is insecure or unsupported. Please upgrade!";
     return FP_REJECT;
-  } else if (platform && tor_version_as_new_as(platform,"0.2.2.1-alpha")) {
-    /* Versions from 0.2.2.1-alpha...0.2.2.20-alpha have known security
+  } else if (platform && tor_version_as_new_as(platform,"0.2.3.0-alpha")) {
+    /* Versions from 0.2.3-alpha...0.2.3.9-alpha have known security
      * issues that make them unusable for the current network */
-    if (!tor_version_as_new_as(platform, "0.2.2.21-alpha")) {
+    if (!tor_version_as_new_as(platform, "0.2.3.10-alpha")) {
       if (msg)
-        *msg = "Tor version is insecure. Please upgrade!";
+        *msg = "Tor version is insecure or unsupported. Please upgrade!";
       return FP_REJECT;
     }
   }
@@ -727,7 +727,7 @@ dirserv_add_descriptor(routerinfo_t *ri, const char **msg, const char *source)
                "MAX_DESCRIPTOR_UPLOAD_SIZE (%d) constant is too low.",
                ri->nickname, source, (int)ri->cache_info.signed_descriptor_len,
                MAX_DESCRIPTOR_UPLOAD_SIZE);
-    *msg = "Router descriptor was too large";
+    *msg = "Router descriptor was too large.";
     control_event_or_authdir_new_descriptor("REJECTED",
                ri->cache_info.signed_descriptor_body,
                ri->cache_info.signed_descriptor_len, *msg);
@@ -2435,8 +2435,6 @@ set_routerstatus_from_routerinfo(routerstatus_t *rs,
                                  int listbaddirs, int vote_on_hsdirs)
 {
   const or_options_t *options = get_options();
-  int unstable_version =
-    !tor_version_as_new_as(ri->platform,"0.1.1.16-rc-cvs");
   uint32_t routerbw = router_get_advertised_bandwidth(ri);
 
   memset(rs, 0, sizeof(routerstatus_t));
@@ -2448,8 +2446,7 @@ set_routerstatus_from_routerinfo(routerstatus_t *rs,
   rs->is_exit = node->is_exit;
   rs->is_stable = node->is_stable =
     router_is_active(ri, node, now) &&
-    !dirserv_thinks_router_is_unreliable(now, ri, 1, 0) &&
-    !unstable_version;
+    !dirserv_thinks_router_is_unreliable(now, ri, 1, 0);
   rs->is_fast = node->is_fast =
     router_is_active(ri, node, now) &&
     !dirserv_thinks_router_is_unreliable(now, ri, 0, 1);
@@ -2800,9 +2797,9 @@ dirserv_generate_networkstatus_vote_obj(crypto_pk_t *private_key,
           h->microdesc_hash_line = tor_strdup(buf);
           h->next = vrs->microdesc;
           vrs->microdesc = h;
+          md->last_listed = now;
+          smartlist_add(microdescriptors, md);
         }
-        md->last_listed = now;
-        smartlist_add(microdescriptors, md);
       }
 
       smartlist_add(routerstatuses, vrs);
