@@ -1,3 +1,17 @@
+tor (0.2.2.39-1) stable-security; urgency=high
+
+  * New upstream version:
+    - Fix an assertion failure in tor_timegm() that could be triggered
+      by a badly formatted directory object. Bug found by fuzzing with
+      Radamsa. Fixes bug 6811; bugfix on 0.2.0.20-rc.
+    - Do not crash when comparing an address with port value 0 to an
+      address policy. This bug could have been used to cause a remote
+      assertion failure by or against directory authorities, or to
+      allow some applications to crash clients. Fixes bug 6690; bugfix
+      on 0.2.1.10-alpha.
+
+ -- Peter Palfrader <weasel@debian.org>  Wed, 12 Sep 2012 14:00:03 +0200
+
 tor (0.2.2.38-1) stable; urgency=low
 
   * New upstream version, fixing three security issues, as discussed
