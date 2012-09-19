@@ -4,8 +4,9 @@ tor (0.2.4.2-alpha-X) XXperimental; urgency=low
     enabled for over five years now.
   * Update and fix a minor whitespace issue in
     debian/patches/14_fix_geoip_warning.
+  * remove obsolete debian/TODO file.
 
- -- Peter Palfrader <weasel@debian.org>  Wed, 19 Sep 2012 10:32:58 +0200
+ -- Peter Palfrader <weasel@debian.org>  Wed, 19 Sep 2012 10:39:19 +0200
 
 tor (0.2.4.2-alpha-1) experimental; urgency=low
 
