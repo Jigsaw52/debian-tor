@@ -71,3 +71,15 @@ diff -urNad '--exclude=CVS' '--exclude=.svn' '--exclude=.git' '--exclude=.arch' 
  **tsocks.conf**(5).
  
  AUTHORS
+diff -urNad '--exclude=CVS' '--exclude=.svn' '--exclude=.git' '--exclude=.arch' '--exclude=.hg' '--exclude=_darcs' '--exclude=.bzr' tor~/doc/asciidoc-helper.sh tor/doc/asciidoc-helper.sh
+--- tor~/doc/asciidoc-helper.sh	2012-09-19 11:10:16.000000000 +0200
++++ tor/doc/asciidoc-helper.sh	2012-09-22 11:09:56.920891269 +0200
+@@ -45,7 +45,7 @@
+       exit 1;
+     fi
+     if "$2" -f manpage $input; then
+-      mv $base.1 $output;
++      mv $base.[18] $output;
+     else
+       cat<<EOF
+ ==================================

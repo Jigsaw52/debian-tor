@@ -16,8 +16,12 @@ tor (0.2.4.2-alpha-X) XXperimental; urgency=low
     instead create and populate debian/tor.links accordingly.
   * Call configure with --disable-silent-rules, so we actually see what
     the build did in a log.
+  * Try to patch upstream's documenation build system so it does what we want
+    rather than duplicating parts of it in debian/rules.  This will fix a bug
+    where we would end up with empty .html documentation if building from the
+    source source tree more than once.
 
- -- Peter Palfrader <weasel@debian.org>  Sat, 22 Sep 2012 10:52:51 +0200
+ -- Peter Palfrader <weasel@debian.org>  Sat, 22 Sep 2012 11:10:55 +0200
 
 tor (0.2.4.2-alpha-1) experimental; urgency=low
 

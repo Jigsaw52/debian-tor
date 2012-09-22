@@ -69,8 +69,6 @@ endif
 export LDFLAGS
 export CFLAGS
 
-MANPAGE_INS=doc/tor.1.in doc/torify.1.in doc/tor-gencert.1.in doc/tor-resolve.1.in
-
 configure: patch-stamp
 config.status: configure
 	dh_testdir
@@ -87,22 +85,10 @@ config.status: configure
 build: build-stamp
 
 
-# create the manpages here because the build-system shipped in the tarball is
-# incomplete.  moving foo.8 to foo.1.in is intended.
-doc/%.1.in: doc/%.1.txt patch-stamp
-	target="$@"; base="$${target%%.1.in}"; \
-		a2x -f manpage "$$base".1.txt && \
-		if [ -e "$$base".1 ]; then mv "$$base".1 "$$base".1.in; \
-		elif [ -e "$$base".8 ]; then mv "$$base".8 "$$base".1.in; \
-		else echo >&2 "No output produced by a2px?" && exit 1; fi
-
 build-stamp:  config.status $(MANPAGE_INS)
 	dh_testdir
 	! [ -e debian/micro-revision.i ] || cp debian/micro-revision.i src/or/micro-revision.i
 
-	# Also touch all the .html files or else the build system will
-	# try to re-create them and fail badly
-	for file in $(MANPAGE_INS); do touch $${file%%.1.in}.html.in || exit 1; done
 	$(MAKE)
 	@echo
 	@echo
@@ -131,7 +117,7 @@ clean: unpatch
 	fi
 
 	# these get autobuilt from the .txt files, some of which we also patch
-	rm -f $(MANPAGE_INS)
+	rm -f doc/*.in
 
 	dh_clean
 
