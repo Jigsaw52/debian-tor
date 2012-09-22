@@ -139,6 +139,7 @@ install: build
 	dh_testroot
 	dh_clean -k
 	dh_installdirs
+	dh_lintian
 
 	$(MAKE) install DESTDIR=$(CURDIR)/debian/tor
 	# move tor to where it belongs
@@ -170,8 +171,6 @@ install: build
 	install -d -m 755 $(CURDIR)/debian/tor-geoipdb/usr/share/doc/tor-geoipdb
 	ln -s ../tor/changelog.gz $(CURDIR)/debian/tor-geoipdb/usr/share/doc/tor-geoipdb
 	ln -s ../tor/changelog.Debian.gz $(CURDIR)/debian/tor-geoipdb/usr/share/doc/tor-geoipdb
-
-	install -m 644 debian/tor-geoipdb.lintian-override $(CURDIR)/debian/tor-geoipdb/usr/share/lintian/overrides/tor-geoipdb
 
 # Must not depend on anything. This is to be called by
 # binary-arch/binary-indep

@@ -5,8 +5,11 @@ tor (0.2.4.2-alpha-X) XXperimental; urgency=low
   * Update and fix a minor whitespace issue in
     debian/patches/14_fix_geoip_warning.
   * remove obsolete debian/TODO file.
+  * Use dh_lintian to install the override file for tor-geoipdb.  Requires
+    changing debhelper build dependency to >= 6 from >= 5, and renaming
+    debian/tor-geoipdb.lintian-override to tor-geoipdb.lintian-overrides.
 
- -- Peter Palfrader <weasel@debian.org>  Wed, 19 Sep 2012 10:39:19 +0200
+ -- Peter Palfrader <weasel@debian.org>  Sat, 22 Sep 2012 10:15:26 +0200
 
 tor (0.2.4.2-alpha-1) experimental; urgency=low
 
