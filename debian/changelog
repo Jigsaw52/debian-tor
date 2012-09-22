@@ -9,12 +9,13 @@ tor (0.2.4.2-alpha-X) XXperimental; urgency=low
     changing debhelper build dependency to >= 6 from >= 5, and renaming
     debian/tor-geoipdb.lintian-override to tor-geoipdb.lintian-overrides.
   * Use dh_link to create the /usr/share/doc/tor-dbg -> tor symlink in
-    tor-dbg.
+    tor-dbg.  Also call dh_link before dh_install*, so that nothing creates a
+    /usr/share/doc/tor-dbg directory.
   * No longer call dh_link with arguments to create the
     /usr/share/man/man5/torrc.5 -> ../man8/tor.8 symlink in the tor package,
     instead create and populate debian/tor.links accordingly.
 
- -- Peter Palfrader <weasel@debian.org>  Sat, 22 Sep 2012 10:29:06 +0200
+ -- Peter Palfrader <weasel@debian.org>  Sat, 22 Sep 2012 10:44:35 +0200
 
 tor (0.2.4.2-alpha-1) experimental; urgency=low
 
