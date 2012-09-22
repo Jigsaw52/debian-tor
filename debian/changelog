@@ -1,5 +1,6 @@
-tor (0.2.4.2-alpha-X) XXperimental; urgency=low
+tor (0.2.4.3-alpha-1) experimental; urgency=low
 
+  * New upstream version.
   * Remove debian/patches/02_add_debian_files_in_manpage which hasn't been
     enabled for over five years now.
   * Update and fix a minor whitespace issue in
@@ -28,7 +29,7 @@ tor (0.2.4.2-alpha-X) XXperimental; urgency=low
     different versions, so a symlink is probably the wrong thing in the
     first place.
 
- -- Peter Palfrader <weasel@debian.org>  Sat, 22 Sep 2012 11:38:13 +0200
+ -- Peter Palfrader <weasel@debian.org>  Sat, 22 Sep 2012 12:29:37 +0200
 
 tor (0.2.4.2-alpha-1) experimental; urgency=low
 
