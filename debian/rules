@@ -80,7 +80,8 @@ config.status: configure
 		--mandir=\$${prefix}/share/man \
 		--infodir=\$${prefix}/share/info \
 		--localstatedir=/var \
-		--sysconfdir=/etc
+		--sysconfdir=/etc \
+		--disable-silent-rules
 
 
 build: build-stamp
