@@ -22,8 +22,13 @@ tor (0.2.4.2-alpha-X) XXperimental; urgency=low
     source source tree more than once.
   * Upstream no longer installs /usr/bin/tor-control.py, so no need to remove
     it in debian/rules.
+  * No longer try to symlink the changelogs for tor-geoipdb from the tor
+    package.  Frist, this has been broken as dh_installchangelogs stomps all
+    over our symlinks.  Second, the tor and tor-geoipdb package may be of
+    different versions, so a symlink is probably the wrong thing in the
+    first place.
 
- -- Peter Palfrader <weasel@debian.org>  Sat, 22 Sep 2012 11:20:05 +0200
+ -- Peter Palfrader <weasel@debian.org>  Sat, 22 Sep 2012 11:38:13 +0200
 
 tor (0.2.4.2-alpha-1) experimental; urgency=low
 

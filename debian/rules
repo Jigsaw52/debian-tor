@@ -147,10 +147,6 @@ install: build
 	mv $(CURDIR)/debian/tor/usr/share/tor/geoip $(CURDIR)/debian/tor-geoipdb/usr/share/tor
 	rmdir $(CURDIR)/debian/tor/usr/share/tor || true
 
-	install -d -m 755 $(CURDIR)/debian/tor-geoipdb/usr/share/doc/tor-geoipdb
-	ln -s ../tor/changelog.gz $(CURDIR)/debian/tor-geoipdb/usr/share/doc/tor-geoipdb
-	ln -s ../tor/changelog.Debian.gz $(CURDIR)/debian/tor-geoipdb/usr/share/doc/tor-geoipdb
-
 # Must not depend on anything. This is to be called by
 # binary-arch/binary-indep
 # in another 'make' thread.
@@ -158,7 +154,7 @@ binary-common:
 	dh_testdir
 	dh_testroot
 	dh_link
-	dh_installchangelogs --package=tor ChangeLog
+	dh_installchangelogs ChangeLog
 	dh_installdocs
 	dh_installexamples
 	dh_installlogrotate
