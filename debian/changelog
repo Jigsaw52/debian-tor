@@ -20,8 +20,10 @@ tor (0.2.4.2-alpha-X) XXperimental; urgency=low
     rather than duplicating parts of it in debian/rules.  This will fix a bug
     where we would end up with empty .html documentation if building from the
     source source tree more than once.
+  * Upstream no longer installs /usr/bin/tor-control.py, so no need to remove
+    it in debian/rules.
 
- -- Peter Palfrader <weasel@debian.org>  Sat, 22 Sep 2012 11:10:55 +0200
+ -- Peter Palfrader <weasel@debian.org>  Sat, 22 Sep 2012 11:20:05 +0200
 
 tor (0.2.4.2-alpha-1) experimental; urgency=low
 

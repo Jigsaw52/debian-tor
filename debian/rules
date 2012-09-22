@@ -143,8 +143,6 @@ install: build
 	install -m 644 debian/tor.apparmor-profile.abstraction $(CURDIR)/debian/tor/etc/apparmor.d/abstractions/tor
 	dh_apparmor --profile-name=system_tor -ptor
 
-	rm -f $(CURDIR)/debian/tor/usr/bin/tor-control.py
-
 	# tor-geoip
 	mv $(CURDIR)/debian/tor/usr/share/tor/geoip $(CURDIR)/debian/tor-geoipdb/usr/share/tor
 	rmdir $(CURDIR)/debian/tor/usr/share/tor || true
