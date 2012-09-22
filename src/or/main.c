@@ -46,6 +46,7 @@
 #include "router.h"
 #include "routerlist.h"
 #include "routerparse.h"
+#include "statefile.h"
 #include "status.h"
 #ifdef USE_DMALLOC
 #include <dmalloc.h>
@@ -2308,13 +2309,14 @@ tor_init(int argc, char *argv[])
 
   {
     const char *version = get_version();
-    log_notice(LD_GENERAL, "Tor v%s %srunning on %s with Libevent %s "
-               "and OpenSSL %s.", version,
+    const char *bev_str =
 #ifdef USE_BUFFEREVENTS
-               "(with bufferevents) ",
+      "(with bufferevents) ";
 #else
-               "",
+      "";
 #endif
+    log_notice(LD_GENERAL, "Tor v%s %srunning on %s with Libevent %s "
+               "and OpenSSL %s.", version, bev_str,
                get_uname(),
                tor_libevent_get_version_str(),
                crypto_openssl_get_version_str());
@@ -2458,6 +2460,7 @@ tor_free_all(int postfork)
   microdesc_free_all();
   if (!postfork) {
     config_free_all();
+    or_state_free_all();
     router_free_all();
     policies_free_all();
   }

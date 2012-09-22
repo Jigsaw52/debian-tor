@@ -160,6 +160,7 @@ void tor_log_mallinfo(int severity);
 /* Math functions */
 double tor_mathlog(double d) ATTR_CONST;
 long tor_lround(double d) ATTR_CONST;
+int64_t tor_llround(double d) ATTR_CONST;
 int tor_log2(uint64_t u64) ATTR_CONST;
 uint64_t round_to_power_of_2(uint64_t u64);
 unsigned round_to_next_multiple_of(unsigned number, unsigned divisor);
@@ -244,7 +245,7 @@ int64_t tv_to_msec(const struct timeval *tv);
 int64_t tv_to_usec(const struct timeval *tv);
 long tv_udiff(const struct timeval *start, const struct timeval *end);
 long tv_mdiff(const struct timeval *start, const struct timeval *end);
-time_t tor_timegm(struct tm *tm);
+int tor_timegm(const struct tm *tm, time_t *time_out);
 #define RFC1123_TIME_LEN 29
 void format_rfc1123_time(char *buf, time_t t);
 int parse_rfc1123_time(const char *buf, time_t *t);
@@ -359,6 +360,9 @@ int write_bytes_to_new_file(const char *fname, const char *str, size_t len,
 struct stat;
 #endif
 char *read_file_to_str(const char *filename, int flags, struct stat *stat_out)
+  ATTR_MALLOC;
+char *read_file_to_str_until_eof(int fd, size_t max_bytes_to_read,
+                                 size_t *sz_out)
   ATTR_MALLOC;
 const char *parse_config_line_from_str(const char *line,
                                        char **key_out, char **value_out);

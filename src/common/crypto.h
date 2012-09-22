@@ -51,7 +51,7 @@
 /** Length of the output of our message digest. */
 #define DIGEST_LEN 20
 /** Length of the output of our second (improved) message digests.  (For now
- * this is just sha256, but any it can be any other 256-byte digest). */
+ * this is just sha256, but it could be any other 256-bit digest.) */
 #define DIGEST256_LEN 32
 /** Length of our symmetric cipher's keys. */
 #define CIPHER_KEY_LEN 16
@@ -148,6 +148,7 @@ int crypto_pk_write_private_key_to_filename(crypto_pk_t *env,
 
 int crypto_pk_check_key(crypto_pk_t *env);
 int crypto_pk_cmp_keys(crypto_pk_t *a, crypto_pk_t *b);
+int crypto_pk_eq_keys(crypto_pk_t *a, crypto_pk_t *b);
 size_t crypto_pk_keysize(crypto_pk_t *env);
 int crypto_pk_num_bits(crypto_pk_t *env);
 crypto_pk_t *crypto_pk_dup_key(crypto_pk_t *orig);

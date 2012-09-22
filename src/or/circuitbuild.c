@@ -16,6 +16,7 @@
 #include "circuitlist.h"
 #include "circuituse.h"
 #include "config.h"
+#include "confparse.h"
 #include "connection.h"
 #include "connection_edge.h"
 #include "connection_or.h"
@@ -32,6 +33,8 @@
 #include "router.h"
 #include "routerlist.h"
 #include "routerparse.h"
+#include "routerset.h"
+#include "statefile.h"
 #include "crypto.h"
 #undef log
 #include <math.h>
@@ -2654,8 +2657,24 @@ pathbias_count_first_hop(origin_circuit_t *circ)
   }
 
   /* Completely ignore one hop circuits */
-  if (circ->build_state->onehop_tunnel) {
-    tor_assert(circ->build_state->desired_path_len == 1);
+  if (circ->build_state->onehop_tunnel ||
+      circ->build_state->desired_path_len == 1) {
+    /* Check for inconsistency */
+    if (circ->build_state->desired_path_len != 1 ||
+        !circ->build_state->onehop_tunnel) {
+      if ((rate_msg = rate_limit_log(&first_hop_notice_limit,
+              approx_time()))) {
+        log_notice(LD_BUG,
+               "One-hop circuit has length %d. Path state is %s. "
+               "Circuit is a %s currently %s. %s",
+               circ->build_state->desired_path_len,
+               pathbias_state_to_string(circ->path_state),
+               circuit_purpose_to_string(circ->_base.purpose),
+               circuit_state_to_string(circ->_base.state),
+               rate_msg);
+      }
+      tor_fragile_assert();
+    }
     return 0;
   }
 
@@ -2756,8 +2775,24 @@ pathbias_count_success(origin_circuit_t *circ)
   }
 
   /* Ignore one hop circuits */
-  if (circ->build_state->onehop_tunnel) {
-    tor_assert(circ->build_state->desired_path_len == 1);
+  if (circ->build_state->onehop_tunnel ||
+      circ->build_state->desired_path_len == 1) {
+    /* Check for consistency */
+    if (circ->build_state->desired_path_len != 1 ||
+        !circ->build_state->onehop_tunnel) {
+      if ((rate_msg = rate_limit_log(&success_notice_limit,
+              approx_time()))) {
+        log_notice(LD_BUG,
+               "One-hop circuit has length %d. Path state is %s. "
+               "Circuit is a %s currently %s. %s",
+               circ->build_state->desired_path_len,
+               pathbias_state_to_string(circ->path_state),
+               circuit_purpose_to_string(circ->_base.purpose),
+               circuit_state_to_string(circ->_base.state),
+               rate_msg);
+      }
+      tor_fragile_assert();
+    }
     return;
   }
 
@@ -5479,7 +5514,7 @@ launch_direct_bridge_descriptor_fetch(bridge_info_t *bridge)
                              bridge->identity,
                              DIR_PURPOSE_FETCH_SERVERDESC,
                              ROUTER_PURPOSE_BRIDGE,
-                             0, "authority.z", NULL, 0, 0);
+                             DIRIND_ONEHOP, "authority.z", NULL, 0, 0);
   tor_free(address);
 }
 
@@ -5638,7 +5673,7 @@ rewrite_node_address_for_bridge(const bridge_info_t *bridge, node_t *node)
                  "Bridge '%s' has both an IPv4 and an IPv6 address.  "
                  "Will prefer using its %s address (%s:%d).",
                  ri->nickname,
-                 node->ipv6_preferred ? "IPv6" : "IPv4",
+                 tor_addr_family(&ap.addr) == AF_INET6 ? "IPv6" : "IPv4",
                  fmt_addr(&ap.addr), ap.port);
     }
   }

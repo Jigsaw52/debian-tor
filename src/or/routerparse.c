@@ -2101,7 +2101,7 @@ routerstatus_parse_entry_from_string(memarea_t *area,
     for (i=0; i < tok->n_args; ++i) {
       int p = smartlist_string_pos(vote->known_flags, tok->args[i]);
       if (p >= 0) {
-        vote_rs->flags |= (1<<p);
+        vote_rs->flags |= (U64_LITERAL(1)<<p);
       } else {
         log_warn(LD_DIR, "Flags line had a flag %s not listed in known_flags.",
                  escaped(tok->args[i]));
@@ -3002,6 +3002,16 @@ networkstatus_parse_vote_from_string(const char *s, const char **eos_out,
   }
   if (!inorder) {
     log_warn(LD_DIR, "known-flags not in order");
+    goto err;
+  }
+  if (ns->type != NS_TYPE_CONSENSUS &&
+      smartlist_len(ns->known_flags) > MAX_KNOWN_FLAGS_IN_VOTE) {
+    /* If we allowed more than 64 flags in votes, then parsing them would make
+     * us invoke undefined behavior whenever we used 1<<flagnum to do a
+     * bit-shift. This is only for votes and opinions: consensus users don't
+     * care about flags they don't recognize, and so don't build a bitfield
+     * for them. */
+    log_warn(LD_DIR, "Too many known-flags in consensus vote or opinion");
     goto err;
   }
 
@@ -4853,6 +4863,9 @@ rend_parse_v2_service_descriptor(rend_service_descriptor_t **parsed_out,
     version = (int) tor_parse_long(smartlist_get(versions, i),
                                    10, 0, INT_MAX, &num_ok, NULL);
     if (!num_ok) /* It's a string; let's ignore it. */
+      continue;
+    if (version >= REND_PROTOCOL_VERSION_BITMASK_WIDTH)
+      /* Avoid undefined left-shift behaviour. */
       continue;
     result->protocols |= 1 << version;
   }

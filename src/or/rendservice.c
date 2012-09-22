@@ -26,6 +26,7 @@
 #include "replaycache.h"
 #include "routerlist.h"
 #include "routerparse.h"
+#include "routerset.h"
 
 static origin_circuit_t *find_intro_circuit(rend_intro_point_t *intro,
                                             const char *pk_digest);
@@ -2729,7 +2730,7 @@ find_intro_point(origin_circuit_t *circ)
   if (service == NULL) return NULL;
 
   SMARTLIST_FOREACH(service->intro_nodes, rend_intro_point_t *, intro_point,
-    if (crypto_pk_cmp_keys(intro_point->intro_key, circ->intro_key) == 0) {
+    if (crypto_pk_eq_keys(intro_point->intro_key, circ->intro_key)) {
       return intro_point;
     });
 
@@ -2782,7 +2783,8 @@ directory_post_to_hs_dir(rend_service_descriptor_t *renddesc,
       directory_initiate_command_routerstatus(hs_dir,
                                               DIR_PURPOSE_UPLOAD_RENDDESC_V2,
                                               ROUTER_PURPOSE_GENERAL,
-                                              1, NULL, desc->desc_str,
+                                              DIRIND_ANONYMOUS, NULL,
+                                              desc->desc_str,
                                               strlen(desc->desc_str), 0);
       base32_encode(desc_id_base32, sizeof(desc_id_base32),
                     desc->desc_id, DIGEST_LEN);
