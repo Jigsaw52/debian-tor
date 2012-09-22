@@ -23,6 +23,7 @@
 #include "rephist.h"
 #include "router.h"
 #include "routerlist.h"
+#include "routerset.h"
 
 static extend_info_t *rend_client_get_random_intro_impl(
                           const rend_cache_entry_t *rend_query,
@@ -617,7 +618,8 @@ directory_get_from_hs_dir(const char *desc_id, const rend_data_t *rend_query)
   directory_initiate_command_routerstatus_rend(hs_dir,
                                           DIR_PURPOSE_FETCH_RENDDESC_V2,
                                           ROUTER_PURPOSE_GENERAL,
-                                          !tor2web_mode, desc_id_base32,
+                                   tor2web_mode?DIRIND_ONEHOP:DIRIND_ANONYMOUS,
+                                          desc_id_base32,
                                           NULL, 0, 0,
                                           rend_query);
   log_info(LD_REND, "Sending fetch request for v2 descriptor for "
@@ -1248,7 +1250,7 @@ rend_parse_service_authorization(const or_options_t *options,
                descriptor_cookie);
       goto err;
     }
-    auth_type_val = (descriptor_cookie_tmp[16] >> 4) + 1;
+    auth_type_val = (((uint8_t)descriptor_cookie_tmp[16]) >> 4) + 1;
     if (auth_type_val < 1 || auth_type_val > 2) {
       log_warn(LD_CONFIG, "Authorization cookie has unknown authorization "
                           "type encoded.");

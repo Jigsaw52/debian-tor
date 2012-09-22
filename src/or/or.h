@@ -2036,9 +2036,6 @@ typedef struct node_t {
   time_t last_reachable;        /* IPv4. */
   time_t last_reachable6;       /* IPv6. */
 
-  /** When did we start testing reachability for this OR? */
-  time_t testing_since;         /* IPv4. */
-  time_t testing_since6;        /* IPv6. */
 } node_t;
 
 /** How many times will we try to download a router's descriptor before giving
@@ -2101,6 +2098,9 @@ typedef struct vote_microdesc_hash_t {
 typedef struct vote_routerstatus_t {
   routerstatus_t status; /**< Underlying 'status' object for this router.
                           * Flags are redundant. */
+  /** How many known-flags are allowed in a vote? This is the width of
+   * the flags field of vote_routerstatus_t */
+#define MAX_KNOWN_FLAGS_IN_VOTE 64
   uint64_t flags; /**< Bit-field for all recognized flags; index into
                    * networkstatus_t.known_flags. */
   char *version; /**< The version that the authority says this router is
@@ -4292,14 +4292,17 @@ typedef struct rend_intro_point_t {
   time_t time_expiring;
 } rend_intro_point_t;
 
+#define REND_PROTOCOL_VERSION_BITMASK_WIDTH 16
+
 /** Information used to connect to a hidden service.  Used on both the
  * service side and the client side. */
 typedef struct rend_service_descriptor_t {
   crypto_pk_t *pk; /**< This service's public key. */
   int version; /**< Version of the descriptor format: 0 or 2. */
   time_t timestamp; /**< Time when the descriptor was generated. */
-  uint16_t protocols; /**< Bitmask: which rendezvous protocols are supported?
-                       * (We allow bits '0', '1', and '2' to be set.) */
+  /** Bitmask: which rendezvous protocols are supported?
+   * (We allow bits '0', '1', and '2' to be set.) */
+  int protocols : REND_PROTOCOL_VERSION_BITMASK_WIDTH;
   /** List of the service's introduction points.  Elements are removed if
    * introduction attempts fail. */
   smartlist_t *intro_nodes;

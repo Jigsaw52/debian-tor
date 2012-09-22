@@ -332,9 +332,9 @@ tor_mathlog(double d)
   return log(d);
 }
 
-/** Return the long integer closest to d.  We define this wrapper here so
- * that not all users of math.h need to use the right incancations to get
- * the c99 functions. */
+/** Return the long integer closest to <b>d</b>. We define this wrapper
+ * here so that not all users of math.h need to use the right incantations
+ * to get the c99 functions. */
 long
 tor_lround(double d)
 {
@@ -344,6 +344,21 @@ tor_lround(double d)
   return (long)rint(d);
 #else
   return (long)(d > 0 ? d + 0.5 : ceil(d - 0.5));
+#endif
+}
+
+/** Return the 64-bit integer closest to d.  We define this wrapper here so
+ * that not all users of math.h need to use the right incantations to get the
+ * c99 functions. */
+int64_t
+tor_llround(double d)
+{
+#if defined(HAVE_LLROUND)
+  return (int64_t)llround(d);
+#elif defined(HAVE_RINT)
+  return (int64_t)rint(d);
+#else
+  return (int64_t)(d > 0 ? d + 0.5 : ceil(d - 0.5));
 #endif
 }
 
@@ -379,12 +394,24 @@ tor_log2(uint64_t u64)
   return r;
 }
 
-/** Return the power of 2 closest to <b>u64</b>. */
+/** Return the power of 2 in range [1,UINT64_MAX] closest to <b>u64</b>.  If
+ * there are two powers of 2 equally close, round down. */
 uint64_t
 round_to_power_of_2(uint64_t u64)
 {
-  int lg2 = tor_log2(u64);
-  uint64_t low = U64_LITERAL(1) << lg2, high = U64_LITERAL(1) << (lg2+1);
+  int lg2;
+  uint64_t low;
+  uint64_t high;
+  if (u64 == 0)
+    return 1;
+
+  lg2 = tor_log2(u64);
+  low = U64_LITERAL(1) << lg2;
+
+  if (lg2 == 63)
+    return low;
+
+  high = U64_LITERAL(1) << (lg2+1);
   if (high - u64 < u64 - low)
     return high;
   else
@@ -1315,11 +1342,11 @@ n_leapdays(int y1, int y2)
 static const int days_per_month[] =
   { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 
-/** Return a time_t given a struct tm.  The result is given in GMT, and
- * does not account for leap seconds.
+/** Compute a time_t given a struct tm.  The result is given in GMT, and
+ * does not account for leap seconds.  Return 0 on success, -1 on failure.
  */
-time_t
-tor_timegm(struct tm *tm)
+int
+tor_timegm(const struct tm *tm, time_t *time_out)
 {
   /* This is a pretty ironclad timegm implementation, snarfed from Python2.2.
    * It's way more brute-force than fiddling with tzset().
@@ -1327,11 +1354,11 @@ tor_timegm(struct tm *tm)
   time_t year, days, hours, minutes, seconds;
   int i;
   year = tm->tm_year + 1900;
-  if (year < 1970 || tm->tm_mon < 0 || tm->tm_mon > 11) {
+  if (year < 1970 || tm->tm_mon < 0 || tm->tm_mon > 11 ||
+      tm->tm_year >= INT32_MAX-1900) {
     log_warn(LD_BUG, "Out-of-range argument to tor_timegm");
     return -1;
   }
-  tor_assert(year < INT_MAX);
   days = 365 * (year-1970) + n_leapdays(1970,(int)year);
   for (i = 0; i < tm->tm_mon; ++i)
     days += days_per_month[i];
@@ -1342,7 +1369,8 @@ tor_timegm(struct tm *tm)
 
   minutes = hours*60 + tm->tm_min;
   seconds = minutes*60 + tm->tm_sec;
-  return seconds;
+  *time_out = seconds;
+  return 0;
 }
 
 /* strftime is locale-specific, so we need to replace those parts */
@@ -1402,7 +1430,7 @@ parse_rfc1123_time(const char *buf, time_t *t)
     return -1;
   }
   if (tm_mday < 1 || tm_mday > 31 || tm_hour > 23 || tm_min > 59 ||
-      tm_sec > 60) {
+      tm_sec > 60 || tm_year >= INT32_MAX || tm_year < 1970) {
     char *esc = esc_for_log(buf);
     log_warn(LD_GENERAL, "Got invalid RFC1123 time %s", esc);
     tor_free(esc);
@@ -1438,8 +1466,7 @@ parse_rfc1123_time(const char *buf, time_t *t)
   }
   tm.tm_year -= 1900;
 
-  *t = tor_timegm(&tm);
-  return 0;
+  return tor_timegm(&tm, t);
 }
 
 /** Set <b>buf</b> to the ISO8601 encoding of the local value of <b>t</b>.
@@ -1501,13 +1528,13 @@ parse_iso_time(const char *cp, time_t *t)
     return -1;
   }
   if (year < 1970 || month < 1 || month > 12 || day < 1 || day > 31 ||
-          hour > 23 || minute > 59 || second > 60) {
+          hour > 23 || minute > 59 || second > 60 || year >= INT32_MAX) {
     char *esc = esc_for_log(cp);
     log_warn(LD_GENERAL, "ISO time %s was nonsensical", esc);
     tor_free(esc);
     return -1;
   }
-  st_tm.tm_year = year-1900;
+  st_tm.tm_year = (int)year-1900;
   st_tm.tm_mon = month-1;
   st_tm.tm_mday = day;
   st_tm.tm_hour = hour;
@@ -1520,8 +1547,7 @@ parse_iso_time(const char *cp, time_t *t)
     tor_free(esc);
     return -1;
   }
-  *t = tor_timegm(&st_tm);
-  return 0;
+  return tor_timegm(&st_tm, t);
 }
 
 /** Given a <b>date</b> in one of the three formats allowed by HTTP (ugh),
@@ -1807,6 +1833,10 @@ file_status(const char *fname)
     return FN_DIR;
   else if (st.st_mode & S_IFREG)
     return FN_FILE;
+#ifndef _WIN32
+  else if (st.st_mode & S_IFIFO)
+    return FN_FILE;
+#endif
   else
     return FN_ERROR;
 }
@@ -2237,6 +2267,46 @@ write_bytes_to_new_file(const char *fname, const char *str, size_t len,
                                   (bin?O_BINARY:O_TEXT));
 }
 
+/**
+ * Read the contents of the open file <b>fd</b> presuming it is a FIFO
+ * (or similar) file descriptor for which the size of the file isn't
+ * known ahead of time. Return NULL on failure, and a NUL-terminated
+ * string on success.  On success, set <b>sz_out</b> to the number of
+ * bytes read.
+ */
+char *
+read_file_to_str_until_eof(int fd, size_t max_bytes_to_read, size_t *sz_out)
+{
+  ssize_t r;
+  size_t pos = 0;
+  char *string = NULL;
+  size_t string_max = 0;
+
+  if (max_bytes_to_read+1 >= SIZE_T_CEILING)
+    return NULL;
+
+  do {
+    /* XXXX This "add 1K" approach is a little goofy; if we care about
+     * performance here, we should be doubling.  But in practice we shouldn't
+     * be using this function on big files anyway. */
+    string_max = pos + 1024;
+    if (string_max > max_bytes_to_read)
+      string_max = max_bytes_to_read + 1;
+    string = tor_realloc(string, string_max);
+    r = read(fd, string + pos, string_max - pos - 1);
+    if (r < 0) {
+      tor_free(string);
+      return NULL;
+    }
+
+    pos += r;
+  } while (r > 0 && pos < max_bytes_to_read);
+
+  *sz_out = pos;
+  string[pos] = '\0';
+  return string;
+}
+
 /** Read the contents of <b>filename</b> into a newly allocated
  * string; return the string on success or NULL on failure.
  *
@@ -2285,6 +2355,22 @@ read_file_to_str(const char *filename, int flags, struct stat *stat_out)
     return NULL;
   }
 
+#ifndef _WIN32
+/** When we detect that we're reading from a FIFO, don't read more than
+ * this many bytes.  It's insane overkill for most uses. */
+#define FIFO_READ_MAX (1024*1024)
+  if (S_ISFIFO(statbuf.st_mode)) {
+    size_t sz = 0;
+    string = read_file_to_str_until_eof(fd, FIFO_READ_MAX, &sz);
+    if (string && stat_out) {
+      statbuf.st_size = sz;
+      memcpy(stat_out, &statbuf, sizeof(struct stat));
+    }
+    close(fd);
+    return string;
+  }
+#endif
+
   if ((uint64_t)(statbuf.st_size)+1 >= SIZE_T_CEILING)
     return NULL;
 
@@ -2302,7 +2388,7 @@ read_file_to_str(const char *filename, int flags, struct stat *stat_out)
   }
   string[r] = '\0'; /* NUL-terminate the result. */
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__CYGWIN__)
   if (!bin && strchr(string, '\r')) {
     log_debug(LD_FS, "We didn't convert CRLF to LF as well as we hoped "
               "when reading %s. Coping.",
@@ -3897,13 +3983,15 @@ tor_process_handle_destroy(process_handle_t *process_handle,
 
   if (also_terminate_process) {
     if (tor_terminate_process(process_handle) < 0) {
+      const char *errstr =
+#ifdef _WIN32
+        format_win32_error(GetLastError());
+#else
+        strerror(errno);
+#endif
       log_notice(LD_GENERAL, "Failed to terminate process with "
                  "PID '%d' ('%s').", tor_process_get_pid(process_handle),
-#ifdef _WIN32
-                 format_win32_error(GetLastError()));
-#else
-                 strerror(errno));
-#endif
+                 errstr);
     } else {
       log_info(LD_GENERAL, "Terminated process with PID '%d'.",
                tor_process_get_pid(process_handle));
