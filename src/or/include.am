@@ -12,13 +12,17 @@ EXTRA_DIST+= src/or/ntmain.c src/or/or_sha1.i src/or/Makefile.nmake
 if USE_EXTERNAL_EVDNS
 evdns_source=
 else
-evdns_source=src/or/eventdns.c
+evdns_source=src/ext/eventdns.c
 endif
 
 src_or_libtor_a_SOURCES = \
 	src/or/buffers.c				\
+	src/or/channel.c				\
+	src/or/channeltls.c				\
 	src/or/circuitbuild.c				\
 	src/or/circuitlist.c				\
+	src/or/circuitmux.c				\
+	src/or/circuitmux_ewma.c			\
 	src/or/circuituse.c				\
 	src/or/command.c				\
 	src/or/config.c					\
@@ -86,8 +90,12 @@ src_or_tor_LDADD = src/or/libtor.a src/common/libor.a src/common/libor-crypto.a 
 
 ORHEADERS = \
 	src/or/buffers.h				\
+	src/or/channel.h				\
+	src/or/channeltls.h				\
 	src/or/circuitbuild.h				\
 	src/or/circuitlist.h				\
+	src/or/circuitmux.h				\
+	src/or/circuitmux_ewma.h			\
 	src/or/circuituse.h				\
 	src/or/command.h				\
 	src/or/config.h					\
@@ -102,7 +110,6 @@ ORHEADERS = \
 	src/or/dirvote.h				\
 	src/or/dns.h					\
 	src/or/dnsserv.h				\
-	src/or/eventdns.h				\
 	src/or/eventdns_tor.h				\
 	src/or/geoip.h					\
 	src/or/hibernate.h				\

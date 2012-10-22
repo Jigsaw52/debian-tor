@@ -58,8 +58,8 @@
 #include "container.h"
 #include <string.h>
 
-#if OPENSSL_VERSION_NUMBER < OPENSSL_V_SERIES(0,9,7)
-#error "We require OpenSSL >= 0.9.7"
+#if OPENSSL_VERSION_NUMBER < OPENSSL_V_SERIES(0,9,8)
+#error "We require OpenSSL >= 0.9.8"
 #endif
 
 /* Enable the "v2" TLS handshake.
@@ -234,8 +234,8 @@ static tor_tls_context_t *client_tls_context = NULL;
 static int tls_library_is_initialized = 0;
 
 /* Module-internal error codes. */
-#define _TOR_TLS_SYSCALL    (_MIN_TOR_TLS_ERROR_VAL - 2)
-#define _TOR_TLS_ZERORETURN (_MIN_TOR_TLS_ERROR_VAL - 1)
+#define TOR_TLS_SYSCALL_    (MIN_TOR_TLS_ERROR_VAL_ - 2)
+#define TOR_TLS_ZERORETURN_ (MIN_TOR_TLS_ERROR_VAL_ - 1)
 
 /** Write a description of the current state of <b>tls</b> into the
  * <b>sz</b>-byte buffer at <b>buf</b>. */
@@ -393,9 +393,9 @@ tor_tls_err_to_string(int err)
 /** Given a TLS object and the result of an SSL_* call, use
  * SSL_get_error to determine whether an error has occurred, and if so
  * which one.  Return one of TOR_TLS_{DONE|WANTREAD|WANTWRITE|ERROR}.
- * If extra&CATCH_SYSCALL is true, return _TOR_TLS_SYSCALL instead of
+ * If extra&CATCH_SYSCALL is true, return TOR_TLS_SYSCALL_ instead of
  * reporting syscall errors.  If extra&CATCH_ZERO is true, return
- * _TOR_TLS_ZERORETURN instead of reporting zero-return errors.
+ * TOR_TLS_ZERORETURN_ instead of reporting zero-return errors.
  *
  * If an error has occurred, log it at level <b>severity</b> and describe the
  * current action as <b>doing</b>.
@@ -415,7 +415,7 @@ tor_tls_get_error(tor_tls_t *tls, int r, int extra,
       return TOR_TLS_WANTWRITE;
     case SSL_ERROR_SYSCALL:
       if (extra&CATCH_SYSCALL)
-        return _TOR_TLS_SYSCALL;
+        return TOR_TLS_SYSCALL_;
       if (r == 0) {
         log(severity, LD_NET, "TLS error: unexpected close while %s (%s)",
             doing, SSL_state_string_long(tls->ssl));
@@ -432,7 +432,7 @@ tor_tls_get_error(tor_tls_t *tls, int r, int extra,
       return tor_error;
     case SSL_ERROR_ZERO_RETURN:
       if (extra&CATCH_ZERO)
-        return _TOR_TLS_ZERORETURN;
+        return TOR_TLS_ZERORETURN_;
       log(severity, LD_NET, "TLS connection closed while %s in state %s",
           doing, SSL_state_string_long(tls->ssl));
       tls_log_errors(tls, severity, domain, doing);
@@ -597,9 +597,9 @@ tor_tls_create_certificate(crypto_pk_t *rsa,
   tor_assert(cname);
   tor_assert(rsa_sign);
   tor_assert(cname_sign);
-  if (!(sign_pkey = _crypto_pk_get_evp_pkey(rsa_sign,1)))
+  if (!(sign_pkey = crypto_pk_get_evp_pkey_(rsa_sign,1)))
     goto error;
-  if (!(pkey = _crypto_pk_get_evp_pkey(rsa,0)))
+  if (!(pkey = crypto_pk_get_evp_pkey_(rsa,0)))
     goto error;
   if (!(x509 = X509_new()))
     goto error;
@@ -754,7 +754,7 @@ tor_cert_new(X509 *x509_cert)
 
   if ((pkey = X509_get_pubkey(x509_cert)) &&
       (rsa = EVP_PKEY_get1_RSA(pkey))) {
-    crypto_pk_t *pk = _crypto_new_pk_from_rsa(rsa);
+    crypto_pk_t *pk = crypto_new_pk_from_rsa_(rsa);
     crypto_pk_get_all_digests(pk, &cert->pkey_digests);
     cert->pkey_digests_set = 1;
     crypto_pk_free(pk);
@@ -778,13 +778,8 @@ tor_cert_decode(const uint8_t *certificate, size_t certificate_len)
   if (certificate_len > INT_MAX)
     return NULL;
 
-#if OPENSSL_VERSION_NUMBER < OPENSSL_V_SERIES(0,9,8)
-  /* This ifdef suppresses a type warning.  Take out this case once everybody
-   * is using OpenSSL 0.9.8 or later. */
-  x509 = d2i_X509(NULL, (unsigned char**)&cp, (int)certificate_len);
-#else
   x509 = d2i_X509(NULL, &cp, (int)certificate_len);
-#endif
+
   if (!x509)
     return NULL; /* Couldn't decode */
   if (cp - certificate != (int)certificate_len) {
@@ -901,7 +896,7 @@ tor_tls_cert_get_key(tor_cert_t *cert)
     EVP_PKEY_free(pkey);
     return NULL;
   }
-  result = _crypto_new_pk_from_rsa(rsa);
+  result = crypto_new_pk_from_rsa_(rsa);
   EVP_PKEY_free(pkey);
   return result;
 }
@@ -1195,6 +1190,14 @@ tor_tls_context_new(crypto_pk_t *identity, unsigned int key_lifetime,
 #ifdef SSL_OP_NO_TLSv1_1
   SSL_CTX_set_options(result->ctx, SSL_OP_NO_TLSv1_1);
 #endif
+  /* Disable TLS tickets if they're supported.  We never want to use them;
+   * using them can make our perfect forward secrecy a little worse, *and*
+   * create an opportunity to fingerprint us (since it's unusual to use them
+   * with TLS sessions turned off).
+   */
+#ifdef SSL_OP_NO_TICKET
+  SSL_CTX_set_options(result->ctx, SSL_OP_NO_TICKET);
+#endif
 
   if (
 #ifdef DISABLE_SSL3_HANDSHAKE
@@ -1249,7 +1252,7 @@ tor_tls_context_new(crypto_pk_t *identity, unsigned int key_lifetime,
   SSL_CTX_set_session_cache_mode(result->ctx, SSL_SESS_CACHE_OFF);
   if (!is_client) {
     tor_assert(rsa);
-    if (!(pkey = _crypto_pk_get_evp_pkey(rsa,1)))
+    if (!(pkey = crypto_pk_get_evp_pkey_(rsa,1)))
       goto error;
     if (!SSL_CTX_use_PrivateKey(result->ctx, pkey))
       goto error;
@@ -1261,7 +1264,7 @@ tor_tls_context_new(crypto_pk_t *identity, unsigned int key_lifetime,
   {
     crypto_dh_t *dh = crypto_dh_new(DH_TYPE_TLS);
     tor_assert(dh);
-    SSL_CTX_set_tmp_dh(result->ctx, _crypto_dh_get_dh(dh));
+    SSL_CTX_set_tmp_dh(result->ctx, crypto_dh_get_dh_(dh));
     crypto_dh_free(dh);
   }
   SSL_CTX_set_verify(result->ctx, SSL_VERIFY_PEER,
@@ -1753,7 +1756,7 @@ tor_tls_read(tor_tls_t *tls, char *cp, size_t len)
     return r;
   }
   err = tor_tls_get_error(tls, r, CATCH_ZERO, "reading", LOG_DEBUG, LD_NET);
-  if (err == _TOR_TLS_ZERORETURN || err == TOR_TLS_CLOSE) {
+  if (err == TOR_TLS_ZERORETURN_ || err == TOR_TLS_CLOSE) {
     log_debug(LD_NET,"read returned r=%d; TLS is closed",r);
     tls->state = TOR_TLS_ST_CLOSED;
     return TOR_TLS_CLOSE;
@@ -1966,7 +1969,7 @@ tor_tls_shutdown(tor_tls_t *tls)
       } while (r>0);
       err = tor_tls_get_error(tls, r, CATCH_ZERO, "reading to shut down",
                               LOG_INFO, LD_NET);
-      if (err == _TOR_TLS_ZERORETURN) {
+      if (err == TOR_TLS_ZERORETURN_) {
         tls->state = TOR_TLS_ST_GOTCLOSE;
         /* fall through... */
       } else {
@@ -1982,11 +1985,11 @@ tor_tls_shutdown(tor_tls_t *tls)
     }
     err = tor_tls_get_error(tls, r, CATCH_SYSCALL|CATCH_ZERO, "shutting down",
                             LOG_INFO, LD_NET);
-    if (err == _TOR_TLS_SYSCALL) {
+    if (err == TOR_TLS_SYSCALL_) {
       /* The underlying TCP connection closed while we were shutting down. */
       tls->state = TOR_TLS_ST_CLOSED;
       return TOR_TLS_DONE;
-    } else if (err == _TOR_TLS_ZERORETURN) {
+    } else if (err == TOR_TLS_ZERORETURN_) {
       /* The TLS connection says that it sent a shutdown record, but
        * isn't done shutting down yet.  Make sure that this hasn't
        * happened before, then go back to the start of the function
@@ -2156,7 +2159,7 @@ tor_tls_verify(int severity, tor_tls_t *tls, crypto_pk_t **identity_key)
   rsa = EVP_PKEY_get1_RSA(id_pkey);
   if (!rsa)
     goto done;
-  *identity_key = _crypto_new_pk_from_rsa(rsa);
+  *identity_key = crypto_new_pk_from_rsa_(rsa);
 
   r = 0;
 
@@ -2286,7 +2289,7 @@ tor_tls_get_n_raw_bytes(tor_tls_t *tls, size_t *n_read, size_t *n_written)
 /** Implement check_no_tls_errors: If there are any pending OpenSSL
  * errors, log an error message. */
 void
-_check_no_tls_errors(const char *fname, int line)
+check_no_tls_errors_(const char *fname, int line)
 {
   if (ERR_peek_error() == 0)
     return;

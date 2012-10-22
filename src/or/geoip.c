@@ -53,14 +53,14 @@ static char geoip_digest[DIGEST_LEN];
 country_t
 geoip_get_country(const char *country)
 {
-  void *_idxplus1;
+  void *idxplus1_;
   intptr_t idx;
 
-  _idxplus1 = strmap_get_lc(country_idxplus1_by_lc_code, country);
-  if (!_idxplus1)
+  idxplus1_ = strmap_get_lc(country_idxplus1_by_lc_code, country);
+  if (!idxplus1_)
     return -1;
 
-  idx = ((uintptr_t)_idxplus1)-1;
+  idx = ((uintptr_t)idxplus1_)-1;
   return (country_t)idx;
 }
 
@@ -72,14 +72,14 @@ geoip_add_entry(uint32_t low, uint32_t high, const char *country)
 {
   intptr_t idx;
   geoip_entry_t *ent;
-  void *_idxplus1;
+  void *idxplus1_;
 
   if (high < low)
     return;
 
-  _idxplus1 = strmap_get_lc(country_idxplus1_by_lc_code, country);
+  idxplus1_ = strmap_get_lc(country_idxplus1_by_lc_code, country);
 
-  if (!_idxplus1) {
+  if (!idxplus1_) {
     geoip_country_t *c = tor_malloc_zero(sizeof(geoip_country_t));
     strlcpy(c->countrycode, country, sizeof(c->countrycode));
     tor_strlower(c->countrycode);
@@ -87,7 +87,7 @@ geoip_add_entry(uint32_t low, uint32_t high, const char *country)
     idx = smartlist_len(geoip_countries) - 1;
     strmap_set_lc(country_idxplus1_by_lc_code, country, (void*)(idx+1));
   } else {
-    idx = ((uintptr_t)_idxplus1)-1;
+    idx = ((uintptr_t)idxplus1_)-1;
   }
   {
     geoip_country_t *c = smartlist_get(geoip_countries, idx);
@@ -132,7 +132,7 @@ geoip_parse_entry(const char *line)
 /** Sorting helper: return -1, 1, or 0 based on comparison of two
  * geoip_entry_t */
 static int
-_geoip_compare_entries(const void **_a, const void **_b)
+geoip_compare_entries_(const void **_a, const void **_b)
 {
   const geoip_entry_t *a = *_a, *b = *_b;
   if (a->ip_low < b->ip_low)
@@ -146,7 +146,7 @@ _geoip_compare_entries(const void **_a, const void **_b)
 /** bsearch helper: return -1, 1, or 0 based on comparison of an IP (a pointer
  * to a uint32_t in host order) to a geoip_entry_t */
 static int
-_geoip_compare_key_to_entry(const void *_key, const void **_member)
+geoip_compare_key_to_entry_(const void *_key, const void **_member)
 {
   /* No alignment issue here, since _key really is a pointer to uint32_t */
   const uint32_t addr = *(uint32_t *)_key;
@@ -231,7 +231,7 @@ geoip_load_file(const char *filename, const or_options_t *options)
   /*XXXX abort and return -1 if no entries/illformed?*/
   fclose(f);
 
-  smartlist_sort(geoip_entries, _geoip_compare_entries);
+  smartlist_sort(geoip_entries, geoip_compare_entries_);
 
   /* Okay, now we need to maybe change our mind about what is in which
    * country. */
@@ -257,7 +257,7 @@ geoip_get_country_by_ip(uint32_t ipaddr)
   geoip_entry_t *ent;
   if (!geoip_entries)
     return -1;
-  ent = smartlist_bsearch(geoip_entries, &ipaddr, _geoip_compare_key_to_entry);
+  ent = smartlist_bsearch(geoip_entries, &ipaddr, geoip_compare_key_to_entry_);
   return ent ? (int)ent->country : 0;
 }
 
@@ -489,7 +489,7 @@ geoip_note_client_seen(geoip_client_action_t action,
 /** HT_FOREACH helper: remove a clientmap_entry_t from the hashtable if it's
  * older than a certain time. */
 static int
-_remove_old_client_helper(struct clientmap_entry_t *ent, void *_cutoff)
+remove_old_client_helper_(struct clientmap_entry_t *ent, void *_cutoff)
 {
   time_t cutoff = *(time_t*)_cutoff / 60;
   if (ent->last_seen_in_minutes < cutoff) {
@@ -505,7 +505,7 @@ void
 geoip_remove_old_clients(time_t cutoff)
 {
   clientmap_HT_FOREACH_FN(&client_history,
-                          _remove_old_client_helper,
+                          remove_old_client_helper_,
                           &cutoff);
 }
 
@@ -562,7 +562,7 @@ typedef struct c_hist_t {
  * geoip_entry_t.  Sort in descending order of total, and then by country
  * code. */
 static int
-_c_hist_compare(const void **_a, const void **_b)
+c_hist_compare_(const void **_a, const void **_b)
 {
   const c_hist_t *a = *_a, *b = *_b;
   if (a->total > b->total)
@@ -578,7 +578,7 @@ _c_hist_compare(const void **_a, const void **_b)
  * failed, the others as still running. */
 #define DIRREQ_TIMEOUT (10*60)
 
-/** Entry in a map from either conn->global_identifier for direct requests
+/** Entry in a map from either chan->global_identifier for direct requests
  * or a unique circuit identifier for tunneled requests to request time,
  * response size, and completion time of a network status request. Used to
  * measure download times of requests to derive average client
@@ -586,7 +586,7 @@ _c_hist_compare(const void **_a, const void **_b)
 typedef struct dirreq_map_entry_t {
   HT_ENTRY(dirreq_map_entry_t) node;
   /** Unique identifier for this network status request; this is either the
-   * conn->global_identifier of the dir conn (direct request) or a new
+   * chan->global_identifier of the dir channel (direct request) or a new
    * locally unique identifier of a circuit (tunneled request). This ID is
    * only unique among other direct or tunneled requests, respectively. */
   uint64_t dirreq_id;
@@ -631,7 +631,7 @@ HT_GENERATE(dirreqmap, dirreq_map_entry_t, node, dirreq_map_ent_hash,
  * <b>type</b> and <b>dirreq_id</b> as key parts. If there is
  * already an entry for that key, print out a BUG warning and return. */
 static void
-_dirreq_map_put(dirreq_map_entry_t *entry, dirreq_type_t type,
+dirreq_map_put_(dirreq_map_entry_t *entry, dirreq_type_t type,
                uint64_t dirreq_id)
 {
   dirreq_map_entry_t *old_ent;
@@ -653,7 +653,7 @@ _dirreq_map_put(dirreq_map_entry_t *entry, dirreq_type_t type,
  * using <b>type</b> and <b>dirreq_id</b> as key parts. If there
  * is no such entry, return NULL. */
 static dirreq_map_entry_t *
-_dirreq_map_get(dirreq_type_t type, uint64_t dirreq_id)
+dirreq_map_get_(dirreq_type_t type, uint64_t dirreq_id)
 {
   dirreq_map_entry_t lookup;
   lookup.type = type;
@@ -678,7 +678,7 @@ geoip_start_dirreq(uint64_t dirreq_id, size_t response_size,
   ent->response_size = response_size;
   ent->action = action;
   ent->type = type;
-  _dirreq_map_put(ent, type, dirreq_id);
+  dirreq_map_put_(ent, type, dirreq_id);
 }
 
 /** Change the state of the either direct or tunneled (see <b>type</b>)
@@ -694,7 +694,7 @@ geoip_change_dirreq_state(uint64_t dirreq_id, dirreq_type_t type,
   dirreq_map_entry_t *ent;
   if (!get_options()->DirReqStatistics)
     return;
-  ent = _dirreq_map_get(type, dirreq_id);
+  ent = dirreq_map_get_(type, dirreq_id);
   if (!ent)
     return;
   if (new_state == DIRREQ_IS_FOR_NETWORK_STATUS)
@@ -705,7 +705,7 @@ geoip_change_dirreq_state(uint64_t dirreq_id, dirreq_type_t type,
   if ((type == DIRREQ_DIRECT &&
          new_state == DIRREQ_FLUSHING_DIR_CONN_FINISHED) ||
       (type == DIRREQ_TUNNELED &&
-         new_state == DIRREQ_OR_CONN_BUFFER_FLUSHED)) {
+         new_state == DIRREQ_CHANNEL_BUFFER_FLUSHED)) {
     tor_gettimeofday(&ent->completion_time);
     ent->completed = 1;
   }
@@ -868,7 +868,7 @@ geoip_get_client_history(geoip_client_action_t action)
   }
   /* Sort entries. Note that we must do this _AFTER_ rounding, or else
    * the sort order could leak info. */
-  smartlist_sort(entries, _c_hist_compare);
+  smartlist_sort(entries, c_hist_compare_);
 
   /* Build the result. */
   chunks = smartlist_new();
@@ -918,7 +918,7 @@ geoip_get_request_history(geoip_client_action_t action)
       ent->total = round_to_next_multiple_of(tot, granularity);
       smartlist_add(entries, ent);
   } SMARTLIST_FOREACH_END(c);
-  smartlist_sort(entries, _c_hist_compare);
+  smartlist_sort(entries, c_hist_compare_);
 
   strings = smartlist_new();
   SMARTLIST_FOREACH(entries, c_hist_t *, ent, {

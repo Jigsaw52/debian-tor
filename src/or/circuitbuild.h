@@ -9,8 +9,8 @@
  * \brief Header file for circuitbuild.c.
  **/
 
-#ifndef _TOR_CIRCUITBUILD_H
-#define _TOR_CIRCUITBUILD_H
+#ifndef TOR_CIRCUITBUILD_H
+#define TOR_CIRCUITBUILD_H
 
 char *circuit_list_path(origin_circuit_t *circ, int verbose);
 char *circuit_list_path_for_controller(origin_circuit_t *circ);
@@ -22,7 +22,7 @@ origin_circuit_t *circuit_establish_circuit(uint8_t purpose,
                                             extend_info_t *exit,
                                             int flags);
 int circuit_handle_first_hop(origin_circuit_t *circ);
-void circuit_n_conn_done(or_connection_t *or_conn, int status);
+void circuit_n_chan_done(channel_t *chan, int status);
 int inform_testing_reachability(void);
 int circuit_timeout_want_to_count_circ(origin_circuit_t *circ);
 int circuit_send_next_onion_skin(origin_circuit_t *circ);
@@ -32,7 +32,8 @@ int circuit_init_cpath_crypto(crypt_path_t *cpath, const char *key_data,
                               int reverse);
 int circuit_finish_handshake(origin_circuit_t *circ, uint8_t cell_type,
                              const uint8_t *reply);
-int circuit_truncated(origin_circuit_t *circ, crypt_path_t *layer);
+int circuit_truncated(origin_circuit_t *circ, crypt_path_t *layer,
+                      int reason);
 int onionskin_answer(or_circuit_t *circ, uint8_t cell_type,
                      const char *payload, const char *keys);
 int circuit_all_predicted_ports_handled(time_t now, int *need_uptime,
