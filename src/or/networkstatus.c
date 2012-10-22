@@ -11,7 +11,10 @@
  */
 
 #include "or.h"
+#include "channel.h"
 #include "circuitbuild.h"
+#include "circuitmux.h"
+#include "circuitmux_ewma.h"
 #include "config.h"
 #include "connection.h"
 #include "connection_or.h"
@@ -667,7 +670,7 @@ networkstatus_get_cache_filename(const char *identity_digest)
 /** Helper for smartlist_sort: Compare two networkstatus objects by
  * publication date. */
 static int
-_compare_networkstatus_v2_published_on(const void **_a, const void **_b)
+compare_networkstatus_v2_published_on_(const void **_a, const void **_b)
 {
   const networkstatus_v2_t *a = *_a, *b = *_b;
   if (a->published_on < b->published_on)
@@ -901,7 +904,7 @@ router_set_networkstatus_v2(const char *s, time_t arrived_at,
   networkstatus_v2_list_has_changed = 1;
 
   smartlist_sort(networkstatus_v2_list,
-                 _compare_networkstatus_v2_published_on);
+                 compare_networkstatus_v2_published_on_);
 
   if (!skewed)
     add_networkstatus_to_cache(s, source, ns);
@@ -1634,6 +1637,7 @@ networkstatus_set_current_consensus(const char *consensus,
   consensus_waiting_for_certs_t *waiting = NULL;
   time_t current_valid_after = 0;
   int free_consensus = 1; /* Free 'c' at the end of the function */
+  int old_ewma_enabled;
 
   if (flav < 0) {
     /* XXXX we don't handle unrecognized flavors yet. */
@@ -1827,7 +1831,18 @@ networkstatus_set_current_consensus(const char *consensus,
 
     dirvote_recalculate_timing(options, now);
     routerstatus_list_update_named_server_map();
-    cell_ewma_set_scale_factor(options, current_consensus);
+
+    /* Update ewma and adjust policy if needed; first cache the old value */
+    old_ewma_enabled = cell_ewma_enabled();
+    /* Change the cell EWMA settings */
+    cell_ewma_set_scale_factor(options, networkstatus_get_latest_consensus());
+    /* If we just enabled ewma, set the cmux policy on all active channels */
+    if (cell_ewma_enabled() && !old_ewma_enabled) {
+      channel_set_cmux_policy_everywhere(&ewma_policy);
+    } else if (!cell_ewma_enabled() && old_ewma_enabled) {
+      /* Turn it off everywhere */
+      channel_set_cmux_policy_everywhere(NULL);
+    }
 
     /* XXXX024 this call might be unnecessary here: can changing the
      * current consensus really alter our view of any OR's rate limits? */
@@ -1990,7 +2005,7 @@ download_status_map_update_from_v2_networkstatus(void)
       digestmap_set(dl_status, d, s);
     } SMARTLIST_FOREACH_END(rs);
   } SMARTLIST_FOREACH_END(ns);
-  digestmap_free(v2_download_status_map, _tor_free);
+  digestmap_free(v2_download_status_map, tor_free_);
   v2_download_status_map = dl_status;
   networkstatus_v2_list_has_changed = 0;
 }
@@ -2003,7 +2018,7 @@ routerstatus_list_update_named_server_map(void)
   if (!current_consensus)
     return;
 
-  strmap_free(named_server_map, _tor_free);
+  strmap_free(named_server_map, tor_free_);
   named_server_map = strmap_new();
   strmap_free(unnamed_server_map, NULL);
   unnamed_server_map = strmap_new();
@@ -2390,7 +2405,7 @@ networkstatus_free_all(void)
     networkstatus_v2_list = NULL;
   }
 
-  digestmap_free(v2_download_status_map, _tor_free);
+  digestmap_free(v2_download_status_map, tor_free_);
   v2_download_status_map = NULL;
   networkstatus_vote_free(current_ns_consensus);
   networkstatus_vote_free(current_md_consensus);
@@ -2405,7 +2420,7 @@ networkstatus_free_all(void)
     tor_free(waiting->body);
   }
 
-  strmap_free(named_server_map, _tor_free);
+  strmap_free(named_server_map, tor_free_);
   strmap_free(unnamed_server_map, NULL);
 }
 

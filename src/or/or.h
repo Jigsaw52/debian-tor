@@ -9,8 +9,8 @@
  * \brief Master header file for Tor-specific functionality.
  **/
 
-#ifndef _TOR_OR_H
-#define _TOR_OR_H
+#ifndef TOR_OR_H
+#define TOR_OR_H
 
 #include "orconfig.h"
 
@@ -198,7 +198,7 @@ typedef enum {
   CIRC_ID_TYPE_NEITHER=2
 } circ_id_type_t;
 
-#define _CONN_TYPE_MIN 3
+#define CONN_TYPE_MIN_ 3
 /** Type for sockets listening for OR connections. */
 #define CONN_TYPE_OR_LISTENER 3
 /** A bidirectional TLS connection transmitting a sequence of cells.
@@ -229,8 +229,8 @@ typedef enum {
 #define CONN_TYPE_AP_NATD_LISTENER 14
 /** Type for sockets listening for DNS requests. */
 #define CONN_TYPE_AP_DNS_LISTENER 15
-#define _CONN_TYPE_MAX 15
-/* !!!! If _CONN_TYPE_MAX is ever over 15, we must grow the type field in
+#define CONN_TYPE_MAX_ 15
+/* !!!! If CONN_TYPE_MAX_ is ever over 15, we must grow the type field in
  * connection_t. */
 
 /* Proxy client types */
@@ -270,17 +270,17 @@ typedef enum {
 /** State for any listener connection. */
 #define LISTENER_STATE_READY 0
 
-#define _CPUWORKER_STATE_MIN 1
+#define CPUWORKER_STATE_MIN_ 1
 /** State for a connection to a cpuworker process that's idle. */
 #define CPUWORKER_STATE_IDLE 1
 /** State for a connection to a cpuworker process that's processing a
  * handshake. */
 #define CPUWORKER_STATE_BUSY_ONION 2
-#define _CPUWORKER_STATE_MAX 2
+#define CPUWORKER_STATE_MAX_ 2
 
 #define CPUWORKER_TASK_ONION CPUWORKER_STATE_BUSY_ONION
 
-#define _OR_CONN_STATE_MIN 1
+#define OR_CONN_STATE_MIN_ 1
 /** State for a connection to an OR: waiting for connect() to finish. */
 #define OR_CONN_STATE_CONNECTING 1
 /** State for a connection to an OR: waiting for proxy handshake to complete */
@@ -305,9 +305,9 @@ typedef enum {
 #define OR_CONN_STATE_OR_HANDSHAKING_V3 7
 /** State for an OR connection: Ready to send/receive cells. */
 #define OR_CONN_STATE_OPEN 8
-#define _OR_CONN_STATE_MAX 8
+#define OR_CONN_STATE_MAX_ 8
 
-#define _EXIT_CONN_STATE_MIN 1
+#define EXIT_CONN_STATE_MIN_ 1
 /** State for an exit connection: waiting for response from DNS farm. */
 #define EXIT_CONN_STATE_RESOLVING 1
 /** State for an exit connection: waiting for connect() to finish. */
@@ -316,10 +316,10 @@ typedef enum {
 #define EXIT_CONN_STATE_OPEN 3
 /** State for an exit connection: waiting to be removed. */
 #define EXIT_CONN_STATE_RESOLVEFAILED 4
-#define _EXIT_CONN_STATE_MAX 4
+#define EXIT_CONN_STATE_MAX_ 4
 
 /* The AP state values must be disjoint from the EXIT state values. */
-#define _AP_CONN_STATE_MIN 5
+#define AP_CONN_STATE_MIN_ 5
 /** State for a SOCKS connection: waiting for SOCKS request. */
 #define AP_CONN_STATE_SOCKS_WAIT 5
 /** State for a SOCKS connection: got a y.onion URL; waiting to receive
@@ -339,14 +339,14 @@ typedef enum {
 /** State for a transparent natd connection: waiting for original
  * destination. */
 #define AP_CONN_STATE_NATD_WAIT 12
-#define _AP_CONN_STATE_MAX 12
+#define AP_CONN_STATE_MAX_ 12
 
 /** True iff the AP_CONN_STATE_* value <b>s</b> means that the corresponding
  * edge connection is not attached to any circuit. */
 #define AP_CONN_STATE_IS_UNATTACHED(s) \
   ((s) <= AP_CONN_STATE_CIRCUIT_WAIT || (s) == AP_CONN_STATE_NATD_WAIT)
 
-#define _DIR_CONN_STATE_MIN 1
+#define DIR_CONN_STATE_MIN_ 1
 /** State for connection to directory server: waiting for connect(). */
 #define DIR_CONN_STATE_CONNECTING 1
 /** State for connection to directory server: sending HTTP request. */
@@ -359,21 +359,21 @@ typedef enum {
 #define DIR_CONN_STATE_SERVER_COMMAND_WAIT 5
 /** State for connection at directory server: sending HTTP response. */
 #define DIR_CONN_STATE_SERVER_WRITING 6
-#define _DIR_CONN_STATE_MAX 6
+#define DIR_CONN_STATE_MAX_ 6
 
 /** True iff the purpose of <b>conn</b> means that it's a server-side
  * directory connection. */
 #define DIR_CONN_IS_SERVER(conn) ((conn)->purpose == DIR_PURPOSE_SERVER)
 
-#define _CONTROL_CONN_STATE_MIN 1
+#define CONTROL_CONN_STATE_MIN_ 1
 /** State for a control connection: Authenticated and accepting v1 commands. */
 #define CONTROL_CONN_STATE_OPEN 1
 /** State for a control connection: Waiting for authentication; speaking
  * protocol v1. */
 #define CONTROL_CONN_STATE_NEEDAUTH 2
-#define _CONTROL_CONN_STATE_MAX 2
+#define CONTROL_CONN_STATE_MAX_ 2
 
-#define _DIR_PURPOSE_MIN 3
+#define DIR_PURPOSE_MIN_ 3
 /** A connection to a directory server: download a rendezvous
  * descriptor. */
 #define DIR_PURPOSE_FETCH_RENDDESC 3
@@ -421,7 +421,7 @@ typedef enum {
 #define DIR_PURPOSE_FETCH_RENDDESC_V2 18
 /** A connection to a directory server: download a microdescriptor. */
 #define DIR_PURPOSE_FETCH_MICRODESC 19
-#define _DIR_PURPOSE_MAX 19
+#define DIR_PURPOSE_MAX_ 19
 
 /** True iff <b>p</b> is a purpose corresponding to uploading data to a
  * directory server. */
@@ -431,12 +431,12 @@ typedef enum {
    (p)==DIR_PURPOSE_UPLOAD_VOTE ||              \
    (p)==DIR_PURPOSE_UPLOAD_SIGNATURES)
 
-#define _EXIT_PURPOSE_MIN 1
+#define EXIT_PURPOSE_MIN_ 1
 /** This exit stream wants to do an ordinary connect. */
 #define EXIT_PURPOSE_CONNECT 1
 /** This exit stream wants to do a resolve (either normal or reverse). */
 #define EXIT_PURPOSE_RESOLVE 2
-#define _EXIT_PURPOSE_MAX 2
+#define EXIT_PURPOSE_MAX_ 2
 
 /* !!!! If any connection purpose is ever over 31, we must grow the type
  * field in connection_t. */
@@ -445,16 +445,16 @@ typedef enum {
 #define CIRCUIT_STATE_BUILDING 0
 /** Circuit state: Waiting to process the onionskin. */
 #define CIRCUIT_STATE_ONIONSKIN_PENDING 1
-/** Circuit state: I'd like to deliver a create, but my n_conn is still
+/** Circuit state: I'd like to deliver a create, but my n_chan is still
  * connecting. */
-#define CIRCUIT_STATE_OR_WAIT 2
+#define CIRCUIT_STATE_CHAN_WAIT 2
 /** Circuit state: onionskin(s) processed, ready to send/receive cells. */
 #define CIRCUIT_STATE_OPEN 3
 
-#define _CIRCUIT_PURPOSE_MIN 1
+#define CIRCUIT_PURPOSE_MIN_ 1
 
 /* these circuits were initiated elsewhere */
-#define _CIRCUIT_PURPOSE_OR_MIN 1
+#define CIRCUIT_PURPOSE_OR_MIN_ 1
 /** OR-side circuit purpose: normal circuit, at OR. */
 #define CIRCUIT_PURPOSE_OR 1
 /** OR-side circuit purpose: At OR, from Bob, waiting for intro from Alices. */
@@ -463,7 +463,7 @@ typedef enum {
 #define CIRCUIT_PURPOSE_REND_POINT_WAITING 3
 /** OR-side circuit purpose: At OR, both circuits have this purpose. */
 #define CIRCUIT_PURPOSE_REND_ESTABLISHED 4
-#define _CIRCUIT_PURPOSE_OR_MAX 4
+#define CIRCUIT_PURPOSE_OR_MAX_ 4
 
 /* these circuits originate at this node */
 
@@ -506,7 +506,7 @@ typedef enum {
 #define CIRCUIT_PURPOSE_C_REND_JOINED 12
 /** This circuit is used for build time measurement only */
 #define CIRCUIT_PURPOSE_C_MEASURE_TIMEOUT 13
-#define _CIRCUIT_PURPOSE_C_MAX 13
+#define CIRCUIT_PURPOSE_C_MAX_ 13
 /** Hidden-service-side circuit purpose: at Bob, waiting for introductions. */
 #define CIRCUIT_PURPOSE_S_ESTABLISH_INTRO 14
 /** Hidden-service-side circuit purpose: at Bob, successfully established
@@ -520,19 +520,19 @@ typedef enum {
 #define CIRCUIT_PURPOSE_TESTING 18
 /** A controller made this circuit and Tor should not use it. */
 #define CIRCUIT_PURPOSE_CONTROLLER 19
-#define _CIRCUIT_PURPOSE_MAX 19
+#define CIRCUIT_PURPOSE_MAX_ 19
 /** A catch-all for unrecognized purposes. Currently we don't expect
  * to make or see any circuits with this purpose. */
 #define CIRCUIT_PURPOSE_UNKNOWN 255
 
 /** True iff the circuit purpose <b>p</b> is for a circuit that
  * originated at this node. */
-#define CIRCUIT_PURPOSE_IS_ORIGIN(p) ((p)>_CIRCUIT_PURPOSE_OR_MAX)
+#define CIRCUIT_PURPOSE_IS_ORIGIN(p) ((p)>CIRCUIT_PURPOSE_OR_MAX_)
 /** True iff the circuit purpose <b>p</b> is for a circuit that originated
  * here to serve as a client.  (Hidden services don't count here.) */
 #define CIRCUIT_PURPOSE_IS_CLIENT(p)  \
-  ((p)> _CIRCUIT_PURPOSE_OR_MAX &&    \
-   (p)<=_CIRCUIT_PURPOSE_C_MAX)
+  ((p)> CIRCUIT_PURPOSE_OR_MAX_ &&    \
+   (p)<=CIRCUIT_PURPOSE_C_MAX_)
 /** True iff the circuit_t <b>c</b> is actually an origin_circuit_t. */
 #define CIRCUIT_IS_ORIGIN(c) (CIRCUIT_PURPOSE_IS_ORIGIN((c)->purpose))
 /** True iff the circuit purpose <b>p</b> is for an established rendezvous
@@ -665,7 +665,7 @@ typedef enum {
 
 /* Reasons why we (or a remote OR) might close a circuit. See tor-spec.txt for
  * documentation of these. */
-#define _END_CIRC_REASON_MIN            0
+#define END_CIRC_REASON_MIN_            0
 #define END_CIRC_REASON_NONE            0
 #define END_CIRC_REASON_TORPROTOCOL     1
 #define END_CIRC_REASON_INTERNAL        2
@@ -674,12 +674,12 @@ typedef enum {
 #define END_CIRC_REASON_RESOURCELIMIT   5
 #define END_CIRC_REASON_CONNECTFAILED   6
 #define END_CIRC_REASON_OR_IDENTITY     7
-#define END_CIRC_REASON_OR_CONN_CLOSED  8
+#define END_CIRC_REASON_CHANNEL_CLOSED  8
 #define END_CIRC_REASON_FINISHED        9
 #define END_CIRC_REASON_TIMEOUT         10
 #define END_CIRC_REASON_DESTROYED       11
 #define END_CIRC_REASON_NOSUCHSERVICE   12
-#define _END_CIRC_REASON_MAX            12
+#define END_CIRC_REASON_MAX_            12
 
 /** Bitwise-OR this with the argument to circuit_mark_for_close() or
  * control_event_circuit_status() to indicate that the reason was
@@ -879,6 +879,147 @@ typedef uint16_t circid_t;
 /** Identifies a stream on a circuit */
 typedef uint16_t streamid_t;
 
+/* channel_t typedef; struct channel_s is in channel.h */
+
+typedef struct channel_s channel_t;
+
+/* channel_listener_t typedef; struct channel_listener_s is in channel.h */
+
+typedef struct channel_listener_s channel_listener_t;
+
+/* channel states for channel_t */
+
+typedef enum {
+  /*
+   * Closed state - channel is inactive
+   *
+   * Permitted transitions from:
+   *   - CHANNEL_STATE_CLOSING
+   * Permitted transitions to:
+   *   - CHANNEL_STATE_OPENING
+   */
+  CHANNEL_STATE_CLOSED = 0,
+  /*
+   * Opening state - channel is trying to connect
+   *
+   * Permitted transitions from:
+   *   - CHANNEL_STATE_CLOSED
+   * Permitted transitions to:
+   *   - CHANNEL_STATE_CLOSING
+   *   - CHANNEL_STATE_ERROR
+   *   - CHANNEL_STATE_OPEN
+   */
+  CHANNEL_STATE_OPENING,
+  /*
+   * Open state - channel is active and ready for use
+   *
+   * Permitted transitions from:
+   *   - CHANNEL_STATE_MAINT
+   *   - CHANNEL_STATE_OPENING
+   * Permitted transitions to:
+   *   - CHANNEL_STATE_CLOSING
+   *   - CHANNEL_STATE_ERROR
+   *   - CHANNEL_STATE_MAINT
+   */
+  CHANNEL_STATE_OPEN,
+  /*
+   * Maintenance state - channel is temporarily offline for subclass specific
+   *   maintenance activities such as TLS renegotiation.
+   *
+   * Permitted transitions from:
+   *   - CHANNEL_STATE_OPEN
+   * Permitted transitions to:
+   *   - CHANNEL_STATE_CLOSING
+   *   - CHANNEL_STATE_ERROR
+   *   - CHANNEL_STATE_OPEN
+   */
+  CHANNEL_STATE_MAINT,
+  /*
+   * Closing state - channel is shutting down
+   *
+   * Permitted transitions from:
+   *   - CHANNEL_STATE_MAINT
+   *   - CHANNEL_STATE_OPEN
+   * Permitted transitions to:
+   *   - CHANNEL_STATE_CLOSED,
+   *   - CHANNEL_STATE_ERROR
+   */
+  CHANNEL_STATE_CLOSING,
+  /*
+   * Error state - channel has experienced a permanent error
+   *
+   * Permitted transitions from:
+   *   - CHANNEL_STATE_CLOSING
+   *   - CHANNEL_STATE_MAINT
+   *   - CHANNEL_STATE_OPENING
+   *   - CHANNEL_STATE_OPEN
+   * Permitted transitions to:
+   *   - None
+   */
+  CHANNEL_STATE_ERROR,
+  /*
+   * Placeholder for maximum state value
+   */
+  CHANNEL_STATE_LAST
+} channel_state_t;
+
+/* channel listener states for channel_listener_t */
+
+typedef enum {
+  /*
+   * Closed state - channel listener is inactive
+   *
+   * Permitted transitions from:
+   *   - CHANNEL_LISTENER_STATE_CLOSING
+   * Permitted transitions to:
+   *   - CHANNEL_LISTENER_STATE_LISTENING
+   */
+  CHANNEL_LISTENER_STATE_CLOSED = 0,
+  /*
+   * Listening state - channel listener is listening for incoming
+   * connections
+   *
+   * Permitted transitions from:
+   *   - CHANNEL_LISTENER_STATE_CLOSED
+   * Permitted transitions to:
+   *   - CHANNEL_LISTENER_STATE_CLOSING
+   *   - CHANNEL_LISTENER_STATE_ERROR
+   */
+  CHANNEL_LISTENER_STATE_LISTENING,
+  /*
+   * Closing state - channel listener is shutting down
+   *
+   * Permitted transitions from:
+   *   - CHANNEL_LISTENER_STATE_LISTENING
+   * Permitted transitions to:
+   *   - CHANNEL_LISTENER_STATE_CLOSED,
+   *   - CHANNEL_LISTENER_STATE_ERROR
+   */
+  CHANNEL_LISTENER_STATE_CLOSING,
+  /*
+   * Error state - channel listener has experienced a permanent error
+   *
+   * Permitted transitions from:
+   *   - CHANNEL_STATE_CLOSING
+   *   - CHANNEL_STATE_LISTENING
+   * Permitted transitions to:
+   *   - None
+   */
+  CHANNEL_LISTENER_STATE_ERROR,
+  /*
+   * Placeholder for maximum state value
+   */
+  CHANNEL_LISTENER_STATE_LAST
+} channel_listener_state_t;
+
+/* TLS channel stuff */
+
+typedef struct channel_tls_s channel_tls_t;
+
+/* circuitmux_t typedef; struct circuitmux_s is in circuitmux.h */
+
+typedef struct circuitmux_s circuitmux_t;
+
 /** Parsed onion routing cell.  All communication between nodes
  * is via cells. */
 typedef struct cell_t {
@@ -1061,14 +1202,11 @@ typedef struct connection_t {
 
   /** Unique identifier for this connection on this Tor instance. */
   uint64_t global_identifier;
-
-  /** Unique ID for measuring tunneled network status requests. */
-  uint64_t dirreq_id;
 } connection_t;
 
 /** Subtype of connection_t; used for a listener socket. */
 typedef struct listener_connection_t {
-  connection_t _base;
+  connection_t base_;
 
   /** If the connection is a CONN_TYPE_AP_DNS_LISTENER, this field points
    * to the evdns_server_port it uses to listen to and answer connections. */
@@ -1191,7 +1329,7 @@ typedef struct or_handshake_state_t {
 /** Subtype of connection_t for an "OR connection" -- that is, one that speaks
  * cells over TLS. */
 typedef struct or_connection_t {
-  connection_t _base;
+  connection_t base_;
 
   /** Hash of the public RSA key for the other side's identity key, or zeroes
    * if the other side hasn't shown us a valid identity key. */
@@ -1202,29 +1340,22 @@ typedef struct or_connection_t {
   int tls_error; /**< Last tor_tls error code. */
   /** When we last used this conn for any client traffic. If not
    * recent, we can rate limit it further. */
-  time_t client_used;
+
+  /* Channel using this connection */
+  channel_tls_t *chan;
 
   tor_addr_t real_addr; /**< The actual address that this connection came from
                        * or went to.  The <b>addr</b> field is prone to
                        * getting overridden by the address from the router
                        * descriptor matching <b>identity_digest</b>. */
 
-  circ_id_type_t circ_id_type:2; /**< When we send CREATE cells along this
-                                  * connection, which half of the space should
-                                  * we use? */
   /** Should this connection be used for extending circuits to the server
    * matching the <b>identity_digest</b> field?  Set to true if we're pretty
    * sure we aren't getting MITMed, either because we're connected to an
    * address listed in a server descriptor, or because an authenticated
    * NETINFO cell listed the address we're connected to as recognized. */
   unsigned int is_canonical:1;
-  /** True iff this connection shouldn't get any new circs attached to it,
-   * because the connection is too old, or because there's a better one.
-   * More generally, this flag is used to note an unhealthy connection;
-   * for example, if a bad connection fails we shouldn't assume that the
-   * router itself has a problem.
-   */
-  unsigned int is_bad_for_new_circs:1;
+
   /** True iff we have decided that the other end of this connection
    * is a client.  Connections with this flag set should never be used
    * to satisfy an EXTEND request.  */
@@ -1234,9 +1365,6 @@ typedef struct or_connection_t {
   unsigned int proxy_type:2; /**< One of PROXY_NONE...PROXY_SOCKS5 */
   uint8_t link_proto; /**< What protocol version are we using? 0 for
                        * "none negotiated yet." */
-  circid_t next_circ_id; /**< Which circ_id do we try to use next on
-                          * this connection?  This is always in the
-                          * range 0..1<<15-1. */
 
   or_handshake_state_t *handshake_state; /**< If we are setting this connection
                                           * up, state information to do so. */
@@ -1258,24 +1386,7 @@ typedef struct or_connection_t {
   /* XXXX we could share this among all connections. */
   struct ev_token_bucket_cfg *bucket_cfg;
 #endif
-  int n_circuits; /**< How many circuits use this connection as p_conn or
-                   * n_conn ? */
 
-  /** Double-linked ring of circuits with queued cells waiting for room to
-   * free up on this connection's outbuf.  Every time we pull cells from a
-   * circuit, we advance this pointer to the next circuit in the ring. */
-  struct circuit_t *active_circuits;
-  /** Priority queue of cell_ewma_t for circuits with queued cells waiting for
-   * room to free up on this connection's outbuf.  Kept in heap order
-   * according to EWMA.
-   *
-   * This is redundant with active_circuits; if we ever decide only to use the
-   * cell_ewma algorithm for choosing circuits, we can remove active_circuits.
-   */
-  smartlist_t *active_circuit_pqueue;
-  /** The tick on which the cell_ewma_ts in active_circuit_pqueue last had
-   * their ewma values rescaled. */
-  unsigned active_circuit_pqueue_last_recalibrated;
   struct or_connection_t *next_with_same_id; /**< Next connection with same
                                               * identity digest as this one. */
 } or_connection_t;
@@ -1283,7 +1394,7 @@ typedef struct or_connection_t {
 /** Subtype of connection_t for an "edge connection" -- that is, an entry (ap)
  * connection, or an exit. */
 typedef struct edge_connection_t {
-  connection_t _base;
+  connection_t base_;
 
   struct edge_connection_t *next_stream; /**< Points to the next stream at this
                                           * edge, if any */
@@ -1327,12 +1438,16 @@ typedef struct edge_connection_t {
    * cells. */
   unsigned int edge_blocked_on_circ:1;
 
+  /** Unique ID for directory requests; this used to be in connection_t, but
+   * that's going away and being used on channels instead.  We still tag
+   * edge connections with dirreq_id from circuits, so it's copied here. */
+  uint64_t dirreq_id;
 } edge_connection_t;
 
 /** Subtype of edge_connection_t for an "entry connection" -- that is, a SOCKS
  * connection, a DNS request, a TransPort connection or a NATD connection */
 typedef struct entry_connection_t {
-  edge_connection_t _edge;
+  edge_connection_t edge_;
 
   /** Nickname of planned exit node -- used with .exit support. */
   char *chosen_exit_name;
@@ -1410,7 +1525,7 @@ typedef struct entry_connection_t {
 /** Subtype of connection_t for an "directory connection" -- that is, an HTTP
  * connection to retrieve or serve directory material. */
 typedef struct dir_connection_t {
-  connection_t _base;
+  connection_t base_;
 
  /** Which 'resource' did we ask the directory for? This is typically the part
   * of the URL string that defines, relative to the directory conn purpose,
@@ -1449,11 +1564,15 @@ typedef struct dir_connection_t {
   char identity_digest[DIGEST_LEN]; /**< Hash of the public RSA key for
                                      * the directory server's signing key. */
 
+  /** Unique ID for directory requests; this used to be in connection_t, but
+   * that's going away and being used on channels instead.  The dirserver still
+   * needs this for the incoming side, so it's moved here. */
+  uint64_t dirreq_id;
 } dir_connection_t;
 
 /** Subtype of connection_t for an connection to a controller. */
 typedef struct control_connection_t {
-  connection_t _base;
+  connection_t base_;
 
   uint32_t event_mask; /**< Bitfield: which events does this controller
                         * care about? */
@@ -1480,12 +1599,12 @@ typedef struct control_connection_t {
 } control_connection_t;
 
 /** Cast a connection_t subtype pointer to a connection_t **/
-#define TO_CONN(c) (&(((c)->_base)))
-/** Helper macro: Given a pointer to to._base, of type from*, return &to. */
-#define DOWNCAST(to, ptr) ((to*)SUBTYPE_P(ptr, to, _base))
+#define TO_CONN(c) (&(((c)->base_)))
+/** Helper macro: Given a pointer to to.base_, of type from*, return &to. */
+#define DOWNCAST(to, ptr) ((to*)SUBTYPE_P(ptr, to, base_))
 
 /** Cast a entry_connection_t subtype pointer to a edge_connection_t **/
-#define ENTRY_TO_EDGE_CONN(c) (&(((c))->_edge))
+#define ENTRY_TO_EDGE_CONN(c) (&(((c))->edge_))
 /** Cast a entry_connection_t subtype pointer to a connection_t **/
 #define ENTRY_TO_CONN(c) (TO_CONN(ENTRY_TO_EDGE_CONN(c)))
 
@@ -1530,12 +1649,12 @@ static INLINE edge_connection_t *TO_EDGE_CONN(connection_t *c)
 static INLINE entry_connection_t *TO_ENTRY_CONN(connection_t *c)
 {
   tor_assert(c->magic == ENTRY_CONNECTION_MAGIC);
-  return (entry_connection_t*) SUBTYPE_P(c, entry_connection_t, _edge._base);
+  return (entry_connection_t*) SUBTYPE_P(c, entry_connection_t, edge_.base_);
 }
 static INLINE entry_connection_t *EDGE_TO_ENTRY_CONN(edge_connection_t *c)
 {
-  tor_assert(c->_base.magic == ENTRY_CONNECTION_MAGIC);
-  return (entry_connection_t*) SUBTYPE_P(c, entry_connection_t, _edge);
+  tor_assert(c->base_.magic == ENTRY_CONNECTION_MAGIC);
+  return (entry_connection_t*) SUBTYPE_P(c, entry_connection_t, edge_);
 }
 static INLINE control_connection_t *TO_CONTROL_CONN(connection_t *c)
 {
@@ -2462,29 +2581,6 @@ typedef struct {
   time_t expiry_time;
 } cpath_build_state_t;
 
-/**
- * The cell_ewma_t structure keeps track of how many cells a circuit has
- * transferred recently.  It keeps an EWMA (exponentially weighted moving
- * average) of the number of cells flushed from the circuit queue onto a
- * connection in connection_or_flush_from_first_active_circuit().
- */
-typedef struct {
-  /** The last 'tick' at which we recalibrated cell_count.
-   *
-   * A cell sent at exactly the start of this tick has weight 1.0. Cells sent
-   * since the start of this tick have weight greater than 1.0; ones sent
-   * earlier have less weight. */
-  unsigned last_adjusted_tick;
-  /** The EWMA of the cell count. */
-  double cell_count;
-  /** True iff this is the cell count for a circuit's previous
-   * connection. */
-  unsigned int is_for_p_conn : 1;
-  /** The position of the circuit within the OR connection's priority
-   * queue. */
-  int heap_index;
-} cell_ewma_t;
-
 #define ORIGIN_CIRCUIT_MAGIC 0x35315243u
 #define OR_CIRCUIT_MAGIC 0x98ABC04Fu
 
@@ -2515,23 +2611,39 @@ typedef struct circuit_t {
   uint32_t magic; /**< For memory and type debugging: must equal
                    * ORIGIN_CIRCUIT_MAGIC or OR_CIRCUIT_MAGIC. */
 
-  /** Queue of cells waiting to be transmitted on n_conn. */
-  cell_queue_t n_conn_cells;
-  /** The OR connection that is next in this circuit. */
-  or_connection_t *n_conn;
-  /** The circuit_id used in the next (forward) hop of this circuit. */
+  /** The channel that is next in this circuit. */
+  channel_t *n_chan;
+
+  /**
+   * The circuit_id used in the next (forward) hop of this circuit;
+   * this is unique to n_chan, but this ordered pair is globally
+   * unique:
+   *
+   * (n_chan->global_identifier, n_circ_id)
+   */
   circid_t n_circ_id;
 
-  /** The hop to which we want to extend this circuit.  Should be NULL if
-   * the circuit has attached to a connection. */
+  /**
+   * Circuit mux associated with n_chan to which this circuit is attached;
+   * NULL if we have no n_chan.
+   */
+  circuitmux_t *n_mux;
+
+  /** Queue of cells waiting to be transmitted on n_chan */
+  cell_queue_t n_chan_cells;
+
+  /**
+   * The hop to which we want to extend this circuit.  Should be NULL if
+   * the circuit has attached to a channel.
+   */
   extend_info_t *n_hop;
 
-  /** True iff we are waiting for n_conn_cells to become less full before
+  /** True iff we are waiting for n_chan_cells to become less full before
    * allowing p_streams to add any more cells. (Origin circuit only.) */
-  unsigned int streams_blocked_on_n_conn : 1;
-  /** True iff we are waiting for p_conn_cells to become less full before
+  unsigned int streams_blocked_on_n_chan : 1;
+  /** True iff we are waiting for p_chan_cells to become less full before
    * allowing n_streams to add any more cells. (OR circuit only.) */
-  unsigned int streams_blocked_on_p_conn : 1;
+  unsigned int streams_blocked_on_p_chan : 1;
 
   uint8_t state; /**< Current status of this circuit. */
   uint8_t purpose; /**< Why are we creating this circuit? */
@@ -2546,10 +2658,10 @@ typedef struct circuit_t {
    * more. */
   int deliver_window;
 
-  /** For storage while n_conn is pending
-    * (state CIRCUIT_STATE_OR_WAIT). When defined, it is always
+  /** For storage while n_chan is pending
+    * (state CIRCUIT_STATE_CHAN_WAIT). When defined, it is always
     * length ONIONSKIN_CHALLENGE_LEN. */
-  char *n_conn_onionskin;
+  char *n_chan_onionskin;
 
   /** When was this circuit created?  We keep this timestamp with a higher
    * resolution than most so that the circuit-build-time tracking code can
@@ -2575,23 +2687,19 @@ typedef struct circuit_t {
   const char *marked_for_close_file; /**< For debugging: in which file was this
                                       * circuit marked for close? */
 
-  /** Next circuit in the doubly-linked ring of circuits waiting to add
-   * cells to n_conn.  NULL if we have no cells pending, or if we're not
-   * linked to an OR connection. */
-  struct circuit_t *next_active_on_n_conn;
-  /** Previous circuit in the doubly-linked ring of circuits waiting to add
-   * cells to n_conn.  NULL if we have no cells pending, or if we're not
-   * linked to an OR connection. */
-  struct circuit_t *prev_active_on_n_conn;
-  struct circuit_t *next; /**< Next circuit in linked list of all circuits. */
-
   /** Unique ID for measuring tunneled network status requests. */
   uint64_t dirreq_id;
 
-  /** The EWMA count for the number of cells flushed from the
-   * n_conn_cells queue.  Used to determine which circuit to flush from next.
-   */
-  cell_ewma_t n_cell_ewma;
+  struct circuit_t *next; /**< Next circuit in linked list of all circuits. */
+
+  /** Next circuit in the doubly-linked ring of circuits waiting to add
+   * cells to n_conn.  NULL if we have no cells pending, or if we're not
+   * linked to an OR connection. */
+  struct circuit_t *next_active_on_n_chan;
+  /** Previous circuit in the doubly-linked ring of circuits waiting to add
+   * cells to n_conn.  NULL if we have no cells pending, or if we're not
+   * linked to an OR connection. */
+  struct circuit_t *prev_active_on_n_chan;
 } circuit_t;
 
 /** Largest number of relay_early cells that we can send on a given
@@ -2618,7 +2726,7 @@ typedef enum {
 /** An origin_circuit_t holds data necessary to build and use a circuit.
  */
 typedef struct origin_circuit_t {
-  circuit_t _base;
+  circuit_t base_;
 
   /** Linked list of AP streams (or EXIT streams if hidden service)
    * associated with this circuit. */
@@ -2751,23 +2859,28 @@ typedef struct origin_circuit_t {
 /** An or_circuit_t holds information needed to implement a circuit at an
  * OR. */
 typedef struct or_circuit_t {
-  circuit_t _base;
+  circuit_t base_;
 
   /** Next circuit in the doubly-linked ring of circuits waiting to add
-   * cells to p_conn.  NULL if we have no cells pending, or if we're not
+   * cells to p_chan.  NULL if we have no cells pending, or if we're not
    * linked to an OR connection. */
-  struct circuit_t *next_active_on_p_conn;
+  struct circuit_t *next_active_on_p_chan;
   /** Previous circuit in the doubly-linked ring of circuits waiting to add
-   * cells to p_conn.  NULL if we have no cells pending, or if we're not
+   * cells to p_chan.  NULL if we have no cells pending, or if we're not
    * linked to an OR connection. */
-  struct circuit_t *prev_active_on_p_conn;
+  struct circuit_t *prev_active_on_p_chan;
 
   /** The circuit_id used in the previous (backward) hop of this circuit. */
   circid_t p_circ_id;
   /** Queue of cells waiting to be transmitted on p_conn. */
-  cell_queue_t p_conn_cells;
-  /** The OR connection that is previous in this circuit. */
-  or_connection_t *p_conn;
+  cell_queue_t p_chan_cells;
+  /** The channel that is previous in this circuit. */
+  channel_t *p_chan;
+  /**
+   * Circuit mux associated with p_chan to which this circuit is attached;
+   * NULL if we have no p_chan.
+   */
+  circuitmux_t *p_mux;
   /** Linked list of Exit streams associated with this circuit. */
   edge_connection_t *n_streams;
   /** Linked list of Exit streams associated with this circuit that are
@@ -2824,14 +2937,10 @@ typedef struct or_circuit_t {
    * exit-ward queues of this circuit; reset every time when writing
    * buffer stats to disk. */
   uint64_t total_cell_waiting_time;
-
-  /** The EWMA count for the number of cells flushed from the
-   * p_conn_cells queue. */
-  cell_ewma_t p_cell_ewma;
 } or_circuit_t;
 
 /** Convert a circuit subtype to a circuit_t. */
-#define TO_CIRCUIT(x)  (&((x)->_base))
+#define TO_CIRCUIT(x)  (&((x)->base_))
 
 /** Convert a circuit_t* to a pointer to the enclosing or_circuit_t.  Assert
  * if the cast is impossible. */
@@ -2954,7 +3063,7 @@ typedef struct routerset_t routerset_t;
 
 /** Configuration options for a Tor process. */
 typedef struct {
-  uint32_t _magic;
+  uint32_t magic_;
 
   /** What should the tor process actually do? */
   enum {
@@ -2996,7 +3105,7 @@ typedef struct {
                                  * ORs not to consider as exits. */
 
   /** Union of ExcludeNodes and ExcludeExitNodes */
-  routerset_t *_ExcludeExitNodesUnion;
+  routerset_t *ExcludeExitNodesUnion_;
 
   int DisableAllSwap; /**< Boolean: Attempt to call mlockall() on our
                        * process for all current and future memory. */
@@ -3004,7 +3113,7 @@ typedef struct {
   /** List of "entry", "middle", "exit", "introduction", "rendezvous". */
   smartlist_t *AllowInvalidNodes;
   /** Bitmask; derived from AllowInvalidNodes. */
-  invalid_router_usage_t _AllowInvalid;
+  invalid_router_usage_t AllowInvalid_;
   config_line_t *ExitPolicy; /**< Lists of exit policy components. */
   int ExitPolicyRejectPrivate; /**< Should we not exit to local addresses? */
   config_line_t *SocksPolicy; /**< Lists of socks policy components */
@@ -3025,7 +3134,11 @@ typedef struct {
   /** Addresses to bind for listening for control connections. */
   config_line_t *ControlListenAddress;
   /** Local address to bind outbound sockets */
-  char *OutboundBindAddress;
+  config_line_t *OutboundBindAddress;
+  /** IPv4 address derived from OutboundBindAddress. */
+  tor_addr_t OutboundBindAddressIPv4_;
+  /** IPv6 address derived from OutboundBindAddress. */
+  tor_addr_t OutboundBindAddressIPv6_;
   /** Directory server only: which versions of
    * Tor should we tell users to run? */
   config_line_t *RecommendedVersions;
@@ -3094,7 +3207,7 @@ typedef struct {
   char *BridgePassword;
   /** If BridgePassword is set, this is a SHA256 digest of the basic http
    * authenticator for it. Used so we can do a time-independent comparison. */
-  char *_BridgePassword_AuthDigest;
+  char *BridgePassword_AuthDigest_;
 
   int UseBridges; /**< Boolean: should we start all circuits with a bridge? */
   config_line_t *Bridges; /**< List of bootstrap bridge addresses. */
@@ -3120,7 +3233,7 @@ typedef struct {
    * "v1", "v2", "v3", "bridge", or "". */
   smartlist_t *PublishServerDescriptor;
   /** A bitfield of authority types, derived from PublishServerDescriptor. */
-  dirinfo_type_t _PublishServerDescriptor;
+  dirinfo_type_t PublishServerDescriptor_;
   /** Boolean: do we publish hidden service descriptors to the HS auths? */
   int PublishHidServDescriptors;
   int FetchServerDescriptors; /**< Do we fetch server descriptors as normal? */
@@ -3153,7 +3266,7 @@ typedef struct {
   int CloseHSServiceRendCircuitsImmediatelyOnTimeout;
 
   int ConnLimit; /**< Demanded minimum number of simultaneous connections. */
-  int _ConnLimit; /**< Maximum allowed number of simultaneous connections. */
+  int ConnLimit_; /**< Maximum allowed number of simultaneous connections. */
   int RunAsDaemon; /**< If true, run in the background. (Unix only) */
   int FascistFirewall; /**< Whether to prefer ORs reachable on open ports. */
   smartlist_t *FirewallPorts; /**< Which ports our firewall allows
@@ -3357,7 +3470,7 @@ typedef struct {
   /* Derived from SafeLogging */
   enum {
     SAFELOG_SCRUB_ALL, SAFELOG_SCRUB_RELAY, SAFELOG_SCRUB_NONE
-  } _SafeLogging;
+  } SafeLogging_;
 
   int SafeSocks; /**< Boolean: should we outright refuse application
                   * connections that use socks4 or socks5-with-local-dns? */
@@ -3575,7 +3688,7 @@ typedef struct {
   /** Set to true if the TestingTorNetwork configuration option is set.
    * This is used so that options_validate() has a chance to realize that
    * the defaults have changed. */
-  int _UsingTestNetworkDefaults;
+  int UsingTestNetworkDefaults_;
 
   /** If 1, we try to use microdescriptors to build circuits.  If 0, we don't.
    * If -1, Tor decides. */
@@ -3619,7 +3732,7 @@ typedef struct {
 
 /** Persistent state for an onion router, as saved to disk. */
 typedef struct {
-  uint32_t _magic;
+  uint32_t magic_;
   /** The time at which we next plan to write the state to the disk.  Equal to
    * TIME_MAX if there are no savable changes, 0 if there are changes that
    * should be saved right away. */
@@ -4131,10 +4244,10 @@ typedef enum {
   /** Flushed last cell from queue of the circuit that initiated a
     * tunneled request to the outbuf of the OR connection. */
   DIRREQ_CIRC_QUEUE_FLUSHED = 3,
-  /** Flushed last byte from buffer of the OR connection belonging to the
+  /** Flushed last byte from buffer of the channel belonging to the
     * circuit that initiated a tunneled request; completes a tunneled
     * request. */
-  DIRREQ_OR_CONN_BUFFER_FLUSHED = 4
+  DIRREQ_CHANNEL_BUFFER_FLUSHED = 4
 } dirreq_state_t;
 
 #define WRITE_STATS_INTERVAL (24*60*60)
@@ -4392,7 +4505,7 @@ typedef struct trusted_dir_server_t {
 #define PDS_NO_EXISTING_SERVERDESC_FETCH (1<<3)
 #define PDS_NO_EXISTING_MICRODESC_FETCH (1<<4)
 
-#define _PDS_PREFER_TUNNELED_DIR_CONNS (1<<16)
+#define PDS_PREFER_TUNNELED_DIR_CONNS_ (1<<16)
 
 /** Possible ways to weight routers when choosing one randomly.  See
  * routerlist_sl_choose_by_bandwidth() for more information.*/

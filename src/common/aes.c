@@ -285,7 +285,7 @@ evaluate_ctr_for_aes(void)
  * value of the current counter.
  */
 static INLINE void
-_aes_fill_buf(aes_cnt_cipher_t *cipher)
+aes_fill_buf_(aes_cnt_cipher_t *cipher)
 {
   /* We don't currently use OpenSSL's counter mode implementation because:
    *  1) some versions have known bugs
@@ -340,7 +340,7 @@ aes_set_key(aes_cnt_cipher_t *cipher, const char *key, int key_bits)
     EVP_EncryptInit(&cipher->key.evp, c, (const unsigned char*)key, NULL);
     cipher->using_evp = 1;
   } else {
-    AES_set_encrypt_key((const unsigned char *)key, key_bits, &cipher->key.aes);
+    AES_set_encrypt_key((const unsigned char *)key, key_bits,&cipher->key.aes);
     cipher->using_evp = 0;
   }
 
@@ -360,7 +360,7 @@ aes_set_key(aes_cnt_cipher_t *cipher, const char *key, int key_bits)
     memset(cipher->buf, 0, sizeof(cipher->buf));
   else
 #endif
-    _aes_fill_buf(cipher);
+    aes_fill_buf_(cipher);
 }
 
 /** Release storage held by <b>cipher</b>
@@ -387,9 +387,10 @@ aes_cipher_free(aes_cnt_cipher_t *cipher)
 
 #ifdef CAN_USE_OPENSSL_CTR
 /* Helper function to use EVP with openssl's counter-mode wrapper. */
-static void evp_block128_fn(const uint8_t in[16],
-                            uint8_t out[16],
-                            const void *key)
+static void
+evp_block128_fn(const uint8_t in[16],
+                uint8_t out[16],
+                const void *key)
 {
   EVP_CIPHER_CTX *ctx = (void*)key;
   int inl=16, outl=16;
@@ -429,8 +430,7 @@ aes_crypt(aes_cnt_cipher_t *cipher, const char *input, size_t len,
                          &cipher->pos);
     }
     return;
-  }
-  else
+  } else
 #endif
   {
     int c = cipher->pos;
@@ -453,7 +453,7 @@ aes_crypt(aes_cnt_cipher_t *cipher, const char *input, size_t len,
         UPDATE_CTR_BUF(cipher, 1);
       }
       UPDATE_CTR_BUF(cipher, 0);
-      _aes_fill_buf(cipher);
+      aes_fill_buf_(cipher);
     }
   }
 }
@@ -469,8 +469,7 @@ aes_crypt_inplace(aes_cnt_cipher_t *cipher, char *data, size_t len)
   if (should_use_openssl_CTR) {
     aes_crypt(cipher, data, len, data);
     return;
-  }
-  else
+  } else
 #endif
   {
     int c = cipher->pos;
@@ -493,7 +492,7 @@ aes_crypt_inplace(aes_cnt_cipher_t *cipher, char *data, size_t len)
         UPDATE_CTR_BUF(cipher, 1);
       }
       UPDATE_CTR_BUF(cipher, 0);
-      _aes_fill_buf(cipher);
+      aes_fill_buf_(cipher);
     }
   }
 }
@@ -515,7 +514,8 @@ aes_set_iv(aes_cnt_cipher_t *cipher, const char *iv)
 #ifdef CAN_USE_OPENSSL_CTR
   if (!should_use_openssl_CTR)
 #endif
-    _aes_fill_buf(cipher);
+    aes_fill_buf_(cipher);
 }
 
 #endif
+

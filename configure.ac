@@ -3,7 +3,7 @@ dnl Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson
 dnl Copyright (c) 2007-2012, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
-AC_INIT([tor],[0.2.4.3-alpha])
+AC_INIT([tor],[0.2.4.4-alpha])
 AC_CONFIG_SRCDIR([src/or/main.c])
 AM_INIT_AUTOMAKE
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
@@ -743,7 +743,7 @@ if test x$transparent = xtrue ; then
    if test x$transparent_ok = x1 ; then
      AC_DEFINE(USE_TRANSPARENT, 1, "Define to enable transparent proxy support")
      case $host in
-       *-*-openbsd*)
+       *-*-openbsd* | *-*-bitrig*)
          AC_DEFINE(OPENBSD, 1, "Define to handle pf on OpenBSD properly") ;;
      esac
    else
@@ -1252,7 +1252,7 @@ if test x$enable_gcc_warnings = xyes || test x$enable_gcc_warnings_advisory = xy
   CFLAGS="$save_CFLAGS"
 
   case $host in
-    *-*-openbsd*)
+    *-*-openbsd* | *-*-bitrig*)
       # Some OpenBSD versions (like 4.8) have -Wsystem-headers by default.
       # That's fine, except that the headers don't pass -Wredundant-decls.
       # Therefore, let's disable -Wsystem-headers when we're building

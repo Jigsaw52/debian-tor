@@ -8,6 +8,9 @@
 #include "buffers.h"
 #include "config.h"
 #include "confparse.h"
+#include "channel.h"
+#include "channeltls.h"
+#include "command.h"
 #include "connection.h"
 #include "connection_or.h"
 #include "control.h"
@@ -90,7 +93,8 @@ static const signed_descriptor_t *get_signed_descriptor_by_fp(
                                                         const char *fp,
                                                         int extrainfo,
                                                         time_t publish_cutoff);
-static int dirserv_add_extrainfo(extrainfo_t *ei, const char **msg);
+static was_router_added_t dirserv_add_extrainfo(extrainfo_t *ei,
+                                                const char **msg);
 
 /************** Measured Bandwidth parsing code ******/
 #define MAX_MEASUREMENT_AGE (3*24*60*60) /* 3 days */
@@ -512,8 +516,8 @@ dirserv_free_fingerprint_list(void)
   if (!fingerprint_list)
     return;
 
-  strmap_free(fingerprint_list->fp_by_name, _tor_free);
-  digestmap_free(fingerprint_list->status_by_digest, _tor_free);
+  strmap_free(fingerprint_list->fp_by_name, tor_free_);
+  digestmap_free(fingerprint_list->status_by_digest, tor_free_);
   tor_free(fingerprint_list);
 }
 
@@ -1423,7 +1427,7 @@ clear_cached_dir(cached_dir_t *d)
 
 /** Free all storage held by the cached_dir_t in <b>d</b>. */
 static void
-_free_cached_dir(void *_d)
+free_cached_dir_(void *_d)
 {
   cached_dir_t *d;
   if (!_d)
@@ -2116,11 +2120,9 @@ routerstatus_format_entry(char *buf, size_t buf_len,
 
   /* Possible "a" line. At most one for now. */
   if (!tor_addr_is_null(&rs->ipv6_addr)) {
-    const char *addr_str = fmt_and_decorate_addr(&rs->ipv6_addr);
     r = tor_snprintf(cp, buf_len - (cp-buf),
-                     "a %s:%d\n",
-                     addr_str,
-                     (int)rs->ipv6_orport);
+                     "a %s\n",
+                     fmt_addrport(&rs->ipv6_addr, rs->ipv6_orport));
     if (r<0) {
       log_warn(LD_BUG, "Not enough space in buffer.");
       return -1;
@@ -2256,7 +2258,7 @@ routerstatus_format_entry(char *buf, size_t buf_len,
  * and a router with more bandwidth is more useful than one with less.)
  **/
 static int
-_compare_routerinfo_by_ip_and_bw(const void **a, const void **b)
+compare_routerinfo_by_ip_and_bw_(const void **a, const void **b)
 {
   routerinfo_t *first = *(routerinfo_t **)a, *second = *(routerinfo_t **)b;
   int first_is_auth, second_is_auth;
@@ -2331,7 +2333,7 @@ get_possible_sybil_list(const smartlist_t *routers)
     max_with_same_addr_on_authority = INT_MAX;
 
   smartlist_add_all(routers_by_ip, routers);
-  smartlist_sort(routers_by_ip, _compare_routerinfo_by_ip_and_bw);
+  smartlist_sort(routers_by_ip, compare_routerinfo_by_ip_and_bw_);
   omit_as_sybil = digestmap_new();
 
   last_addr = 0;
@@ -3398,6 +3400,7 @@ dirserv_should_launch_reachability_test(const routerinfo_t *ri,
 void
 dirserv_single_reachability_test(time_t now, routerinfo_t *router)
 {
+  channel_t *chan = NULL;
   node_t *node = NULL;
   tor_addr_t router_addr;
   (void) now;
@@ -3410,8 +3413,9 @@ dirserv_single_reachability_test(time_t now, routerinfo_t *router)
   log_debug(LD_OR,"Testing reachability of %s at %s:%u.",
             router->nickname, router->address, router->or_port);
   tor_addr_from_ipv4h(&router_addr, router->addr);
-  connection_or_connect(&router_addr, router->or_port,
-                        router->cache_info.identity_digest);
+  chan = channel_tls_connect(&router_addr, router->or_port,
+                             router->cache_info.identity_digest);
+  if (chan) command_setup_channel(chan);
 
   /* Possible IPv6. */
   if (get_options()->AuthDirHasIPv6Connectivity == 1 &&
@@ -3421,8 +3425,9 @@ dirserv_single_reachability_test(time_t now, routerinfo_t *router)
               router->nickname,
               tor_addr_to_str(addrstr, &router->ipv6_addr, sizeof(addrstr), 1),
               router->ipv6_orport);
-    connection_or_connect(&router->ipv6_addr, router->ipv6_orport,
-                          router->cache_info.identity_digest);
+    chan = channel_tls_connect(&router->ipv6_addr, router->ipv6_orport,
+                               router->cache_info.identity_digest);
+    if (chan) command_setup_channel(chan);
   }
 }
 
@@ -3844,7 +3849,7 @@ connection_dirserv_add_networkstatus_bytes_to_outbuf(dir_connection_t *conn)
 int
 connection_dirserv_flushed_some(dir_connection_t *conn)
 {
-  tor_assert(conn->_base.state == DIR_CONN_STATE_SERVER_WRITING);
+  tor_assert(conn->base_.state == DIR_CONN_STATE_SERVER_WRITING);
 
   if (connection_get_outbuf_len(TO_CONN(conn)) >= DIRSERV_BUFFER_MIN)
     return 0;
@@ -3879,9 +3884,9 @@ dirserv_free_all(void)
   cached_dir_decref(cached_directory);
   clear_cached_dir(&cached_runningrouters);
 
-  digestmap_free(cached_v2_networkstatus, _free_cached_dir);
+  digestmap_free(cached_v2_networkstatus, free_cached_dir_);
   cached_v2_networkstatus = NULL;
-  strmap_free(cached_consensuses, _free_cached_dir);
+  strmap_free(cached_consensuses, free_cached_dir_);
   cached_consensuses = NULL;
 }
 

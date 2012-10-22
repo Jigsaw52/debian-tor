@@ -305,7 +305,8 @@ tor_addr_lookup(const char *name, uint16_t family, tor_addr_t *addr)
  * also treated as internal for now.)
  */
 int
-tor_addr_is_internal(const tor_addr_t *addr, int for_listening)
+tor_addr_is_internal_(const tor_addr_t *addr, int for_listening,
+                      const char *filename, int lineno)
 {
   uint32_t iph4 = 0;
   uint32_t iph6[4];
@@ -355,8 +356,8 @@ tor_addr_is_internal(const tor_addr_t *addr, int for_listening)
 
   /* unknown address family... assume it's not safe for external use */
   /* rather than tor_assert(0) */
-  log_warn(LD_BUG, "tor_addr_is_internal() called with a non-IP address of "
-           "type %d", (int)v_family);
+  log_warn(LD_BUG, "tor_addr_is_internal() called from %s:%d with a "
+           "non-IP address of type %d", filename, lineno, (int)v_family);
   tor_fragile_assert();
   return 1;
 }
@@ -1006,6 +1007,19 @@ fmt_addr_impl(const tor_addr_t *addr, int decorate)
     return "???";
 }
 
+/** Return a string representing the pair <b>addr</b> and <b>port</b>.
+ * This calls fmt_and_decorate_addr internally, so IPv6 addresses will
+ * have brackets, and the caveats of fmt_addr_impl apply.
+ */
+const char *
+fmt_addrport(const tor_addr_t *addr, uint16_t port)
+{
+  /* Add space for a colon and up to 5 digits. */
+  static char buf[TOR_ADDR_BUF_LEN + 6];
+  tor_snprintf(buf, sizeof(buf), "%s:%u", fmt_and_decorate_addr(addr), port);
+  return buf;
+}
+
 /** Like fmt_addr(), but takes <b>addr</b> as a host-order IPv4
  * addresses. Also not thread-safe, also clobbers its return buffer on
  * repeated calls. */
@@ -1408,17 +1422,17 @@ addr_port_lookup(int severity, const char *addrport, char **address,
                 uint32_t *addr, uint16_t *port_out)
 {
   const char *colon;
-  char *_address = NULL;
-  int _port;
+  char *address_ = NULL;
+  int port_;
   int ok = 1;
 
   tor_assert(addrport);
 
   colon = strrchr(addrport, ':');
   if (colon) {
-    _address = tor_strndup(addrport, colon-addrport);
-    _port = (int) tor_parse_long(colon+1,10,1,65535,NULL,NULL);
-    if (!_port) {
+    address_ = tor_strndup(addrport, colon-addrport);
+    port_ = (int) tor_parse_long(colon+1,10,1,65535,NULL,NULL);
+    if (!port_) {
       log_fn(severity, LD_GENERAL, "Port %s out of range", escaped(colon+1));
       ok = 0;
     }
@@ -1431,28 +1445,28 @@ addr_port_lookup(int severity, const char *addrport, char **address,
       ok = 0;
     }
   } else {
-    _address = tor_strdup(addrport);
-    _port = 0;
+    address_ = tor_strdup(addrport);
+    port_ = 0;
   }
 
   if (addr) {
     /* There's an addr pointer, so we need to resolve the hostname. */
-    if (tor_lookup_hostname(_address,addr)) {
-      log_fn(severity, LD_NET, "Couldn't look up %s", escaped(_address));
+    if (tor_lookup_hostname(address_,addr)) {
+      log_fn(severity, LD_NET, "Couldn't look up %s", escaped(address_));
       ok = 0;
       *addr = 0;
     }
   }
 
   if (address && ok) {
-    *address = _address;
+    *address = address_;
   } else {
     if (address)
       *address = NULL;
-    tor_free(_address);
+    tor_free(address_);
   }
   if (port_out)
-    *port_out = ok ? ((uint16_t) _port) : 0;
+    *port_out = ok ? ((uint16_t) port_) : 0;
 
   return ok ? 0 : -1;
 }
