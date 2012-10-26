@@ -1194,9 +1194,16 @@ tor_tls_context_new(crypto_pk_t *identity, unsigned int key_lifetime,
    * using them can make our perfect forward secrecy a little worse, *and*
    * create an opportunity to fingerprint us (since it's unusual to use them
    * with TLS sessions turned off).
+   *
+   * In 0.2.4, clients advertise support for them though, to avoid a TLS
+   * distinguishability vector.  This can give us worse PFS, though, if we
+   * get a server that doesn't set SSL_OP_NO_TICKET.  With luck, there will
+   * be few such servers by the time 0.2.4 is more stable.
    */
 #ifdef SSL_OP_NO_TICKET
-  SSL_CTX_set_options(result->ctx, SSL_OP_NO_TICKET);
+  if (! is_client) {
+    SSL_CTX_set_options(result->ctx, SSL_OP_NO_TICKET);
+  }
 #endif
 
   if (
