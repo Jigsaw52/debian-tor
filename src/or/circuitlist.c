@@ -637,11 +637,11 @@ circuit_free(circuit_t *circ)
 
     tor_free(ocirc->dest_address);
     if (ocirc->socks_username) {
-      memset(ocirc->socks_username, 0x12, ocirc->socks_username_len);
+      memwipe(ocirc->socks_username, 0x12, ocirc->socks_username_len);
       tor_free(ocirc->socks_username);
     }
     if (ocirc->socks_password) {
-      memset(ocirc->socks_password, 0x06, ocirc->socks_password_len);
+      memwipe(ocirc->socks_password, 0x06, ocirc->socks_password_len);
       tor_free(ocirc->socks_password);
     }
   } else {
@@ -682,7 +682,7 @@ circuit_free(circuit_t *circ)
    * "active" checks will be violated. */
   cell_queue_clear(&circ->n_chan_cells);
 
-  memset(mem, 0xAA, memlen); /* poison memory */
+  memwipe(mem, 0xAA, memlen); /* poison memory */
   tor_free(mem);
 }
 
@@ -746,7 +746,7 @@ circuit_free_cpath_node(crypt_path_t *victim)
   crypto_dh_free(victim->dh_handshake_state);
   extend_info_free(victim->extend_info);
 
-  memset(victim, 0xBB, sizeof(crypt_path_t)); /* poison memory */
+  memwipe(victim, 0xBB, sizeof(crypt_path_t)); /* poison memory */
   tor_free(victim);
 }
 
@@ -1411,7 +1411,12 @@ circuit_mark_for_close_(circuit_t *circ, int reason, int line,
   }
   if (circ->n_chan) {
     circuit_clear_cell_queue(circ, circ->n_chan);
-    channel_send_destroy(circ->n_circ_id, circ->n_chan, reason);
+    /* Only send destroy if the channel isn't closing anyway */
+    if (!(circ->n_chan->state == CHANNEL_STATE_CLOSING ||
+          circ->n_chan->state == CHANNEL_STATE_CLOSED ||
+          circ->n_chan->state == CHANNEL_STATE_ERROR)) {
+      channel_send_destroy(circ->n_circ_id, circ->n_chan, reason);
+    }
     circuitmux_detach_circuit(circ->n_chan->cmux, circ);
   }
 
@@ -1439,7 +1444,12 @@ circuit_mark_for_close_(circuit_t *circ, int reason, int line,
 
     if (or_circ->p_chan) {
       circuit_clear_cell_queue(circ, or_circ->p_chan);
-      channel_send_destroy(or_circ->p_circ_id, or_circ->p_chan, reason);
+      /* Only send destroy if the channel isn't closing anyway */
+      if (!(or_circ->p_chan->state == CHANNEL_STATE_CLOSING ||
+            or_circ->p_chan->state == CHANNEL_STATE_CLOSED ||
+            or_circ->p_chan->state == CHANNEL_STATE_ERROR)) {
+        channel_send_destroy(or_circ->p_circ_id, or_circ->p_chan, reason);
+      }
       circuitmux_detach_circuit(or_circ->p_chan->cmux, circ);
     }
   } else {

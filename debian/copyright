@@ -3,17 +3,17 @@ Sat, 10 Jan 2004 11:20:06 +0100.
 
 It was downloaded from https://www.torproject.org/
 
-Upstream Authors: Roger Dingledine <arma@freehaven.net>
-                  Nick Mathewson <nickm@freehaven.net>
+Upstream Author: The Tor Project - https://www.torproject.org/
 
 Copyright (c) 2001 Matej Pfajfar
 Copyright (c) 2001-2004, Roger Dingledine
 Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson
-Copyright (c) 2007-2008, The Tor Project, Inc.
+Copyright (c) 2007-2012, The Tor Project, Inc.
 strlcat, strlcpy: Copyright (c) 1998 Todd C. Miller <Todd.Miller@courtesan.com>
 ht.h: Copyright (c) 2002, Christopher Clark, 2006 Nick Mathewson
 OpenBSD_malloc_Linux.c: phk@FreeBSD.ORG
-Modifications for Debian: Copyright (c) 2004, 2005, 2006, 2007, 2008 Peter Palfrader
+OpenBSD queue.h: Copyright (c) 1991, 1993 The Regents of the University of California.
+Modifications for Debian: Copyright (c) 2004-2012 Peter Palfrader
 
 Tor is distributed under this license:
 ===============================================================================
@@ -122,3 +122,33 @@ OpenBSD_malloc_Linux.c:
  * <phk@FreeBSD.ORG> wrote this file.  As long as you retain this notice you
  * can do whatever you want with this stuff. If we meet some day, and you think
  * this stuff is worth it, you can buy me a beer in return.   Poul-Henning Kamp
+===============================================================================
+OpenBSD queue.h:
+/*
+ * Copyright (c) 1991, 1993
+ *	The Regents of the University of California.  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the University nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ */
