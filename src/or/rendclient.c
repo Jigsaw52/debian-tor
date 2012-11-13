@@ -317,8 +317,8 @@ rend_client_send_introduction(origin_circuit_t *introcirc,
     circuit_mark_for_close(TO_CIRCUIT(introcirc), END_CIRC_REASON_INTERNAL);
   circuit_mark_for_close(TO_CIRCUIT(rendcirc), END_CIRC_REASON_INTERNAL);
  cleanup:
-  memset(payload, 0, sizeof(payload));
-  memset(tmp, 0, sizeof(tmp));
+  memwipe(payload, 0, sizeof(payload));
+  memwipe(tmp, 0, sizeof(tmp));
 
   return status;
 }
@@ -696,7 +696,7 @@ rend_client_refetch_v2_renddesc(const rend_data_t *rend_query)
   rend_client_desc_trynow(rend_query->onion_address);
 
  done:
-  memset(descriptor_id, 0, sizeof(descriptor_id));
+  memwipe(descriptor_id, 0, sizeof(descriptor_id));
 
   return;
 }
@@ -936,10 +936,10 @@ rend_client_receive_rendezvous(origin_circuit_t *circ, const uint8_t *request,
 
   circuit_try_attaching_streams(circ);
 
-  memset(keys, 0, sizeof(keys));
+  memwipe(keys, 0, sizeof(keys));
   return 0;
  err:
-  memset(keys, 0, sizeof(keys));
+  memwipe(keys, 0, sizeof(keys));
   circuit_mark_for_close(TO_CIRCUIT(circ), END_CIRC_REASON_TORPROTOCOL);
   return -1;
 }
@@ -1281,8 +1281,8 @@ rend_parse_service_authorization(const or_options_t *options,
   } else {
     strmap_free(parsed, rend_service_authorization_strmap_item_free);
   }
-  memset(descriptor_cookie_tmp, 0, sizeof(descriptor_cookie_tmp));
-  memset(descriptor_cookie_base64ext, 0, sizeof(descriptor_cookie_base64ext));
+  memwipe(descriptor_cookie_tmp, 0, sizeof(descriptor_cookie_tmp));
+  memwipe(descriptor_cookie_base64ext, 0, sizeof(descriptor_cookie_base64ext));
   return res;
 }
 
