@@ -1,3 +1,11 @@
+tor (0.2.3.25-1) unstable; urgency=low
+
+  * New upstream release.  The 0.2.3.x tree goes stable.
+  * Dedicated to the memory of Len "rabbi" Sassaman (1980-2011).  We miss
+    you, Len.
+
+ -- Peter Palfrader <weasel@debian.org>  Tue, 20 Nov 2012 22:00:34 +0100
+
 tor (0.2.3.24-rc-1) unstable; urgency=high
 
   * New upstream version:
