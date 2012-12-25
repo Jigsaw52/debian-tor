@@ -181,6 +181,11 @@ GENERAL OPTIONS
     using __options__ as its command-line options, and expects to receive
     proxied client traffic from it.
 
+**ServerTransportListenAddr** __transport__ __IP__:__PORT__::
+    When this option is set, Tor will suggest __IP__:__PORT__ as the
+    listening address of any pluggable transport proxy that tries to
+    launch __transport__.
+
 **ConnLimit** __NUM__::
     The minimum number of file descriptors that must be available to the Tor
     process before it will start. Tor will ask the OS for as many file
@@ -287,7 +292,12 @@ GENERAL OPTIONS
 **DataDirectory** __DIR__::
     Store working data in DIR (Default: @LOCALSTATEDIR@/lib/tor)
 
-**DirServer** [__nickname__] [**flags**] __address__:__port__ __fingerprint__::
+**FallbackDir** __address__:__port__ orport=__port__ id=__fingerprint__ [weight=__num__]::
+    When we're unable to connect to any directory cache for directory info
+    (usually because we don't know about any yet) we try a FallbackDir.
+    By default, the directory authorities are also FallbackDirs.
+
+**DirAuthority** [__nickname__] [**flags**] __address__:__port__ __fingerprint__::
     Use a nonstandard authoritative directory server at the provided address
     and port, with the specified key fingerprint. This option can be repeated
     many times, for multiple authoritative directory servers. Flags are
@@ -300,15 +310,23 @@ GENERAL OPTIONS
     flag is set, or if the "v1" flag is set and the "no-hs" flag is **not** set.
     Tor will use this authority as a bridge authoritative directory if the
     "bridge" flag is set. If a flag "orport=**port**" is given, Tor will use the
-    given port when opening encrypted tunnels to the dirserver. Lastly, if a
+    given port when opening encrypted tunnels to the dirserver. If a flag
+    "weight=**num**" is given, then the directory server is chosen randomly
+    with probability proportional to that weight (default 1.0). Lastly, if a
     flag "v3ident=**fp**" is given, the dirserver is a v3 directory authority
     whose v3 long-term signing key has the fingerprint **fp**. +
  +
-    If no **dirserver** line is given, Tor will use the default directory
-    servers. NOTE: this option is intended for setting up a private Tor
+    If no **DirAuthority** line is given, Tor will use the default directory
+    authorities. NOTE: this option is intended for setting up a private Tor
     network with its own directory authorities. If you use it, you will be
     distinguishable from other users, because you won't believe the same
     authorities they do.
+
+**DirAuthorityFallbackRate** __NUM__::
+    When configured to use both directory authorities and fallback
+    directories, the directory authorities also work as fallbacks. They are
+    chosen with their regular weights, multiplied by this number, which
+    should be 1.0 or less. (Default: 1.0)
 
 **DynamicDHGroups** **0**|**1**::
     If this option is set to 1, when running as a server, generate our
@@ -321,7 +339,7 @@ GENERAL OPTIONS
 **AlternateHSAuthority** [__nickname__] [**flags**] __address__:__port__ __fingerprint__ +
 
 **AlternateBridgeAuthority** [__nickname__] [**flags**] __address__:__port__ __ fingerprint__::
-    These options behave as DirServer, but they replace fewer of the
+    These options behave as DirAuthority, but they replace fewer of the
     default directory authorities. Using
     AlternateDirAuthority replaces the default Tor directory authorities, but
     leaves the default hidden service authorities and bridge authorities in
@@ -864,7 +882,7 @@ The following options are useful only for clients (that is, if
     the same circuit. Currently, two addresses are "too close" if they lie in
     the same /16 range. (Default: 1)
 
-**SOCKSPort** \['address':]__port__|**auto** [_isolation flags_]::
+**SOCKSPort** \['address':]__port__|**auto** [_flags_] [_isolation flags_]::
     Open this port to listen for connections from SOCKS-speaking
     applications. Set this to 0 if you don't want to allow application
     connections via SOCKS. Set it to "auto" to have Tor pick a port for
@@ -897,7 +915,51 @@ The following options are useful only for clients (that is, if
         on this port to share circuits with streams from every other
         port with the same session group.  (By default, streams received
         on different SOCKSPorts, TransPorts, etc are always isolated from one
-        another. This option overrides that behavior.)
+        another. This option overrides that behavior.) +
++
+    Other recognized _flags_ for a SOCKSPort are:
+    **NoIPv4Traffic**;;
+        Tell exits to not connect to IPv4 addresses in response to SOCKS
+        requests on this connection.
+    **IPv6Traffic**;;
+        Tell exits to allow IPv6 addresses in response to SOCKS requests on
+        this connection, so long as SOCKS5 is in use.  (SOCKS4 can't handle
+        IPv6.)
+    **PreferIPv6**;;
+        Tells exits that, if a host has both an IPv4 and an IPv6 address,
+        we would prefer to connect to it via IPv6. (IPv4 is the default.) +
++
+       NOTE: Although this option allows you to specify an IP address
+       other than localhost, you should do so only with extreme caution.
+       The SOCKS protocol is unencrypted and (as we use it)
+       unauthenticated, so exposing it in this way could leak your
+       information to anybody watching your network, and allow anybody
+       to use your computer as an open proxy.
+    **CacheIPv4DNS**;;
+        Tells the client to remember IPv4 DNS answers we receive from exit
+        nodes via this connection. (On by default.)
+    **CacheIPv6DNS**;;
+        Tells the client to remember IPv6 DNS answers we receive from exit
+        nodes via this connection.
+    **CacheDNS**;;
+        Tells the client to remember all DNS answers we receive from exit
+        nodes via this connection.
+    **UseIPv4Cache**;;
+        Tells the client to use any cached IPv4 DNS answers we have when making
+        requests via this connection. (NOTE: This option, along UseIPv6Cache
+        and UseDNSCache, can harm your anonymity, and probably
+        won't help performance as much as you might expect. Use with care!)
+    **UseIPv6Cache**;;
+        Tells the client to use any cached IPv6 DNS answers we have when making
+        requests via this connection.
+    **UseDNSCache**;;
+        Tells the client to use any cached DNS answers we have when making
+        requests via this connection.
+    **PreferIPv6Automap**;;
+        When serving a hostname lookup request on this port that
+        should get automapped (according to AutomapHostsOnResove),
+        if we could return either an IPv4 or an IPv6 answer, prefer
+        an IPv6 answer. (On by default.)
 
 **SOCKSListenAddress** __IP__[:__PORT__]::
     Bind to this address to listen for connections from Socks-speaking
@@ -983,16 +1045,20 @@ The following options are useful only for clients (that is, if
     applications to do DNS resolves themselves is usually a bad idea and
     can leak your location to attackers. (Default: 1)
 
-**VirtualAddrNetwork** __Address__/__bits__::
+**VirtualAddrNetworkIPv4** __Address__/__bits__ +
+
+**VirtualAddrNetworkIPv6** [__Address__]/__bits__::
     When Tor needs to assign a virtual (unused) address because of a MAPADDRESS
     command from the controller or the AutomapHostsOnResolve feature, Tor
-    picks an unassigned address from this range. (Default:
-    127.192.0.0/10) +
+    picks an unassigned address from this range. (Defaults:
+    127.192.0.0/10 and [FE80::]/10 respectively.) +
  +
     When providing proxy server service to a network of computers using a tool
-    like dns-proxy-tor, change this address to "10.192.0.0/10" or
-    "172.16.0.0/12". The default **VirtualAddrNetwork** address range on a
-    properly configured machine will route to the loopback interface. For
+    like dns-proxy-tor, change the IPv4 network to "10.192.0.0/10" or
+    "172.16.0.0/12" and change the IPv6 network to "[FC00]/7".
+    The default **VirtualAddrNetwork** address ranges on a
+    properly configured machine will route to the loopback or link-local
+    interface. For
     local use, no change to the default VirtualAddrNetwork setting is needed.
 
 **AllowNonRFC953Hostnames** **0**|**1**::
@@ -1098,12 +1164,6 @@ The following options are useful only for clients (that is, if
     contain information about servers other than the information in their
     regular router descriptors. Tor does not use this information for anything
     itself; to save bandwidth, leave this option turned off. (Default: 0)
-
-**FallbackNetworkstatusFile** __FILENAME__::
-    If Tor doesn't have a cached networkstatus file, it starts out using this
-    one instead. Even if this file is out of date, Tor can still use it to
-    learn about directory mirrors, so it doesn't need to put load on the
-    authorities. (Default: None)
 
 **WarnPlaintextPorts** __port__,__port__,__...__::
     Tells Tor to issue a warnings whenever the user tries to make an anonymous
@@ -1274,6 +1334,10 @@ is non-zero):
     Reject all private (local) networks, along with your own public IP address,
     at the beginning of your exit policy. See above entry on ExitPolicy.
     (Default: 1)
+
+**IPv6Exit** **0**|**1**::
+    If set, and we are an exit node, allow clients to use us for IPv6
+    traffic. (Default: 0)
 
 **MaxOnionsPending** __NUM__::
     If you have more than this number of onionskins queued for decrypt, reject

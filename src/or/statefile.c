@@ -416,7 +416,7 @@ or_state_save(time_t now)
   format_local_iso_time(tbuf, now);
   tor_asprintf(&contents,
                "# Tor state file last generated on %s local time\n"
-               "# Other times below are in GMT\n"
+               "# Other times below are in UTC\n"
                "# You *do not* need to edit this file.\n\n%s",
                tbuf, state);
   tor_free(state);
@@ -517,8 +517,17 @@ get_stored_bindaddr_for_server_transport(const char *transport)
 {
   char *default_addrport = NULL;
   const char *stored_bindaddr = NULL;
+  config_line_t *line = NULL;
 
-  config_line_t *line = get_transport_in_state_by_name(transport);
+  {
+    /* See if the user explicitly asked for a specific listening
+       address for this transport. */
+    char *conf_bindaddr = get_transport_bindaddr_from_config(transport);
+    if (conf_bindaddr)
+      return conf_bindaddr;
+  }
+
+  line = get_transport_in_state_by_name(transport);
   if (!line) /* Found no references in state for this transport. */
     goto no_bindaddr_found;
 

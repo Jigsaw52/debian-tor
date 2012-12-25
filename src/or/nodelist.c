@@ -624,7 +624,7 @@ node_is_dir(const node_t *node)
 }
 
 /** Return true iff <b>node</b> has either kind of usable descriptor -- that
- * is, a routerdecriptor or a microdescriptor. */
+ * is, a routerdescriptor or a microdescriptor. */
 int
 node_has_descriptor(const node_t *node)
 {
@@ -1139,7 +1139,7 @@ node_is_unreliable(const node_t *node, int need_uptime,
 }
 
 /** Return 1 if all running sufficiently-stable routers we can use will reject
- * addr:port, return 0 if any might accept it. */
+ * addr:port. Return 0 if any might accept it. */
 int
 router_exit_policy_all_nodes_reject(const tor_addr_t *addr, uint16_t port,
                                     int need_uptime)
@@ -1167,8 +1167,13 @@ router_set_status(const char *digest, int up)
   node_t *node;
   tor_assert(digest);
 
+  SMARTLIST_FOREACH(router_get_fallback_dir_servers(),
+                    dir_server_t *, d,
+                    if (tor_memeq(d->digest, digest, DIGEST_LEN))
+                      d->is_running = up);
+
   SMARTLIST_FOREACH(router_get_trusted_dir_servers(),
-                    trusted_dir_server_t *, d,
+                    dir_server_t *, d,
                     if (tor_memeq(d->digest, digest, DIGEST_LEN))
                       d->is_running = up);
 
@@ -1269,8 +1274,9 @@ count_usable_descriptors(int *num_present, int *num_usable,
      }
   SMARTLIST_FOREACH_END(rs);
 
-  log_debug(LD_DIR, "%d usable, %d present (%s).", *num_usable, *num_present,
-            md ? "microdescs" : "descs");
+  log_debug(LD_DIR, "%d usable, %d present (%s%s).",
+            *num_usable, *num_present,
+            md ? "microdesc" : "desc", exit_only ? " exits" : "s");
 }
 
 /** We just fetched a new set of descriptors. Compute how far through

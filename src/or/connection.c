@@ -281,6 +281,13 @@ entry_connection_new(int type, int socket_family)
   tor_assert(type == CONN_TYPE_AP);
   connection_init(time(NULL), ENTRY_TO_CONN(entry_conn), type, socket_family);
   entry_conn->socks_request = socks_request_new();
+  /* If this is coming from a listener, we'll set it up based on the listener
+   * in a little while.  Otherwise, we're doing this as a linked connection
+   * of some kind, and we should set it up here based on the socket family */
+  if (socket_family == AF_INET)
+    entry_conn->ipv4_traffic_ok = 1;
+  else if (socket_family == AF_INET6)
+    entry_conn->ipv6_traffic_ok = 1;
   return entry_conn;
 }
 
@@ -1115,6 +1122,19 @@ connection_listener_new(const struct sockaddr *listensockaddr,
       lis_conn->session_group = global_next_session_group--;
     }
   }
+  if (type == CONN_TYPE_AP_LISTENER) {
+    lis_conn->socks_ipv4_traffic = port_cfg->ipv4_traffic;
+    lis_conn->socks_ipv6_traffic = port_cfg->ipv6_traffic;
+    lis_conn->socks_prefer_ipv6 = port_cfg->prefer_ipv6;
+  } else {
+    lis_conn->socks_ipv4_traffic = 1;
+    lis_conn->socks_ipv6_traffic = 1;
+  }
+  lis_conn->cache_ipv4_answers = port_cfg->cache_ipv4_answers;
+  lis_conn->cache_ipv6_answers = port_cfg->cache_ipv6_answers;
+  lis_conn->use_cached_ipv4_answers = port_cfg->use_cached_ipv4_answers;
+  lis_conn->use_cached_ipv6_answers = port_cfg->use_cached_ipv6_answers;
+  lis_conn->prefer_ipv6_virtaddr = port_cfg->prefer_ipv6_virtaddr;
 
   if (connection_add(conn) < 0) { /* no space, forget it */
     log_warn(LD_NET,"connection_add for listener failed. Giving up.");
@@ -1348,6 +1368,18 @@ connection_init_accepted_conn(connection_t *conn,
       TO_ENTRY_CONN(conn)->session_group = listener->session_group;
       TO_ENTRY_CONN(conn)->nym_epoch = get_signewnym_epoch();
       TO_ENTRY_CONN(conn)->socks_request->listener_type = listener->base_.type;
+      TO_ENTRY_CONN(conn)->ipv4_traffic_ok = listener->socks_ipv4_traffic;
+      TO_ENTRY_CONN(conn)->ipv6_traffic_ok = listener->socks_ipv6_traffic;
+      TO_ENTRY_CONN(conn)->prefer_ipv6_traffic = listener->socks_prefer_ipv6;
+      TO_ENTRY_CONN(conn)->cache_ipv4_answers = listener->cache_ipv4_answers;
+      TO_ENTRY_CONN(conn)->cache_ipv6_answers = listener->cache_ipv6_answers;
+      TO_ENTRY_CONN(conn)->use_cached_ipv4_answers =
+        listener->use_cached_ipv4_answers;
+      TO_ENTRY_CONN(conn)->use_cached_ipv6_answers =
+        listener->use_cached_ipv6_answers;
+      TO_ENTRY_CONN(conn)->prefer_ipv6_virtaddr =
+        listener->prefer_ipv6_virtaddr;
+
       switch (TO_CONN(listener)->type) {
         case CONN_TYPE_AP_LISTENER:
           conn->state = AP_CONN_STATE_SOCKS_WAIT;
@@ -1496,7 +1528,7 @@ connection_connect(connection_t *conn, const char *address,
 
   /* it succeeded. we're connected. */
   log_fn(inprogress?LOG_DEBUG:LOG_INFO, LD_NET,
-         "Connection to %s:%u %s (sock %d).",
+         "Connection to %s:%u %s (sock "TOR_SOCKET_T_FORMAT").",
          escaped_safe_str_client(address),
          port, inprogress?"in progress":"established", s);
   conn->s = s;

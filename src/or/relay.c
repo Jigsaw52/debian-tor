@@ -12,6 +12,7 @@
 
 #define RELAY_PRIVATE
 #include "or.h"
+#include "addressmap.h"
 #include "buffers.h"
 #include "channel.h"
 #include "circuitbuild.h"
@@ -704,28 +705,57 @@ connection_ap_process_end_not_open(
     switch (reason) {
       case END_STREAM_REASON_EXITPOLICY:
         if (rh->length >= 5) {
-          uint32_t addr = ntohl(get_uint32(cell->payload+RELAY_HEADER_SIZE+1));
-          int ttl;
-          if (!addr) {
+          tor_addr_t addr;
+
+          int ttl = -1;
+          tor_addr_make_unspec(&addr);
+          if (rh->length == 5 || rh->length == 9) {
+            tor_addr_from_ipv4n(&addr,
+                                get_uint32(cell->payload+RELAY_HEADER_SIZE+1));
+            if (rh->length == 9)
+              ttl = (int)ntohl(get_uint32(cell->payload+RELAY_HEADER_SIZE+5));
+          } else if (rh->length == 17 || rh->length == 21) {
+            tor_addr_from_ipv6_bytes(&addr,
+                                (char*)(cell->payload+RELAY_HEADER_SIZE+1));
+            if (rh->length == 21)
+              ttl = (int)ntohl(get_uint32(cell->payload+RELAY_HEADER_SIZE+17));
+          }
+          if (tor_addr_is_null(&addr)) {
             log_info(LD_APP,"Address '%s' resolved to 0.0.0.0. Closing,",
                      safe_str(conn->socks_request->address));
             connection_mark_unattached_ap(conn, END_STREAM_REASON_TORPROTOCOL);
             return 0;
           }
-          if (rh->length >= 9)
-            ttl = (int)ntohl(get_uint32(cell->payload+RELAY_HEADER_SIZE+5));
-          else
-            ttl = -1;
 
+          if ((tor_addr_family(&addr) == AF_INET && !conn->ipv4_traffic_ok) ||
+              (tor_addr_family(&addr) == AF_INET6 && !conn->ipv6_traffic_ok)) {
+            log_fn(LOG_PROTOCOL_WARN, LD_APP,
+                   "Got an EXITPOLICY failure on a connection with a "
+                   "mismatched family. Closing.");
+            connection_mark_unattached_ap(conn, END_STREAM_REASON_TORPROTOCOL);
+            return 0;
+          }
           if (get_options()->ClientDNSRejectInternalAddresses &&
-              is_internal_IP(addr, 0)) {
+              tor_addr_is_internal(&addr, 0)) {
             log_info(LD_APP,"Address '%s' resolved to internal. Closing,",
                      safe_str(conn->socks_request->address));
             connection_mark_unattached_ap(conn, END_STREAM_REASON_TORPROTOCOL);
             return 0;
           }
-          client_dns_set_addressmap(conn->socks_request->address, addr,
+
+          client_dns_set_addressmap(conn,
+                                    conn->socks_request->address, &addr,
                                     conn->chosen_exit_name, ttl);
+
+          {
+            char new_addr[TOR_ADDR_BUF_LEN];
+            tor_addr_to_str(new_addr, &addr, sizeof(new_addr), 1);
+            if (strcmp(conn->socks_request->address, new_addr)) {
+              strlcpy(conn->socks_request->address, new_addr,
+                      sizeof(conn->socks_request->address));
+              control_event_stream_status(conn, STREAM_EVENT_REMAP, 0);
+            }
+          }
         }
         /* check if he *ought* to have allowed it */
         if (exitrouter &&
@@ -738,12 +768,7 @@ connection_ap_process_end_not_open(
                  node_describe(exitrouter));
           policies_set_node_exitpolicy_to_reject_all(exitrouter);
         }
-        /* rewrite it to an IP if we learned one. */
-        if (addressmap_rewrite(conn->socks_request->address,
-                               sizeof(conn->socks_request->address),
-                               NULL, NULL)) {
-          control_event_stream_status(conn, STREAM_EVENT_REMAP, 0);
-        }
+
         if (conn->chosen_exit_optional ||
             conn->chosen_exit_retries) {
           /* stop wanting a specific exit */
@@ -827,18 +852,58 @@ connection_ap_process_end_not_open(
 }
 
 /** Helper: change the socks_request-&gt;address field on conn to the
- * dotted-quad representation of <b>new_addr</b> (given in host order),
+ * dotted-quad representation of <b>new_addr</b>,
  * and send an appropriate REMAP event. */
 static void
-remap_event_helper(entry_connection_t *conn, uint32_t new_addr)
+remap_event_helper(entry_connection_t *conn, const tor_addr_t *new_addr)
 {
-  struct in_addr in;
-
-  in.s_addr = htonl(new_addr);
-  tor_inet_ntoa(&in, conn->socks_request->address,
-                sizeof(conn->socks_request->address));
+  tor_addr_to_str(conn->socks_request->address, new_addr,
+                  sizeof(conn->socks_request->address),
+                  1);
   control_event_stream_status(conn, STREAM_EVENT_REMAP,
                               REMAP_STREAM_SOURCE_EXIT);
+}
+
+/** Extract the contents of a connected cell in <b>cell</b>, whose relay
+ * header has already been parsed into <b>rh</b>. On success, set
+ * <b>addr_out</b> to the address we're connected to, and <b>ttl_out</b> to
+ * the ttl of that address, in seconds, and return 0.  On failure, return
+ * -1. */
+int
+connected_cell_parse(const relay_header_t *rh, const cell_t *cell,
+                     tor_addr_t *addr_out, int *ttl_out)
+{
+  uint32_t bytes;
+  const uint8_t *payload = cell->payload + RELAY_HEADER_SIZE;
+
+  tor_addr_make_unspec(addr_out);
+  *ttl_out = -1;
+  if (rh->length == 0)
+    return 0;
+  if (rh->length < 4)
+    return -1;
+  bytes = ntohl(get_uint32(payload));
+
+  /* If bytes is 0, this is maybe a v6 address. Otherwise it's a v4 address */
+  if (bytes != 0) {
+    /* v4 address */
+    tor_addr_from_ipv4h(addr_out, bytes);
+    if (rh->length >= 8) {
+      bytes = ntohl(get_uint32(payload + 4));
+      if (bytes <= INT32_MAX)
+        *ttl_out = bytes;
+    }
+  } else {
+    if (rh->length < 25) /* 4 bytes of 0s, 1 addr, 16 ipv4, 4 ttl. */
+      return -1;
+    if (get_uint8(payload + 4) != 6)
+      return -1;
+    tor_addr_from_ipv6_bytes(addr_out, (char*)(payload + 5));
+    bytes = ntohl(get_uint32(payload + 21));
+    if (bytes <= INT32_MAX)
+      *ttl_out = (int) bytes;
+  }
+  return 0;
 }
 
 /** An incoming relay cell has arrived from circuit <b>circ</b> to
@@ -871,6 +936,8 @@ connection_edge_process_relay_cell_not_open(
 
   if (conn->base_.type == CONN_TYPE_AP &&
       rh->command == RELAY_COMMAND_CONNECTED) {
+    tor_addr_t addr;
+    int ttl;
     entry_connection_t *entry_conn = EDGE_TO_ENTRY_CONN(conn);
     tor_assert(CIRCUIT_IS_ORIGIN(circ));
     if (conn->base_.state != AP_CONN_STATE_CONNECT_WAIT) {
@@ -881,26 +948,41 @@ connection_edge_process_relay_cell_not_open(
     conn->base_.state = AP_CONN_STATE_OPEN;
     log_info(LD_APP,"'connected' received after %d seconds.",
              (int)(time(NULL) - conn->base_.timestamp_lastread));
-    if (rh->length >= 4) {
-      uint32_t addr = ntohl(get_uint32(cell->payload+RELAY_HEADER_SIZE));
-      int ttl;
-      if (!addr || (get_options()->ClientDNSRejectInternalAddresses &&
-                    is_internal_IP(addr, 0))) {
+    if (connected_cell_parse(rh, cell, &addr, &ttl) < 0) {
+      log_fn(LOG_PROTOCOL_WARN, LD_APP,
+             "Got a badly formatted connected cell. Closing.");
+      connection_edge_end(conn, END_STREAM_REASON_TORPROTOCOL);
+      connection_mark_unattached_ap(entry_conn, END_STREAM_REASON_TORPROTOCOL);
+    }
+    if (tor_addr_family(&addr) != AF_UNSPEC) {
+      const sa_family_t family = tor_addr_family(&addr);
+      if (tor_addr_is_null(&addr) ||
+          (get_options()->ClientDNSRejectInternalAddresses &&
+           tor_addr_is_internal(&addr, 0))) {
         log_info(LD_APP, "...but it claims the IP address was %s. Closing.",
-                 fmt_addr32(addr));
+                 fmt_addr(&addr));
         connection_edge_end(conn, END_STREAM_REASON_TORPROTOCOL);
         connection_mark_unattached_ap(entry_conn,
                                       END_STREAM_REASON_TORPROTOCOL);
         return 0;
       }
-      if (rh->length >= 8)
-        ttl = (int)ntohl(get_uint32(cell->payload+RELAY_HEADER_SIZE+4));
-      else
-        ttl = -1;
-      client_dns_set_addressmap(entry_conn->socks_request->address, addr,
+
+      if ((family == AF_INET && ! entry_conn->ipv4_traffic_ok) ||
+          (family == AF_INET6 && ! entry_conn->ipv6_traffic_ok)) {
+        log_fn(LOG_PROTOCOL_WARN, LD_APP,
+               "Got a connected cell to %s with unsupported address family."
+               " Closing.", fmt_addr(&addr));
+        connection_edge_end(conn, END_STREAM_REASON_TORPROTOCOL);
+        connection_mark_unattached_ap(entry_conn,
+                                      END_STREAM_REASON_TORPROTOCOL);
+        return 0;
+      }
+
+      client_dns_set_addressmap(entry_conn,
+                                entry_conn->socks_request->address, &addr,
                                 entry_conn->chosen_exit_name, ttl);
 
-      remap_event_helper(entry_conn, addr);
+      remap_event_helper(entry_conn, &addr);
     }
     circuit_log_path(LOG_INFO,LD_APP,TO_ORIGIN_CIRCUIT(circ));
     /* don't send a socks reply to transparent conns */
@@ -990,8 +1072,15 @@ connection_edge_process_relay_cell_not_open(
                    ttl,
                    -1);
     if (answer_type == RESOLVED_TYPE_IPV4 && answer_len == 4) {
-      uint32_t addr = ntohl(get_uint32(cell->payload+RELAY_HEADER_SIZE+2));
-      remap_event_helper(entry_conn, addr);
+      tor_addr_t addr;
+      tor_addr_from_ipv4n(&addr,
+                          get_uint32(cell->payload+RELAY_HEADER_SIZE+2));
+      remap_event_helper(entry_conn, &addr);
+    } else if (answer_type == RESOLVED_TYPE_IPV6 && answer_len == 16) {
+      tor_addr_t addr;
+      tor_addr_from_ipv6_bytes(&addr,
+                               (char*)(cell->payload+RELAY_HEADER_SIZE+2));
+      remap_event_helper(entry_conn, &addr);
     }
     connection_mark_unattached_ap(entry_conn,
                               END_STREAM_REASON_DONE |
@@ -1151,7 +1240,8 @@ connection_edge_process_relay_cell(cell_t *cell, circuit_t *circ,
         return 0;
       }
 /* XXX add to this log_fn the exit node's nickname? */
-      log_info(domain,"%d: end cell (%s) for stream %d. Removing stream.",
+      log_info(domain,TOR_SOCKET_T_FORMAT": end cell (%s) for stream %d. "
+               "Removing stream.",
                conn->base_.s,
                stream_end_reason_to_string(reason),
                conn->stream_id);
@@ -1473,7 +1563,8 @@ connection_edge_package_raw_inbuf(edge_connection_t *conn, int package_partial,
     connection_fetch_from_buf(payload, length, TO_CONN(conn));
   }
 
-  log_debug(domain,"(%d) Packaging %d bytes (%d waiting).", conn->base_.s,
+  log_debug(domain,TOR_SOCKET_T_FORMAT": Packaging %d bytes (%d waiting).",
+            conn->base_.s,
             (int)length, (int)connection_get_inbuf_len(TO_CONN(conn)));
 
   if (sending_optimistically && !sending_from_optimistic) {

@@ -11,6 +11,7 @@
 #define CONTROL_PRIVATE
 
 #include "or.h"
+#include "addressmap.h"
 #include "buffers.h"
 #include "channel.h"
 #include "channeltls.h"
@@ -1220,7 +1221,8 @@ handle_control_authenticate(control_connection_t *conn, uint32_t len,
   connection_mark_for_close(TO_CONN(conn));
   return 0;
  ok:
-  log_info(LD_CONTROL, "Authenticated control connection (%d)", conn->base_.s);
+  log_info(LD_CONTROL, "Authenticated control connection ("TOR_SOCKET_T_FORMAT
+           ")", conn->base_.s);
   send_control_done(conn);
   conn->base_.state = CONTROL_CONN_STATE_OPEN;
   tor_free(password);
@@ -1371,10 +1373,13 @@ handle_control_mapaddress(control_connection_t *conn, uint32_t len,
                      "512-syntax error: invalid address '%s'", to);
         log_warn(LD_CONTROL,
                  "Skipping invalid argument '%s' in MapAddress msg", to);
-      } else if (!strcmp(from, ".") || !strcmp(from, "0.0.0.0")) {
+      } else if (!strcmp(from, ".") || !strcmp(from, "0.0.0.0") ||
+                 !strcmp(from, "::")) {
+        const char type =
+          !strcmp(from,".") ? RESOLVED_TYPE_HOSTNAME :
+          (!strcmp(from, "0.0.0.0") ? RESOLVED_TYPE_IPV4 : RESOLVED_TYPE_IPV6);
         const char *address = addressmap_register_virtual_address(
-              !strcmp(from,".") ? RESOLVED_TYPE_HOSTNAME : RESOLVED_TYPE_IPV4,
-               tor_strdup(to));
+                                                     type, tor_strdup(to));
         if (!address) {
           smartlist_add_asprintf(reply,
                        "451-resource exhausted: skipping '%s'", line);
@@ -2942,7 +2947,7 @@ handle_control_resolve(control_connection_t *conn, uint32_t len,
   send_control_done(conn);
   SMARTLIST_FOREACH(failed, const char *, arg, {
       control_event_address_mapped(arg, arg, time(NULL),
-                                   "Unable to launch resolve request");
+                                   "internal");
   });
 
   SMARTLIST_FOREACH(args, char *, cp, tor_free(cp));
@@ -3577,9 +3582,9 @@ control_event_circuit_status_minor(origin_circuit_t *circ,
         /* event_tail can currently be up to 130 chars long */
         const char *hs_state_str =
           circuit_purpose_to_controller_hs_state_string(purpose);
-        const struct timeval *old_timestamp_created = tv;
+        const struct timeval *old_timestamp_began = tv;
         char tbuf[ISO_TIME_USEC_LEN+1];
-        format_iso_time_nospace_usec(tbuf, old_timestamp_created);
+        format_iso_time_nospace_usec(tbuf, old_timestamp_began);
 
         tor_snprintf(event_tail, sizeof(event_tail),
                      " OLD_PURPOSE=%s%s%s OLD_TIME_CREATED=%s",

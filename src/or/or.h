@@ -1225,6 +1225,36 @@ typedef struct listener_connection_t {
   uint8_t isolation_flags;
   /**@}*/
 
+  /** For a SOCKS listeners, these fields describe whether we should
+   * allow IPv4 and IPv6 addresses from our exit nodes, respectively.
+   *
+   * @{
+   */
+  unsigned int socks_ipv4_traffic : 1;
+  unsigned int socks_ipv6_traffic : 1;
+  /** @} */
+  /** For a socks listener: should we tell the exit that we prefer IPv6
+   * addresses? */
+  unsigned int socks_prefer_ipv6 : 1;
+
+  /** For a socks listener: should we cache IPv4/IPv6 DNS information that
+   * exit nodes tell us?
+   *
+   * @{ */
+  unsigned int cache_ipv4_answers : 1;
+  unsigned int cache_ipv6_answers : 1;
+  /** @} */
+  /** For a socks listeners: if we find an answer in our client-side DNS cache,
+   * should we use it?
+   *
+   * @{ */
+  unsigned int use_cached_ipv4_answers : 1;
+  unsigned int use_cached_ipv6_answers : 1;
+  /** @} */
+  /** For socks listeners: When we can automap an address to IPv4 or IPv6,
+   * do we prefer IPv6? */
+  unsigned int prefer_ipv6_virtaddr : 1;
+
 } listener_connection_t;
 
 /** Minimum length of the random part of an AUTH_CHALLENGE cell. */
@@ -1414,6 +1444,8 @@ typedef struct edge_connection_t {
 
   uint32_t address_ttl; /**< TTL for address-to-addr mapping on exit
                          * connection.  Exit connections only. */
+  uint32_t begincell_flags; /** Flags sent or received in the BEGIN cell
+                             * for this connection */
 
   streamid_t stream_id; /**< The stream ID used for this edge connection on its
                          * circuit */
@@ -1429,6 +1461,8 @@ typedef struct edge_connection_t {
 
   /** True iff this connection is for a DNS request only. */
   unsigned int is_dns_request:1;
+  /** True iff this connection is for a PTR DNS request. (exit only) */
+  unsigned int is_reverse_dns_lookup:1;
 
   unsigned int edge_has_sent_end:1; /**< For debugging; only used on edge
                          * connections.  Set once we've set the stream end,
@@ -1519,6 +1553,33 @@ typedef struct entry_connection_t {
    * the exit has sent a CONNECTED cell) and we have chosen to use it.
    */
   unsigned int may_use_optimistic_data : 1;
+
+  /** Should we permit IPv4 and IPv6 traffic to use this connection?
+   *
+   * @{ */
+  unsigned int ipv4_traffic_ok : 1;
+  unsigned int ipv6_traffic_ok : 1;
+  /** @} */
+  /** Should we say we prefer IPv6 traffic? */
+  unsigned int prefer_ipv6_traffic : 1;
+
+  /** For a socks listener: should we cache IPv4/IPv6 DNS information that
+   * exit nodes tell us?
+   *
+   * @{ */
+  unsigned int cache_ipv4_answers : 1;
+  unsigned int cache_ipv6_answers : 1;
+  /** @} */
+  /** For a socks listeners: if we find an answer in our client-side DNS cache,
+   * should we use it?
+   *
+   * @{ */
+  unsigned int use_cached_ipv4_answers : 1;
+  unsigned int use_cached_ipv6_answers : 1;
+  /** @} */
+  /** For socks listeners: When we can automap an address to IPv4 or IPv6,
+   * do we prefer IPv6? */
+  unsigned int prefer_ipv6_virtaddr : 1;
 
 } entry_connection_t;
 
@@ -1730,7 +1791,15 @@ typedef struct addr_policy_t {
   maskbits_t maskbits; /**< Accept/reject all addresses <b>a</b> such that the
                  * first <b>maskbits</b> bits of <b>a</b> match
                  * <b>addr</b>. */
-  tor_addr_t addr; /**< Base address to accept or reject. */
+  /** Base address to accept or reject.
+   *
+   * Note that wildcards are treated
+   * differntly depending on address family. An AF_UNSPEC address means
+   * "All addresses, IPv4 or IPv6." An AF_INET address with maskbits==0 means
+   * "All IPv4 addresses" and an AF_INET6 address with maskbits == 0 means
+   * "All IPv6 addresses".
+  **/
+  tor_addr_t addr;
   uint16_t prt_min; /**< Lowest port number to accept/reject. */
   uint16_t prt_max; /**< Highest port number to accept/reject. */
 } addr_policy_t;
@@ -1870,7 +1939,10 @@ typedef struct {
   /** How many bytes/s is this router known to handle? */
   uint32_t bandwidthcapacity;
   smartlist_t *exit_policy; /**< What streams will this OR permit
-                             * to exit?  NULL for 'reject *:*'. */
+                             * to exit on IPv4?  NULL for 'reject *:*'. */
+  /** What streams will this OR permit to exit on IPv6?
+   * NULL for 'reject *:*' */
+  struct short_policy_t *ipv6_exit_policy;
   long uptime; /**< How many seconds the router claims to have been up */
   smartlist_t *declared_family; /**< Nicknames of router which this router
                                  * claims are its family. */
@@ -2076,8 +2148,11 @@ typedef struct microdesc_t {
   uint16_t ipv6_orport;
   /** As routerinfo_t.family */
   smartlist_t *family;
-  /** Exit policy summary */
+  /** IPv4 exit policy summary */
   short_policy_t *exit_policy;
+  /** IPv6 exit policy summary */
+  short_policy_t *ipv6_exit_policy;
+
 } microdesc_t;
 
 /** A node_t represents a Tor router.
@@ -2478,6 +2553,8 @@ typedef enum {
   MICRODESC_DIRINFO=1 << 6,
 } dirinfo_type_t;
 
+#define ALL_DIRINFO ((dirinfo_type_t)((1<<7)-1))
+
 #define CRYPT_PATH_MAGIC 0x70127012u
 
 /** Holds accounting information for a single step in the layered encryption
@@ -2663,10 +2740,21 @@ typedef struct circuit_t {
     * length ONIONSKIN_CHALLENGE_LEN. */
   char *n_chan_onionskin;
 
-  /** When was this circuit created?  We keep this timestamp with a higher
-   * resolution than most so that the circuit-build-time tracking code can
-   * get millisecond resolution. */
+  /** When did circuit construction actually begin (ie send the
+   * CREATE cell or begin cannibalization).
+   *
+   * Note: This timer will get reset if we decide to cannibalize
+   * a circuit. It may also get reset during certain phases of hidden
+   * service circuit use.
+   *
+   * We keep this timestamp with a higher resolution than most so that the
+   * circuit-build-time tracking code can get millisecond resolution.
+   */
+  struct timeval timestamp_began;
+
+  /** This timestamp marks when the init_circuit_base constructor ran. */
   struct timeval timestamp_created;
+
   /** When the circuit was first used, or 0 if the circuit is clean.
    *
    * XXXX023 Note that some code will artifically adjust this value backward
@@ -2775,6 +2863,10 @@ typedef struct origin_circuit_t {
    * circuits are closed when we get a joined rend circ, and
    * service-side introduction circuits never have this flag set.) */
   unsigned int hs_circ_has_timed_out : 1;
+
+  /** Set iff this circuit has been given a relaxed timeout because
+   * no circuits have opened. Used to prevent spamming logs. */
+  unsigned int relaxed_timeout : 1;
 
   /** Set iff this is a service-side rendezvous circuit for which a
    * new connection attempt has been launched.  We consider launching
@@ -3026,8 +3118,31 @@ typedef struct port_cfg_t {
   unsigned int no_advertise : 1;
   unsigned int no_listen : 1;
   unsigned int all_addrs : 1;
-  unsigned int ipv4_only : 1;
-  unsigned int ipv6_only : 1;
+  unsigned int bind_ipv4_only : 1;
+  unsigned int bind_ipv6_only : 1;
+
+  /* Client port types only: */
+  unsigned int ipv4_traffic : 1;
+  unsigned int ipv6_traffic : 1;
+  unsigned int prefer_ipv6 : 1;
+
+  /** For a socks listener: should we cache IPv4/IPv6 DNS information that
+   * exit nodes tell us?
+   *
+   * @{ */
+  unsigned int cache_ipv4_answers : 1;
+  unsigned int cache_ipv6_answers : 1;
+  /** @} */
+  /** For a socks listeners: if we find an answer in our client-side DNS cache,
+   * should we use it?
+   *
+   * @{ */
+  unsigned int use_cached_ipv4_answers : 1;
+  unsigned int use_cached_ipv6_answers : 1;
+  /** @} */
+  /** For socks listeners: When we can automap an address to IPv4 or IPv6,
+   * do we prefer IPv6? */
+  unsigned int prefer_ipv6_virtaddr : 1;
 
   /* Unix sockets only: */
   /** Path for an AF_UNIX address */
@@ -3218,6 +3333,9 @@ typedef struct {
   config_line_t *ServerTransportPlugin; /**< List of client
                                            transport plugins. */
 
+  /** List of TCP/IP addresses that transports should listen at. */
+  config_line_t *ServerTransportListenAddr;
+
   int BridgeRelay; /**< Boolean: are we acting as a bridge relay? We make
                     * this explicit so we can change how we behave in the
                     * future. */
@@ -3379,7 +3497,14 @@ typedef struct {
   /** List of configuration lines for replacement directory authorities.
    * If you just want to replace one class of authority at a time,
    * use the "Alternate*Authority" options below instead. */
-  config_line_t *DirServers;
+  config_line_t *DirAuthorities;
+
+  /** List of fallback directory servers */
+  config_line_t *FallbackDir;
+
+  /** Weight to apply to all directory authority rates if considering them
+   * along with fallbackdirs */
+  double DirAuthorityFallbackRate;
 
   /** If set, use these main (currently v3) directory authorities and
    * not the default ones. */
@@ -3499,8 +3624,10 @@ typedef struct {
   /** Should we fetch our dir info at the start of the consensus period? */
   int FetchDirInfoExtraEarly;
 
-  char *VirtualAddrNetwork; /**< Address and mask to hand out for virtual
-                             * MAPADDRESS requests. */
+  char *VirtualAddrNetworkIPv4; /**< Address and mask to hand out for virtual
+                                 * MAPADDRESS requests for IPv4 addresses */
+  char *VirtualAddrNetworkIPv6; /**< Address and mask to hand out for virtual
+                                 * MAPADDRESS requests for IPv6 addresses */
   int ServerDNSSearchDomains; /**< Boolean: If set, we don't force exit
                       * addresses to be FQDNs, but rather search for them in
                       * the local domains. */
@@ -3648,10 +3775,6 @@ typedef struct {
    * of certain configuration options. */
   int TestingTorNetwork;
 
-  /** File to check for a consensus networkstatus, if we don't have one
-   * cached. */
-  char *FallbackNetworkstatusFile;
-
   /** If true, and we have GeoIP data, and we're a bridge, keep a per-country
    * count of how many client addresses have contacted us so that we can help
    * the bridge authority guess which countries have blocked access to us. */
@@ -3728,6 +3851,8 @@ typedef struct {
   int PathBiasScaleThreshold;
   int PathBiasScaleFactor;
   /** @} */
+
+  int IPv6Exit; /**< Do we support exiting to IPv6 addresses? */
 
 } or_options_t;
 
@@ -4439,19 +4564,23 @@ typedef struct rend_cache_entry_t {
 
 /********************************* routerlist.c ***************************/
 
-/** Represents information about a single trusted directory server. */
-typedef struct trusted_dir_server_t {
+/** Represents information about a single trusted or fallback directory
+ * server. */
+typedef struct dir_server_t {
   char *description;
   char *nickname;
   char *address; /**< Hostname. */
   uint32_t addr; /**< IPv4 address. */
   uint16_t dir_port; /**< Directory port. */
   uint16_t or_port; /**< OR port: Used for tunneling connections. */
+  double weight; /** Weight used when selecting this node at random */
   char digest[DIGEST_LEN]; /**< Digest of identity key. */
   char v3_identity_digest[DIGEST_LEN]; /**< Digest of v3 (authority only,
                                         * high-security) identity key. */
 
   unsigned int is_running:1; /**< True iff we think this server is running. */
+  unsigned int is_authority:1; /**< True iff this is a directory authority
+                                * of some kind. */
 
   /** True iff this server has accepted the most recent server descriptor
    * we tried to upload to it. */
@@ -4470,7 +4599,7 @@ typedef struct trusted_dir_server_t {
                                * as a routerstatus_t.  Not updated by the
                                * router-status management code!
                                **/
-} trusted_dir_server_t;
+} dir_server_t;
 
 #define ROUTER_REQUIRED_MIN_BANDWIDTH (20*1024)
 
