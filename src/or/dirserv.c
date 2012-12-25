@@ -73,8 +73,10 @@ static const struct consensus_method_range_t {
   int high;
 } microdesc_consensus_methods[] = {
   {MIN_METHOD_FOR_MICRODESC, MIN_METHOD_FOR_A_LINES - 1},
-  {MIN_METHOD_FOR_A_LINES, MAX_SUPPORTED_CONSENSUS_METHOD},
-  {-1, -1}};
+  {MIN_METHOD_FOR_A_LINES, MIN_METHOD_FOR_P6_LINES - 1},
+  {MIN_METHOD_FOR_P6_LINES, MAX_SUPPORTED_CONSENSUS_METHOD},
+  {-1, -1}
+};
 
 static void directory_remove_invalid(void);
 static cached_dir_t *dirserv_regenerate_directory(void);
@@ -1145,6 +1147,8 @@ int
 dirserv_dump_directory_to_string(char **dir_out,
                                  crypto_pk_t *private_key)
 {
+  /* XXXX 024 Get rid of this function if we can confirm that nobody's
+   * fetching these any longer */
   char *cp;
   char *identity_pkey; /* Identity key, DER64-encoded. */
   char *recommended_versions;
@@ -1445,21 +1449,12 @@ free_cached_dir_(void *_d)
  * If <b>is_running_routers</b>, this is really a v1 running_routers
  * document rather than a v1 directory.
  */
-void
-dirserv_set_cached_directory(const char *directory, time_t published,
-                             int is_running_routers)
+static void
+dirserv_set_cached_directory(const char *directory, time_t published)
 {
-  time_t now = time(NULL);
 
-  if (is_running_routers) {
-    if (published >= now - MAX_V1_RR_AGE)
-      set_cached_dir(&cached_runningrouters, tor_strdup(directory), published);
-  } else {
-    if (published >= now - MAX_V1_DIRECTORY_AGE) {
-      cached_dir_decref(cached_directory);
-      cached_directory = new_cached_dir(tor_strdup(directory), published);
-    }
-  }
+  cached_dir_decref(cached_directory);
+  cached_directory = new_cached_dir(tor_strdup(directory), published);
 }
 
 /** If <b>networkstatus</b> is non-NULL, we've just received a v2
@@ -1476,7 +1471,6 @@ dirserv_set_cached_networkstatus_v2(const char *networkstatus,
                                     time_t published)
 {
   cached_dir_t *d, *old_d;
-  smartlist_t *trusted_dirs;
   if (!cached_v2_networkstatus)
     cached_v2_networkstatus = digestmap_new();
 
@@ -1499,9 +1493,9 @@ dirserv_set_cached_networkstatus_v2(const char *networkstatus,
   }
 
   /* Now purge old entries. */
-  trusted_dirs = router_get_trusted_dir_servers();
+
   if (digestmap_size(cached_v2_networkstatus) >
-      smartlist_len(trusted_dirs) + MAX_UNTRUSTED_NETWORKSTATUSES) {
+      get_n_authorities(V2_DIRINFO) + MAX_UNTRUSTED_NETWORKSTATUSES) {
     /* We need to remove the oldest untrusted networkstatus. */
     const char *oldest = NULL;
     time_t oldest_published = TIME_MAX;
@@ -1641,6 +1635,8 @@ dirserv_get_directory(void)
 static cached_dir_t *
 dirserv_regenerate_directory(void)
 {
+  /* XXXX 024 Get rid of this function if we can confirm that nobody's
+   * fetching these any longer */
   char *new_directory=NULL;
 
   if (dirserv_dump_directory_to_string(&new_directory,
@@ -1660,7 +1656,7 @@ dirserv_regenerate_directory(void)
 
   /* Save the directory to disk so we re-load it quickly on startup.
    */
-  dirserv_set_cached_directory(the_directory->dir, time(NULL), 0);
+  dirserv_set_cached_directory(the_directory->dir, time(NULL));
 
   return the_directory;
 }
@@ -2237,7 +2233,7 @@ routerstatus_format_entry(char *buf, size_t buf_len,
     }
 
     if (desc) {
-      summary = policy_summarize(desc->exit_policy);
+      summary = policy_summarize(desc->exit_policy, AF_INET);
       r = tor_snprintf(cp, buf_len - (cp-buf), "p %s\n", summary);
       if (r<0) {
         log_warn(LD_BUG, "Not enough space in buffer.");
@@ -2273,7 +2269,7 @@ compare_routerinfo_by_ip_and_bw_(const void **a, const void **b)
   else if (first->addr > second->addr)
     return 1;
 
-  /* Potentially, this next bit could cause k n lg n memcmp calls.  But in
+  /* Potentially, this next bit could cause k n lg n memeq calls.  But in
    * reality, we will almost never get here, since addresses will usually be
    * different. */
 
@@ -3130,7 +3126,7 @@ dirserv_get_networkstatus_v2_fingerprints(smartlist_t *result,
       }
     } else {
       SMARTLIST_FOREACH(router_get_trusted_dir_servers(),
-                  trusted_dir_server_t *, ds,
+                  dir_server_t *, ds,
                   if (ds->type & V2_DIRINFO)
                     smartlist_add(result, tor_memdup(ds->digest, DIGEST_LEN)));
     }

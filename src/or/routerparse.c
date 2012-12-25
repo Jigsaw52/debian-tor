@@ -66,6 +66,7 @@ typedef enum {
   K_SERVER_VERSIONS,
   K_OR_ADDRESS,
   K_P,
+  K_P6,
   K_R,
   K_A,
   K_S,
@@ -77,6 +78,7 @@ typedef enum {
   K_CACHES_EXTRA_INFO,
   K_HIDDEN_SERVICE_DIR,
   K_ALLOW_SINGLE_HOP_EXITS,
+  K_IPV6_POLICY,
 
   K_DIRREQ_END,
   K_DIRREQ_V2_IPS,
@@ -271,6 +273,7 @@ static token_rule_t routerdesc_token_table[] = {
   T0N("reject6",             K_REJECT6,             ARGS,    NO_OBJ ),
   T0N("accept6",             K_ACCEPT6,             ARGS,    NO_OBJ ),
   T1_START( "router",        K_ROUTER,              GE(5),   NO_OBJ ),
+  T01("ipv6-policy",         K_IPV6_POLICY,         CONCAT_ARGS, NO_OBJ),
   T1( "signing-key",         K_SIGNING_KEY,         NO_ARGS, NEED_KEY_1024 ),
   T1( "onion-key",           K_ONION_KEY,           NO_ARGS, NEED_KEY_1024 ),
   T1_END( "router-signature",    K_ROUTER_SIGNATURE,    NO_ARGS, NEED_OBJ ),
@@ -370,25 +373,6 @@ static token_rule_t netstatus_token_table[] = {
  * footers. */
 static token_rule_t dir_footer_token_table[] = {
   T1("directory-signature", K_DIRECTORY_SIGNATURE, EQ(1), NEED_OBJ ),
-  END_OF_TABLE
-};
-
-/** List of tokens recognized in v1 directory headers/footers. */
-static token_rule_t dir_token_table[] = {
-  /* don't enforce counts; this is obsolete. */
-  T( "network-status",      K_NETWORK_STATUS,      NO_ARGS, NO_OBJ ),
-  T( "directory-signature", K_DIRECTORY_SIGNATURE, ARGS,    NEED_OBJ ),
-  T( "recommended-software",K_RECOMMENDED_SOFTWARE,CONCAT_ARGS, NO_OBJ ),
-  T( "signed-directory",    K_SIGNED_DIRECTORY,    NO_ARGS, NO_OBJ ),
-
-  T( "running-routers",     K_RUNNING_ROUTERS,     ARGS,    NO_OBJ ),
-  T( "router-status",       K_ROUTER_STATUS,       ARGS,    NO_OBJ ),
-  T( "published",           K_PUBLISHED,       CONCAT_ARGS, NO_OBJ ),
-  T( "opt",                 K_OPT,             CONCAT_ARGS, OBJ_OK ),
-  T( "contact",             K_CONTACT,         CONCAT_ARGS, NO_OBJ ),
-  T( "dir-signing-key",     K_DIR_SIGNING_KEY,     ARGS,    OBJ_OK ),
-  T( "fingerprint",         K_FINGERPRINT,     CONCAT_ARGS, NO_OBJ ),
-
   END_OF_TABLE
 };
 
@@ -527,6 +511,7 @@ static token_rule_t microdesc_token_table[] = {
   T0N("a",                     K_A,                GE(1),       NO_OBJ ),
   T01("family",                K_FAMILY,           ARGS,        NO_OBJ ),
   T01("p",                     K_P,                CONCAT_ARGS, NO_OBJ ),
+  T01("p6",                    K_P6,               CONCAT_ARGS, NO_OBJ ),
   A01("@last-listed",          A_LAST_LISTED,      CONCAT_ARGS, NO_OBJ ),
   END_OF_TABLE
 };
@@ -535,7 +520,8 @@ static token_rule_t microdesc_token_table[] = {
 
 /* static function prototypes */
 static int router_add_exit_policy(routerinfo_t *router,directory_token_t *tok);
-static addr_policy_t *router_parse_addr_policy(directory_token_t *tok);
+static addr_policy_t *router_parse_addr_policy(directory_token_t *tok,
+                                               unsigned fmt_flags);
 static addr_policy_t *router_parse_addr_policy_private(directory_token_t *tok);
 
 static int router_get_hash_impl(const char *s, size_t s_len, char *digest,
@@ -576,7 +562,6 @@ static int check_signature_token(const char *digest,
                                  crypto_pk_t *pkey,
                                  int flags,
                                  const char *doctype);
-static crypto_pk_t *find_dir_signing_key(const char *str, const char *eos);
 
 #undef DEBUG_AREA_ALLOC
 
@@ -817,218 +802,6 @@ tor_version_is_obsolete(const char *myversion, const char *versionlist)
   SMARTLIST_FOREACH(version_sl, char *, version, tor_free(version));
   smartlist_free(version_sl);
   return ret;
-}
-
-/** Read a signed directory from <b>str</b>.  If it's well-formed, return 0.
- * Otherwise, return -1.  If we're a directory cache, cache it.
- */
-int
-router_parse_directory(const char *str)
-{
-  directory_token_t *tok;
-  char digest[DIGEST_LEN];
-  time_t published_on;
-  int r;
-  const char *end, *cp, *str_dup = str;
-  smartlist_t *tokens = NULL;
-  crypto_pk_t *declared_key = NULL;
-  memarea_t *area = memarea_new();
-
-  /* XXXX This could be simplified a lot, but it will all go away
-   * once pre-0.1.1.8 is obsolete, and for now it's better not to
-   * touch it. */
-
-  if (router_get_dir_hash(str, digest)) {
-    log_warn(LD_DIR, "Unable to compute digest of directory");
-    goto err;
-  }
-  log_debug(LD_DIR,"Received directory hashes to %s",hex_str(digest,4));
-
-  /* Check signature first, before we try to tokenize. */
-  cp = str;
-  while (cp && (end = strstr(cp+1, "\ndirectory-signature")))
-    cp = end;
-  if (cp == str || !cp) {
-    log_warn(LD_DIR, "No signature found on directory."); goto err;
-  }
-  ++cp;
-  tokens = smartlist_new();
-  if (tokenize_string(area,cp,strchr(cp,'\0'),tokens,dir_token_table,0)) {
-    log_warn(LD_DIR, "Error tokenizing directory signature"); goto err;
-  }
-  if (smartlist_len(tokens) != 1) {
-    log_warn(LD_DIR, "Unexpected number of tokens in signature"); goto err;
-  }
-  tok=smartlist_get(tokens,0);
-  if (tok->tp != K_DIRECTORY_SIGNATURE) {
-    log_warn(LD_DIR,"Expected a single directory signature"); goto err;
-  }
-  declared_key = find_dir_signing_key(str, str+strlen(str));
-  note_crypto_pk_op(VERIFY_DIR);
-  if (check_signature_token(digest, DIGEST_LEN, tok, declared_key,
-                            CST_CHECK_AUTHORITY, "directory")<0)
-    goto err;
-
-  SMARTLIST_FOREACH(tokens, directory_token_t *, t, token_clear(t));
-  smartlist_clear(tokens);
-  memarea_clear(area);
-
-  /* Now try to parse the first part of the directory. */
-  if ((end = strstr(str,"\nrouter "))) {
-    ++end;
-  } else if ((end = strstr(str, "\ndirectory-signature"))) {
-    ++end;
-  } else {
-    end = str + strlen(str);
-  }
-
-  if (tokenize_string(area,str,end,tokens,dir_token_table,0)) {
-    log_warn(LD_DIR, "Error tokenizing directory"); goto err;
-  }
-
-  tok = find_by_keyword(tokens, K_PUBLISHED);
-  tor_assert(tok->n_args == 1);
-
-  if (parse_iso_time(tok->args[0], &published_on) < 0) {
-     goto err;
-  }
-
-  /* Now that we know the signature is okay, and we have a
-   * publication time, cache the directory. */
-  if (directory_caches_v1_dir_info(get_options()) &&
-      !authdir_mode_v1(get_options()))
-    dirserv_set_cached_directory(str, published_on, 0);
-
-  r = 0;
-  goto done;
- err:
-  dump_desc(str_dup, "v1 directory");
-  r = -1;
- done:
-  if (declared_key) crypto_pk_free(declared_key);
-  if (tokens) {
-    SMARTLIST_FOREACH(tokens, directory_token_t *, t, token_clear(t));
-    smartlist_free(tokens);
-  }
-  if (area) {
-    DUMP_AREA(area, "v1 directory");
-    memarea_drop_all(area);
-  }
-  return r;
-}
-
-/** Read a signed router status statement from <b>str</b>.  If it's
- * well-formed, return 0.  Otherwise, return -1.  If we're a directory cache,
- * cache it.*/
-int
-router_parse_runningrouters(const char *str)
-{
-  char digest[DIGEST_LEN];
-  directory_token_t *tok;
-  time_t published_on;
-  int r = -1;
-  crypto_pk_t *declared_key = NULL;
-  smartlist_t *tokens = NULL;
-  const char *eos = str + strlen(str), *str_dup = str;
-  memarea_t *area = NULL;
-
-  if (router_get_runningrouters_hash(str, digest)) {
-    log_warn(LD_DIR, "Unable to compute digest of running-routers");
-    goto err;
-  }
-  area = memarea_new();
-  tokens = smartlist_new();
-  if (tokenize_string(area,str,eos,tokens,dir_token_table,0)) {
-    log_warn(LD_DIR, "Error tokenizing running-routers"); goto err;
-  }
-  tok = smartlist_get(tokens,0);
-  if (tok->tp != K_NETWORK_STATUS) {
-    log_warn(LD_DIR, "Network-status starts with wrong token");
-    goto err;
-  }
-
-  tok = find_by_keyword(tokens, K_PUBLISHED);
-  tor_assert(tok->n_args == 1);
-  if (parse_iso_time(tok->args[0], &published_on) < 0) {
-     goto err;
-  }
-  if (!(tok = find_opt_by_keyword(tokens, K_DIRECTORY_SIGNATURE))) {
-    log_warn(LD_DIR, "Missing signature on running-routers");
-    goto err;
-  }
-  declared_key = find_dir_signing_key(str, eos);
-  note_crypto_pk_op(VERIFY_DIR);
-  if (check_signature_token(digest, DIGEST_LEN, tok, declared_key,
-                            CST_CHECK_AUTHORITY, "running-routers")
-      < 0)
-    goto err;
-
-  /* Now that we know the signature is okay, and we have a
-   * publication time, cache the list. */
-  if (get_options()->DirPort_set && !authdir_mode_v1(get_options()))
-    dirserv_set_cached_directory(str, published_on, 1);
-
-  r = 0;
- err:
-  dump_desc(str_dup, "v1 running-routers");
-  if (declared_key) crypto_pk_free(declared_key);
-  if (tokens) {
-    SMARTLIST_FOREACH(tokens, directory_token_t *, t, token_clear(t));
-    smartlist_free(tokens);
-  }
-  if (area) {
-    DUMP_AREA(area, "v1 running-routers");
-    memarea_drop_all(area);
-  }
-  return r;
-}
-
-/** Given a directory or running-routers string in <b>str</b>, try to
- * find the its dir-signing-key token (if any).  If this token is
- * present, extract and return the key.  Return NULL on failure. */
-static crypto_pk_t *
-find_dir_signing_key(const char *str, const char *eos)
-{
-  const char *cp;
-  directory_token_t *tok;
-  crypto_pk_t *key = NULL;
-  memarea_t *area = NULL;
-  tor_assert(str);
-  tor_assert(eos);
-
-  /* Is there a dir-signing-key in the directory? */
-  cp = tor_memstr(str, eos-str, "\nopt dir-signing-key");
-  if (!cp)
-    cp = tor_memstr(str, eos-str, "\ndir-signing-key");
-  if (!cp)
-    return NULL;
-  ++cp; /* Now cp points to the start of the token. */
-
-  area = memarea_new();
-  tok = get_next_token(area, &cp, eos, dir_token_table);
-  if (!tok) {
-    log_warn(LD_DIR, "Unparseable dir-signing-key token");
-    goto done;
-  }
-  if (tok->tp != K_DIR_SIGNING_KEY) {
-    log_warn(LD_DIR, "Dir-signing-key token did not parse as expected");
-    goto done;
-  }
-
-  if (tok->key) {
-    key = tok->key;
-    tok->key = NULL; /* steal reference. */
-  } else {
-    log_warn(LD_DIR, "Dir-signing-key token contained no key");
-  }
-
- done:
-  if (tok) token_clear(tok);
-  if (area) {
-    DUMP_AREA(area, "dir-signing-key token");
-    memarea_drop_all(area);
-  }
-  return key;
 }
 
 /** Return true iff <b>key</b> is allowed to sign directories.
@@ -1280,7 +1053,8 @@ find_single_ipv6_orport(const smartlist_t *list,
     uint16_t port_min, port_max;
     tor_assert(t->n_args >= 1);
     /* XXXX Prop186 the full spec allows much more than this. */
-    if (tor_addr_parse_mask_ports(t->args[0], &a, &bits, &port_min,
+    if (tor_addr_parse_mask_ports(t->args[0], 0,
+                                  &a, &bits, &port_min,
                                   &port_max) == AF_INET6 &&
         bits == 128 &&
         port_min == port_max) {
@@ -1568,7 +1342,18 @@ router_parse_entry_from_string(const char *s, const char *end,
                       goto err;
                     });
   policy_expand_private(&router->exit_policy);
-  if (policy_is_reject_star(router->exit_policy))
+
+  if ((tok = find_opt_by_keyword(tokens, K_IPV6_POLICY)) && tok->n_args) {
+    router->ipv6_exit_policy = parse_short_policy(tok->args[0]);
+    if (! router->ipv6_exit_policy) {
+      log_warn(LD_DIR , "Error in ipv6-policy %s", escaped(tok->args[0]));
+      goto err;
+    }
+  }
+
+  if (policy_is_reject_star(router->exit_policy, AF_INET) &&
+      (!router->ipv6_exit_policy ||
+       short_policy_is_reject_star(router->ipv6_exit_policy)))
     router->policy_is_reject_star = 1;
 
   if ((tok = find_opt_by_keyword(tokens, K_FAMILY)) && tok->n_args) {
@@ -3632,6 +3417,10 @@ networkstatus_parse_detached_signatures(const char *s, const char *eos)
 /** Parse the addr policy in the string <b>s</b> and return it.  If
  * assume_action is nonnegative, then insert its action (ADDR_POLICY_ACCEPT or
  * ADDR_POLICY_REJECT) for items that specify no action.
+ *
+ * The addr_policy_t returned by this function can have its address set to
+ * AF_UNSPEC for '*'.  Use policy_expand_unspec() to turn this into a pair
+ * of AF_INET and AF_INET6 items.
  */
 addr_policy_t *
 router_parse_addr_policy_item_from_string(const char *s, int assume_action)
@@ -3671,7 +3460,7 @@ router_parse_addr_policy_item_from_string(const char *s, int assume_action)
     goto err;
   }
 
-  r = router_parse_addr_policy(tok);
+  r = router_parse_addr_policy(tok, TAPMP_EXTENDED_STAR);
   goto done;
  err:
   r = NULL;
@@ -3690,7 +3479,7 @@ static int
 router_add_exit_policy(routerinfo_t *router, directory_token_t *tok)
 {
   addr_policy_t *newe;
-  newe = router_parse_addr_policy(tok);
+  newe = router_parse_addr_policy(tok, 0);
   if (!newe)
     return -1;
   if (! router->exit_policy)
@@ -3715,7 +3504,7 @@ router_add_exit_policy(routerinfo_t *router, directory_token_t *tok)
 /** Given a K_ACCEPT or K_REJECT token and a router, create and return
  * a new exit_policy_t corresponding to the token. */
 static addr_policy_t *
-router_parse_addr_policy(directory_token_t *tok)
+router_parse_addr_policy(directory_token_t *tok, unsigned fmt_flags)
 {
   addr_policy_t newe;
   char *arg;
@@ -3737,7 +3526,7 @@ router_parse_addr_policy(directory_token_t *tok)
   else
     newe.policy_type = ADDR_POLICY_ACCEPT;
 
-  if (tor_addr_parse_mask_ports(arg, &newe.addr, &newe.maskbits,
+  if (tor_addr_parse_mask_ports(arg, fmt_flags, &newe.addr, &newe.maskbits,
                                 &newe.prt_min, &newe.prt_max) < 0) {
     log_warn(LD_DIR,"Couldn't parse line %s. Dropping", escaped(arg));
     return NULL;
@@ -4284,8 +4073,8 @@ router_get_hash_impl_helper(const char *s, size_t s_len,
 
 /** Compute the digest of the substring of <b>s</b> taken from the first
  * occurrence of <b>start_str</b> through the first instance of c after the
- * first subsequent occurrence of <b>end_str</b>; store the 20-byte result in
- * <b>digest</b>; return 0 on success.
+ * first subsequent occurrence of <b>end_str</b>; store the 20-byte or 32-byte
+ * result in <b>digest</b>; return 0 on success.
  *
  * If no such substring exists, return -1.
  */
@@ -4477,6 +4266,9 @@ microdescs_parse_from_string(const char *s, const char *eos,
 
     if ((tok = find_opt_by_keyword(tokens, K_P))) {
       md->exit_policy = parse_short_policy(tok->args[0]);
+    }
+    if ((tok = find_opt_by_keyword(tokens, K_P6))) {
+      md->ipv6_exit_policy = parse_short_policy(tok->args[0]);
     }
 
     crypto_digest256(md->digest, md->body, md->bodylen, DIGEST_SHA256);

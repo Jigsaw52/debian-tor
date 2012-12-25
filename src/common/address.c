@@ -181,6 +181,16 @@ tor_addr_make_unspec(tor_addr_t *a)
   a->family = AF_UNSPEC;
 }
 
+/** Set address <a>a</b> to the null address in address family <b>family</b>.
+ * The null address for AF_INET is 0.0.0.0.  The null address for AF_INET6 is
+ * [::].  AF_UNSPEC is all null. */
+void
+tor_addr_make_null(tor_addr_t *a, sa_family_t family)
+{
+  memset(a, 0, sizeof(*a));
+  a->family = family;
+}
+
 /** Similar behavior to Unix gethostbyname: resolve <b>name</b>, and set
  * *<b>addr</b> to the proper IP address and family. The <b>family</b>
  * argument (which must be AF_INET, AF_INET6, or AF_UNSPEC) declares a
@@ -559,9 +569,22 @@ tor_addr_to_PTR_name(char *out, size_t outlen,
  *
  *  Return an address family on success, or -1 if an invalid address string is
  *  provided.
+ *
+ *  If 'flags & TAPMP_EXTENDED_STAR' is false, then the wildcard address '*'
+ *  yield an IPv4 wildcard.
+ *
+ *  If 'flags & TAPMP_EXTENDED_STAR' is true, then the wildcard address '*'
+ *  yields an AF_UNSPEC wildcard address, and the following change is made
+ *  in the grammar above:
+ *   Address ::= IPv4Address / "[" IPv6Address "]" / "*" / "*4" / "*6"
+ *  with the new "*4" and "*6" productions creating a wildcard to match
+ *  IPv4 or IPv6 addresses.
+ *
  */
 int
-tor_addr_parse_mask_ports(const char *s, tor_addr_t *addr_out,
+tor_addr_parse_mask_ports(const char *s,
+                          unsigned flags,
+                          tor_addr_t *addr_out,
                           maskbits_t *maskbits_out,
                           uint16_t *port_min_out, uint16_t *port_max_out)
 {
@@ -618,8 +641,22 @@ tor_addr_parse_mask_ports(const char *s, tor_addr_t *addr_out,
   memset(addr_out, 0, sizeof(tor_addr_t));
 
   if (!strcmp(address, "*")) {
-    family = AF_INET; /* AF_UNSPEC ???? XXXX_IP6 */
+    if (flags & TAPMP_EXTENDED_STAR) {
+      family = AF_UNSPEC;
+      tor_addr_make_unspec(addr_out);
+    } else {
+      family = AF_INET;
+      tor_addr_from_ipv4h(addr_out, 0);
+    }
+    any_flag = 1;
+  } else if (!strcmp(address, "*4") && (flags & TAPMP_EXTENDED_STAR)) {
+    family = AF_INET;
     tor_addr_from_ipv4h(addr_out, 0);
+    any_flag = 1;
+  } else if (!strcmp(address, "*6") && (flags & TAPMP_EXTENDED_STAR)) {
+    static char nil_bytes[16] = { 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0 };
+    family = AF_INET6;
+    tor_addr_from_ipv6_bytes(addr_out, nil_bytes);
     any_flag = 1;
   } else if (tor_inet_pton(AF_INET6, address, &in6_tmp) > 0) {
     family = AF_INET6;
@@ -1393,7 +1430,46 @@ is_internal_IP(uint32_t ip, int for_listening)
   return tor_addr_is_internal(&myaddr, for_listening);
 }
 
-/** Given an address of the form "host:port", try to divide it into its host
+/** Given an address of the form "ip:port", try to divide it into its
+ * ip and port portions, setting *<b>address_out</b> to a newly
+ * allocated string holding the address portion and *<b>port_out</b>
+ * to the port.
+ *
+ * Don't do DNS lookups and don't allow domain names in the <ip> field.
+ * Don't accept <b>addrport</b> of the form "<ip>" or "<ip>:0".
+ *
+ * Return 0 on success, -1 on failure. */
+int
+tor_addr_port_parse(int severity, const char *addrport,
+                    tor_addr_t *address_out, uint16_t *port_out)
+{
+  int retval = -1;
+  int r;
+  char *addr_tmp = NULL;
+
+  tor_assert(addrport);
+  tor_assert(address_out);
+  tor_assert(port_out);
+
+  r = tor_addr_port_split(severity, addrport, &addr_tmp, port_out);
+  if (r < 0)
+    goto done;
+
+  if (!*port_out)
+    goto done;
+
+  /* make sure that address_out is an IP address */
+  if (tor_addr_parse(address_out, addr_tmp) < 0)
+    goto done;
+
+  retval = 0;
+
+ done:
+  tor_free(addr_tmp);
+  return retval;
+}
+
+/** Given an address of the form "host[:port]", try to divide it into its host
  * ane port portions, setting *<b>address_out</b> to a newly allocated string
  * holding the address portion and *<b>port_out</b> to the port (or 0 if no
  * port is given).  Return 0 on success, -1 on failure. */

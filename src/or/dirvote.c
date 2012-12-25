@@ -2787,7 +2787,7 @@ dirvote_fetch_missing_votes(void)
   char *resource;
 
   SMARTLIST_FOREACH_BEGIN(router_get_trusted_dir_servers(),
-                          trusted_dir_server_t *, ds) {
+                          dir_server_t *, ds) {
       if (!(ds->type & V3_DIRINFO))
         continue;
       if (!dirvote_get_vote(ds->v3_identity_digest,
@@ -2905,7 +2905,7 @@ list_v3_auth_ids(void)
   smartlist_t *known_v3_keys = smartlist_new();
   char *keys;
   SMARTLIST_FOREACH(router_get_trusted_dir_servers(),
-                    trusted_dir_server_t *, ds,
+                    dir_server_t *, ds,
     if ((ds->type & V3_DIRINFO) &&
         !tor_digest_is_zero(ds->v3_identity_digest))
       smartlist_add(known_v3_keys,
@@ -2926,7 +2926,7 @@ dirvote_add_vote(const char *vote_body, const char **msg_out, int *status_out)
 {
   networkstatus_t *vote;
   networkstatus_voter_info_t *vi;
-  trusted_dir_server_t *ds;
+  dir_server_t *ds;
   pending_vote_t *pending_vote = NULL;
   const char *end_of_vote = NULL;
   int any_failed = 0;
@@ -3534,12 +3534,8 @@ dirvote_get_vote(const char *fp, int flags)
   return NULL;
 }
 
-/** Construct and return a new microdescriptor from a routerinfo <b>ri</b>.
- *
- * XXX Right now, there is only one way to generate microdescriptors from
- * router descriptors.  This may change in future consensus methods.  If so,
- * we'll need an internal way to remember which method we used, and ask for a
- * particular method.
+/** Construct and return a new microdescriptor from a routerinfo <b>ri</b>
+ * according to <b>consensus_method</b>.
  **/
 microdesc_t *
 dirvote_create_microdescriptor(const routerinfo_t *ri, int consensus_method)
@@ -3552,7 +3548,7 @@ dirvote_create_microdescriptor(const routerinfo_t *ri, int consensus_method)
 
   if (crypto_pk_write_public_key_to_string(ri->onion_pkey, &key, &keylen)<0)
     goto done;
-  summary = policy_summarize(ri->exit_policy);
+  summary = policy_summarize(ri->exit_policy, AF_INET);
   if (ri->declared_family)
     family = smartlist_join_strings(ri->declared_family, " ", 0, NULL);
 
@@ -3568,6 +3564,17 @@ dirvote_create_microdescriptor(const routerinfo_t *ri, int consensus_method)
 
   if (summary && strcmp(summary, "reject 1-65535"))
     smartlist_add_asprintf(chunks, "p %s\n", summary);
+
+  if (consensus_method >= MIN_METHOD_FOR_P6_LINES &&
+      ri->ipv6_exit_policy) {
+    /* XXXX024 This doesn't match proposal 208, which says these should
+     * be taken unchanged from the routerinfo.  That's bogosity, IMO:
+     * the proposal should have said to do this instead.*/
+    char *p6 = write_short_policy(ri->ipv6_exit_policy);
+    if (p6 && strcmp(p6, "reject 1-65535"))
+      smartlist_add_asprintf(chunks, "p6 %s\n", p6);
+    tor_free(p6);
+  }
 
   output = smartlist_join_strings(chunks, "", 0, NULL);
 
