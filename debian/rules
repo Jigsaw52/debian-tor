@@ -145,6 +145,7 @@ install: build
 
 	# tor-geoip
 	mv $(CURDIR)/debian/tor/usr/share/tor/geoip $(CURDIR)/debian/tor-geoipdb/usr/share/tor
+	mv $(CURDIR)/debian/tor/usr/share/tor/geoip6 $(CURDIR)/debian/tor-geoipdb/usr/share/tor
 	rmdir $(CURDIR)/debian/tor/usr/share/tor || true
 
 # Must not depend on anything. This is to be called by

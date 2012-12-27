@@ -1,3 +1,10 @@
+tor (0.2.4.7-alpha-XX) XXperimental; urgency=low
+
+  * Move the geoip6 file to the tor-geoip package (spotted by George
+    Kargiotakis).
+
+ -- Peter Palfrader <weasel@debian.org>  Thu, 27 Dec 2012 19:22:44 +0100
+
 tor (0.2.4.7-alpha-1) experimental; urgency=low
 
   * New upstream version.
