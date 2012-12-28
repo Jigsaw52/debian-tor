@@ -111,7 +111,7 @@ check_torpiddir () {
 check_config () {
 	if ! $DAEMON $VERIFY_ARGS > /dev/null; then
 		log_failure_msg "Checking if $NAME configuration is valid"
-		$DAEMON --verify-config >&2
+		$DAEMON $VERIFY_ARGS >&2
 		exit 1
 	fi
 }
