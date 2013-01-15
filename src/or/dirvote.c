@@ -2223,7 +2223,7 @@ networkstatus_add_detached_signatures(networkstatus_t *target,
   {
     digests_t *digests = strmap_get(sigs->digests, flavor);
     int n_matches = 0;
-    digest_algorithm_t alg;
+    int alg;
     if (!digests) {
       *msg_out = "No digests for given consensus flavor";
       return -1;
@@ -3471,7 +3471,7 @@ dirvote_free_all(void)
 const char *
 dirvote_get_pending_consensus(consensus_flavor_t flav)
 {
-  tor_assert(((int)flav) >= 0 && flav < N_CONSENSUS_FLAVORS);
+  tor_assert(((int)flav) >= 0 && (int)flav < N_CONSENSUS_FLAVORS);
   return pending_consensuses[flav].body;
 }
 
@@ -3553,6 +3553,15 @@ dirvote_create_microdescriptor(const routerinfo_t *ri, int consensus_method)
     family = smartlist_join_strings(ri->declared_family, " ", 0, NULL);
 
   smartlist_add_asprintf(chunks, "onion-key\n%s", key);
+
+  if (consensus_method >= MIN_METHOD_FOR_NTOR_KEY &&
+      ri->onion_curve25519_pkey) {
+    char kbuf[128];
+    base64_encode(kbuf, sizeof(kbuf),
+                  (const char*)ri->onion_curve25519_pkey->public_key,
+                  CURVE25519_PUBKEY_LEN);
+    smartlist_add_asprintf(chunks, "ntor-onion-key %s", kbuf);
+  }
 
   if (consensus_method >= MIN_METHOD_FOR_A_LINES &&
       !tor_addr_is_null(&ri->ipv6_addr) && ri->ipv6_orport)

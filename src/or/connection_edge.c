@@ -1661,7 +1661,7 @@ connection_ap_process_natd(entry_connection_t *conn)
 /** Iterate over the two bytes of stream_id until we get one that is not
  * already in use; return it. Return 0 if can't get a unique stream_id.
  */
-static streamid_t
+streamid_t
 get_unique_stream_id_by_circ(origin_circuit_t *circ)
 {
   edge_connection_t *tmpconn;
@@ -2186,6 +2186,29 @@ connection_ap_handshake_socks_reply(entry_connection_t *conn, char *reply,
      status==SOCKS5_SUCCEEDED ? STREAM_EVENT_SUCCEEDED : STREAM_EVENT_FAILED,
                               endreason);
 
+  /* Flag this stream's circuit as having completed a stream successfully
+   * (for path bias) */
+  if (status == SOCKS5_SUCCEEDED ||
+      endreason == END_STREAM_REASON_RESOLVEFAILED ||
+      endreason == END_STREAM_REASON_CONNECTREFUSED ||
+      endreason == END_STREAM_REASON_CONNRESET ||
+      endreason == END_STREAM_REASON_NOROUTE ||
+      endreason == END_STREAM_REASON_RESOURCELIMIT) {
+    if (!conn->edge_.on_circuit ||
+       !CIRCUIT_IS_ORIGIN(conn->edge_.on_circuit)) {
+      // DNS remaps can trigger this. So can failed hidden service
+      // lookups.
+      log_info(LD_BUG,
+               "No origin circuit for successful SOCKS stream "U64_FORMAT
+               ". Reason: %d",
+               U64_PRINTF_ARG(ENTRY_TO_CONN(conn)->global_identifier),
+               endreason);
+    } else {
+      TO_ORIGIN_CIRCUIT(conn->edge_.on_circuit)->path_state
+          = PATH_STATE_USE_SUCCEEDED;
+    }
+  }
+
   if (conn->socks_request->has_finished) {
     log_warn(LD_BUG, "(Harmless.) duplicate calls to "
              "connection_ap_handshake_socks_reply.");
@@ -2404,6 +2427,7 @@ connection_exit_begin_conn(cell_t *cell, circuit_t *circ)
       tor_free(address);
       relay_send_end_cell_from_edge(rh.stream_id, circ,
                                     END_STREAM_REASON_EXITPOLICY, NULL);
+      return 0;
     }
   }
 
@@ -2453,6 +2477,10 @@ connection_exit_begin_conn(cell_t *cell, circuit_t *circ)
     assert_circuit_ok(circ);
 
     connection_exit_connect(n_stream);
+
+    /* For path bias: This circuit was used successfully */
+    origin_circ->path_state = PATH_STATE_USE_SUCCEEDED;
+
     tor_free(address);
     return 0;
   }

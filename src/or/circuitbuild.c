@@ -28,6 +28,8 @@
 #include "networkstatus.h"
 #include "nodelist.h"
 #include "onion.h"
+#include "onion_tap.h"
+#include "onion_fast.h"
 #include "policies.h"
 #include "transports.h"
 #include "relay.h"
@@ -37,6 +39,7 @@
 #include "routerparse.h"
 #include "routerset.h"
 #include "crypto.h"
+#include "connection_edge.h"
 
 #ifndef MIN
 #define MIN(a,b) ((a)<(b)?(a):(b))
@@ -53,14 +56,18 @@ static channel_t * channel_connect_for_circuit(const tor_addr_t *addr,
                                                uint16_t port,
                                                const char *id_digest);
 static int circuit_deliver_create_cell(circuit_t *circ,
-                                       uint8_t cell_type, const char *payload);
+                                       const create_cell_t *create_cell,
+                                       int relayed);
 static int onion_pick_cpath_exit(origin_circuit_t *circ, extend_info_t *exit);
 static crypt_path_t *onion_next_hop_in_cpath(crypt_path_t *cpath);
 static int onion_extend_cpath(origin_circuit_t *circ);
 static int count_acceptable_nodes(smartlist_t *routers);
 static int onion_append_hop(crypt_path_t **head_ptr, extend_info_t *choice);
-static int entry_guard_inc_first_hop_count(entry_guard_t *guard);
-static void pathbias_count_success(origin_circuit_t *circ);
+static int entry_guard_inc_circ_attempt_count(entry_guard_t *guard);
+static void pathbias_count_build_success(origin_circuit_t *circ);
+static void pathbias_count_successful_close(origin_circuit_t *circ);
+static void pathbias_count_collapse(origin_circuit_t *circ);
+static void pathbias_count_unusable(origin_circuit_t *circ);
 
 /** This function tries to get a channel to the specified endpoint,
  * and then calls command_setup_channel() to give it the right
@@ -470,14 +477,13 @@ circuit_n_chan_done(channel_t *chan, int status)
            *     died? */
         }
       } else {
-        /* pull the create cell out of circ->onionskin, and send it */
-        tor_assert(circ->n_chan_onionskin);
-        if (circuit_deliver_create_cell(circ,CELL_CREATE,
-                                        circ->n_chan_onionskin)<0) {
+        /* pull the create cell out of circ->n_chan_create_cell, and send it */
+        tor_assert(circ->n_chan_create_cell);
+        if (circuit_deliver_create_cell(circ, circ->n_chan_create_cell, 1)<0) {
           circuit_mark_for_close(circ, END_CIRC_REASON_RESOURCELIMIT);
           continue;
         }
-        tor_free(circ->n_chan_onionskin);
+        tor_free(circ->n_chan_create_cell);
         circuit_set_state(circ, CIRCUIT_STATE_OPEN);
       }
     }
@@ -488,22 +494,25 @@ circuit_n_chan_done(channel_t *chan, int status)
 
 /** Find a new circid that isn't currently in use on the circ->n_chan
  * for the outgoing
- * circuit <b>circ</b>, and deliver a cell of type <b>cell_type</b>
- * (either CELL_CREATE or CELL_CREATE_FAST) with payload <b>payload</b>
- * to this circuit.
- * Return -1 if we failed to find a suitable circid, else return 0.
+ * circuit <b>circ</b>, and deliver the cell <b>create_cell</b> to this
+ * circuit.  If <b>relayed</b> is true, this is a create cell somebody
+ * gave us via an EXTEND cell, so we shouldn't worry if we don't understand
+ * it. Return -1 if we failed to find a suitable circid, else return 0.
  */
 static int
-circuit_deliver_create_cell(circuit_t *circ, uint8_t cell_type,
-                            const char *payload)
+circuit_deliver_create_cell(circuit_t *circ, const create_cell_t *create_cell,
+                            int relayed)
 {
   cell_t cell;
   circid_t id;
+  int r;
 
   tor_assert(circ);
   tor_assert(circ->n_chan);
-  tor_assert(payload);
-  tor_assert(cell_type == CELL_CREATE || cell_type == CELL_CREATE_FAST);
+  tor_assert(create_cell);
+  tor_assert(create_cell->cell_type == CELL_CREATE ||
+             create_cell->cell_type == CELL_CREATE_FAST ||
+             create_cell->cell_type == CELL_CREATE2);
 
   id = get_unique_circ_id_by_chan(circ->n_chan);
   if (!id) {
@@ -514,10 +523,14 @@ circuit_deliver_create_cell(circuit_t *circ, uint8_t cell_type,
   circuit_set_n_circid_chan(circ, id, circ->n_chan);
 
   memset(&cell, 0, sizeof(cell_t));
-  cell.command = cell_type;
+  r = relayed ? create_cell_format_relayed(&cell, create_cell)
+              : create_cell_format(&cell, create_cell);
+  if (r < 0) {
+    log_warn(LD_CIRC,"Couldn't format create cell");
+    return -1;
+  }
   cell.circ_id = circ->n_circ_id;
 
-  memcpy(cell.payload, payload, ONIONSKIN_CHALLENGE_LEN);
   append_cell_to_circuit_queue(circ, circ->n_chan, &cell,
                                CELL_DIRECTION_OUT, 0);
 
@@ -607,6 +620,73 @@ circuit_timeout_want_to_count_circ(origin_circuit_t *circ)
           && circ->build_state->desired_path_len == DEFAULT_ROUTE_LEN;
 }
 
+#ifdef CURVE25519_ENABLED
+/** Return true if the ntor handshake is enabled in the configuration, or if
+ * it's been set to "auto" in the configuration and it's enabled in the
+ * consensus. */
+static int
+circuits_can_use_ntor(void)
+{
+  const or_options_t *options = get_options();
+  if (options->UseNTorHandshake != -1)
+    return options->UseNTorHandshake;
+  return networkstatus_get_param(NULL, "UseNTorHandshake", 0, 0, 1);
+}
+#endif
+
+/** Decide whether to use a TAP or ntor handshake for connecting to <b>ei</b>
+ * directly, and set *<b>cell_type_out</b> and *<b>handshake_type_out</b>
+ * accordingly. */
+static void
+circuit_pick_create_handshake(uint8_t *cell_type_out,
+                              uint16_t *handshake_type_out,
+                              const extend_info_t *ei)
+{
+#ifdef CURVE25519_ENABLED
+  if (!tor_mem_is_zero((const char*)ei->curve25519_onion_key.public_key,
+                       CURVE25519_PUBKEY_LEN) &&
+      circuits_can_use_ntor()) {
+    *cell_type_out = CELL_CREATE2;
+    *handshake_type_out = ONION_HANDSHAKE_TYPE_NTOR;
+    return;
+  }
+#else
+  (void) ei;
+#endif
+
+  *cell_type_out = CELL_CREATE;
+  *handshake_type_out = ONION_HANDSHAKE_TYPE_TAP;
+}
+
+/** Decide whether to use a TAP or ntor handshake for connecting to <b>ei</b>
+ * directly, and set *<b>handshake_type_out</b> accordingly. Decide whether,
+ * in extending through <b>node</b> to do so, we should use an EXTEND2 or an
+ * EXTEND cell to do so, and set *<b>cell_type_out</b> and
+ * *<b>create_cell_type_out</b> accordingly. */
+static void
+circuit_pick_extend_handshake(uint8_t *cell_type_out,
+                              uint8_t *create_cell_type_out,
+                              uint16_t *handshake_type_out,
+                              const node_t *node_prev,
+                              const extend_info_t *ei)
+{
+  uint8_t t;
+  circuit_pick_create_handshake(&t, handshake_type_out, ei);
+  /* XXXX024 The check for whether the node has a curve25519 key is a bad
+   * proxy for whether it can do extend2 cells; once a version that
+   * handles extend2 cells is out, remove it. */
+  if (node_prev &&
+      *handshake_type_out != ONION_HANDSHAKE_TYPE_TAP &&
+      (node_has_curve25519_onion_key(node_prev) ||
+       (node_prev->rs && node_prev->rs->version_supports_extend2_cells))) {
+    *cell_type_out = RELAY_COMMAND_EXTEND2;
+    *create_cell_type_out = CELL_CREATE2;
+  } else {
+    *cell_type_out = RELAY_COMMAND_EXTEND;
+    *create_cell_type_out = CELL_CREATE;
+  }
+}
+
 /** This is the backbone function for building circuits.
  *
  * If circ's first hop is closed, then we need to build a create
@@ -622,16 +702,16 @@ circuit_send_next_onion_skin(origin_circuit_t *circ)
 {
   crypt_path_t *hop;
   const node_t *node;
-  char payload[2+4+DIGEST_LEN+ONIONSKIN_CHALLENGE_LEN];
-  char *onionskin;
-  size_t payload_len;
 
   tor_assert(circ);
 
   if (circ->cpath->state == CPATH_STATE_CLOSED) {
+    /* This is the first hop. */
+    create_cell_t cc;
     int fast;
-    uint8_t cell_type;
+    int len;
     log_debug(LD_CIRC,"First skin; sending create cell.");
+    memset(&cc, 0, sizeof(cc));
     if (circ->build_state->onehop_tunnel)
       control_event_bootstrap(BOOTSTRAP_STATUS_ONEHOP_CREATE, 0);
     else
@@ -641,30 +721,31 @@ circuit_send_next_onion_skin(origin_circuit_t *circ)
     fast = should_use_create_fast_for_circuit(circ);
     if (!fast) {
       /* We are an OR and we know the right onion key: we should
-       * send an old slow create cell.
+       * send a create cell.
        */
-      cell_type = CELL_CREATE;
-      if (onion_skin_create(circ->cpath->extend_info->onion_key,
-                            &(circ->cpath->dh_handshake_state),
-                            payload) < 0) {
-        log_warn(LD_CIRC,"onion_skin_create (first hop) failed.");
-        return - END_CIRC_REASON_INTERNAL;
-      }
+      circuit_pick_create_handshake(&cc.cell_type, &cc.handshake_type,
+                                    circ->cpath->extend_info);
       note_request("cell: create", 1);
     } else {
       /* We are not an OR, and we're building the first hop of a circuit to a
        * new OR: we can be speedy and use CREATE_FAST to save an RSA operation
        * and a DH operation. */
-      cell_type = CELL_CREATE_FAST;
-      memset(payload, 0, sizeof(payload));
-      crypto_rand((char*) circ->cpath->fast_handshake_state,
-                  sizeof(circ->cpath->fast_handshake_state));
-      memcpy(payload, circ->cpath->fast_handshake_state,
-             sizeof(circ->cpath->fast_handshake_state));
+      cc.cell_type = CELL_CREATE_FAST;
+      cc.handshake_type = ONION_HANDSHAKE_TYPE_FAST;
       note_request("cell: create fast", 1);
     }
 
-    if (circuit_deliver_create_cell(TO_CIRCUIT(circ), cell_type, payload) < 0)
+    len = onion_skin_create(cc.handshake_type,
+                            circ->cpath->extend_info,
+                            &circ->cpath->handshake_state,
+                            cc.onionskin);
+    if (len < 0) {
+      log_warn(LD_CIRC,"onion_skin_create (first hop) failed.");
+      return - END_CIRC_REASON_INTERNAL;
+    }
+    cc.handshake_len = len;
+
+    if (circuit_deliver_create_cell(TO_CIRCUIT(circ), &cc, 0) < 0)
       return - END_CIRC_REASON_RESOURCELIMIT;
 
     circ->cpath->state = CPATH_STATE_AWAITING_KEYS;
@@ -673,10 +754,13 @@ circuit_send_next_onion_skin(origin_circuit_t *circ)
              fast ? "CREATE_FAST" : "CREATE",
              node ? node_describe(node) : "<unnamed>");
   } else {
+    extend_cell_t ec;
+    int len;
     tor_assert(circ->cpath->state == CPATH_STATE_OPEN);
     tor_assert(circ->base_.state == CIRCUIT_STATE_BUILDING);
     log_debug(LD_CIRC,"starting to send subsequent skin.");
     hop = onion_next_hop_in_cpath(circ->cpath);
+    memset(&ec, 0, sizeof(ec));
     if (!hop) {
       /* done building the circuit. whew. */
       circuit_set_state(TO_CIRCUIT(circ), CIRCUIT_STATE_OPEN);
@@ -731,13 +815,17 @@ circuit_send_next_onion_skin(origin_circuit_t *circ)
         }
       }
 
-      pathbias_count_success(circ);
+      pathbias_count_build_success(circ);
       circuit_rep_hist_note_result(circ);
       circuit_has_opened(circ); /* do other actions as necessary */
 
       /* We're done with measurement circuits here. Just close them */
-      if (circ->base_.purpose == CIRCUIT_PURPOSE_C_MEASURE_TIMEOUT)
+      if (circ->base_.purpose == CIRCUIT_PURPOSE_C_MEASURE_TIMEOUT) {
+        /* If a measurement circ ever gets back to us, consider it
+         * succeeded for path bias */
+        circ->path_state = PATH_STATE_USE_SUCCEEDED;
         circuit_mark_for_close(TO_CIRCUIT(circ), END_CIRC_REASON_FINISHED);
+      }
       return 0;
     }
 
@@ -746,29 +834,50 @@ circuit_send_next_onion_skin(origin_circuit_t *circ)
       return - END_CIRC_REASON_INTERNAL;
     }
 
-    set_uint32(payload, tor_addr_to_ipv4n(&hop->extend_info->addr));
-    set_uint16(payload+4, htons(hop->extend_info->port));
+    {
+      const node_t *prev_node;
+      prev_node = node_get_by_id(hop->prev->extend_info->identity_digest);
+      circuit_pick_extend_handshake(&ec.cell_type,
+                                    &ec.create_cell.cell_type,
+                                    &ec.create_cell.handshake_type,
+                                    prev_node,
+                                    hop->extend_info);
+    }
 
-    onionskin = payload+2+4;
-    memcpy(payload+2+4+ONIONSKIN_CHALLENGE_LEN,
-           hop->extend_info->identity_digest, DIGEST_LEN);
-    payload_len = 2+4+ONIONSKIN_CHALLENGE_LEN+DIGEST_LEN;
+    tor_addr_copy(&ec.orport_ipv4.addr, &hop->extend_info->addr);
+    ec.orport_ipv4.port = hop->extend_info->port;
+    tor_addr_make_unspec(&ec.orport_ipv6.addr);
+    memcpy(ec.node_id, hop->extend_info->identity_digest, DIGEST_LEN);
 
-    if (onion_skin_create(hop->extend_info->onion_key,
-                          &(hop->dh_handshake_state), onionskin) < 0) {
+    len = onion_skin_create(ec.create_cell.handshake_type,
+                            hop->extend_info,
+                            &hop->handshake_state,
+                            ec.create_cell.onionskin);
+    if (len < 0) {
       log_warn(LD_CIRC,"onion_skin_create failed.");
       return - END_CIRC_REASON_INTERNAL;
     }
+    ec.create_cell.handshake_len = len;
 
     log_info(LD_CIRC,"Sending extend relay cell.");
     note_request("cell: extend", 1);
-    /* send it to hop->prev, because it will transfer
-     * it to a create cell and then send to hop */
-    if (relay_send_command_from_edge(0, TO_CIRCUIT(circ),
-                                     RELAY_COMMAND_EXTEND,
-                                     payload, payload_len, hop->prev) < 0)
-      return 0; /* circuit is closed */
+    {
+      uint8_t command = 0;
+      uint16_t payload_len=0;
+      uint8_t payload[RELAY_PAYLOAD_SIZE];
+      if (extend_cell_format(&command, &payload_len, payload, &ec)<0) {
+        log_warn(LD_CIRC,"Couldn't format extend cell");
+        return -END_CIRC_REASON_INTERNAL;
+      }
 
+      /* send it to hop->prev, because it will transfer
+       * it to a create cell and then send to hop */
+      if (relay_send_command_from_edge(0, TO_CIRCUIT(circ),
+                                       command,
+                                       (char*)payload, payload_len,
+                                       hop->prev) < 0)
+        return 0; /* circuit is closed */
+    }
     hop->state = CPATH_STATE_AWAITING_KEYS;
   }
   return 0;
@@ -807,11 +916,7 @@ circuit_extend(cell_t *cell, circuit_t *circ)
 {
   channel_t *n_chan;
   relay_header_t rh;
-  char *onionskin;
-  char *id_digest=NULL;
-  uint32_t n_addr32;
-  uint16_t n_port;
-  tor_addr_t n_addr;
+  extend_cell_t ec;
   const char *msg = NULL;
   int should_launch = 0;
 
@@ -834,27 +939,21 @@ circuit_extend(cell_t *cell, circuit_t *circ)
 
   relay_header_unpack(&rh, cell->payload);
 
-  if (rh.length < 4+2+ONIONSKIN_CHALLENGE_LEN+DIGEST_LEN) {
+  if (extend_cell_parse(&ec, rh.command,
+                        cell->payload+RELAY_HEADER_SIZE,
+                        rh.length) < 0) {
     log_fn(LOG_PROTOCOL_WARN, LD_PROTOCOL,
-           "Wrong length %d on extend cell. Closing circuit.",
-           rh.length);
+           "Can't parse extend cell. Closing circuit.");
     return -1;
   }
 
-  n_addr32 = ntohl(get_uint32(cell->payload+RELAY_HEADER_SIZE));
-  n_port = ntohs(get_uint16(cell->payload+RELAY_HEADER_SIZE+4));
-  onionskin = (char*) cell->payload+RELAY_HEADER_SIZE+4+2;
-  id_digest = (char*) cell->payload+RELAY_HEADER_SIZE+4+2+
-    ONIONSKIN_CHALLENGE_LEN;
-  tor_addr_from_ipv4h(&n_addr, n_addr32);
-
-  if (!n_port || !n_addr32) {
+  if (!ec.orport_ipv4.port || tor_addr_is_null(&ec.orport_ipv4.addr)) {
     log_fn(LOG_PROTOCOL_WARN, LD_PROTOCOL,
            "Client asked me to extend to zero destination port or addr.");
     return -1;
   }
 
-  if (tor_addr_is_internal(&n_addr, 0) &&
+  if (tor_addr_is_internal(&ec.orport_ipv4.addr, 0) &&
       !get_options()->ExtendAllowPrivateAddresses) {
     log_fn(LOG_PROTOCOL_WARN, LD_PROTOCOL,
            "Client asked me to extend to a private address");
@@ -867,7 +966,7 @@ circuit_extend(cell_t *cell, circuit_t *circ)
    * fingerprints -- a) because it opens the user up to a mitm attack,
    * and b) because it lets an attacker force the relay to hold open a
    * new TLS connection for each extend request. */
-  if (tor_digest_is_zero(id_digest)) {
+  if (tor_digest_is_zero((const char*)ec.node_id)) {
     log_fn(LOG_PROTOCOL_WARN, LD_PROTOCOL,
            "Client asked me to extend without specifying an id_digest.");
     return -1;
@@ -876,7 +975,7 @@ circuit_extend(cell_t *cell, circuit_t *circ)
   /* Next, check if we're being asked to connect to the hop that the
    * extend cell came from. There isn't any reason for that, and it can
    * assist circular-path attacks. */
-  if (tor_memeq(id_digest,
+  if (tor_memeq(ec.node_id,
                 TO_OR_CIRCUIT(circ)->p_chan->identity_digest,
                 DIGEST_LEN)) {
     log_fn(LOG_PROTOCOL_WARN, LD_PROTOCOL,
@@ -884,27 +983,33 @@ circuit_extend(cell_t *cell, circuit_t *circ)
     return -1;
   }
 
-  n_chan = channel_get_for_extend(id_digest,
-                                  &n_addr,
+  n_chan = channel_get_for_extend((const char*)ec.node_id,
+                                  &ec.orport_ipv4.addr,
                                   &msg,
                                   &should_launch);
 
   if (!n_chan) {
     log_debug(LD_CIRC|LD_OR,"Next router (%s): %s",
-              fmt_addrport(&n_addr, n_port), msg?msg:"????");
+              fmt_addrport(&ec.orport_ipv4.addr,ec.orport_ipv4.port),
+              msg?msg:"????");
 
     circ->n_hop = extend_info_new(NULL /*nickname*/,
-                                    id_digest,
-                                    NULL /*onion_key*/,
-                                    &n_addr, n_port);
+                                  (const char*)ec.node_id,
+                                  NULL /*onion_key*/,
+                                  NULL /*curve25519_key*/,
+                                  &ec.orport_ipv4.addr,
+                                  ec.orport_ipv4.port);
 
-    circ->n_chan_onionskin = tor_malloc(ONIONSKIN_CHALLENGE_LEN);
-    memcpy(circ->n_chan_onionskin, onionskin, ONIONSKIN_CHALLENGE_LEN);
+    circ->n_chan_create_cell = tor_memdup(&ec.create_cell,
+                                          sizeof(ec.create_cell));
+
     circuit_set_state(circ, CIRCUIT_STATE_CHAN_WAIT);
 
     if (should_launch) {
       /* we should try to open a connection */
-      n_chan = channel_connect_for_circuit(&n_addr, n_port, id_digest);
+      n_chan = channel_connect_for_circuit(&ec.orport_ipv4.addr,
+                                           ec.orport_ipv4.port,
+                                           (const char*)ec.node_id);
       if (!n_chan) {
         log_info(LD_CIRC,"Launching n_chan failed. Closing circuit.");
         circuit_mark_for_close(circ, END_CIRC_REASON_CONNECTFAILED);
@@ -925,8 +1030,9 @@ circuit_extend(cell_t *cell, circuit_t *circ)
             "n_chan is %s",
             channel_get_canonical_remote_descr(n_chan));
 
-  if (circuit_deliver_create_cell(circ, CELL_CREATE, onionskin) < 0)
+  if (circuit_deliver_create_cell(circ, &ec.create_cell, 1) < 0)
     return -1;
+
   return 0;
 }
 
@@ -980,12 +1086,12 @@ circuit_init_cpath_crypto(crypt_path_t *cpath, const char *key_data,
   return 0;
 }
 
-/** The minimum number of first hop completions before we start
+/** The minimum number of circuit attempts before we start
   * thinking about warning about path bias and dropping guards */
 static int
 pathbias_get_min_circs(const or_options_t *options)
 {
-#define DFLT_PATH_BIAS_MIN_CIRC 20
+#define DFLT_PATH_BIAS_MIN_CIRC 150
   if (options->PathBiasCircThreshold >= 5)
     return options->PathBiasCircThreshold;
   else
@@ -994,10 +1100,11 @@ pathbias_get_min_circs(const or_options_t *options)
                                    5, INT32_MAX);
 }
 
+/** The circuit success rate below which we issue a notice */
 static double
 pathbias_get_notice_rate(const or_options_t *options)
 {
-#define DFLT_PATH_BIAS_NOTICE_PCT 40
+#define DFLT_PATH_BIAS_NOTICE_PCT 70
   if (options->PathBiasNoticeRate >= 0.0)
     return options->PathBiasNoticeRate;
   else
@@ -1006,23 +1113,61 @@ pathbias_get_notice_rate(const or_options_t *options)
 }
 
 /* XXXX024 I'd like to have this be static again, but entrynodes.c needs it. */
-double
-pathbias_get_disable_rate(const or_options_t *options)
+/** The circuit success rate below which we issue a warn */
+static double
+pathbias_get_warn_rate(const or_options_t *options)
 {
-// XXX: This needs tuning based on use + experimentation before we set it
-#define DFLT_PATH_BIAS_DISABLE_PCT 0
-  if (options->PathBiasDisableRate >= 0.0)
-    return options->PathBiasDisableRate;
+#define DFLT_PATH_BIAS_WARN_PCT 50
+  if (options->PathBiasWarnRate >= 0.0)
+    return options->PathBiasWarnRate;
   else
-    return networkstatus_get_param(NULL, "pb_disablepct",
-                                   DFLT_PATH_BIAS_DISABLE_PCT, 0, 100)/100.0;
+    return networkstatus_get_param(NULL, "pb_warnpct",
+                                   DFLT_PATH_BIAS_WARN_PCT, 0, 100)/100.0;
 }
 
+/* XXXX024 I'd like to have this be static again, but entrynodes.c needs it. */
+/**
+ * The extreme rate is the rate at which we would drop the guard,
+ * if pb_dropguard is also set. Otherwise we just warn.
+ */
+double
+pathbias_get_extreme_rate(const or_options_t *options)
+{
+#define DFLT_PATH_BIAS_EXTREME_PCT 30
+  if (options->PathBiasExtremeRate >= 0.0)
+    return options->PathBiasExtremeRate;
+  else
+    return networkstatus_get_param(NULL, "pb_extremepct",
+                                   DFLT_PATH_BIAS_EXTREME_PCT, 0, 100)/100.0;
+}
+
+/* XXXX024 I'd like to have this be static again, but entrynodes.c needs it. */
+/**
+ * If 1, we actually disable use of guards that fall below
+ * the extreme_pct.
+ */
+int
+pathbias_get_dropguards(const or_options_t *options)
+{
+#define DFLT_PATH_BIAS_DROP_GUARDS 0
+  if (options->PathBiasDropGuards >= 0)
+    return options->PathBiasDropGuards;
+  else
+    return networkstatus_get_param(NULL, "pb_dropguards",
+                                   DFLT_PATH_BIAS_DROP_GUARDS, 0, 1);
+}
+
+/**
+ * This is the number of circuits at which we scale our
+ * counts by mult_factor/scale_factor. Note, this count is
+ * not exact, as we only perform the scaling in the event
+ * of no integer truncation.
+ */
 static int
 pathbias_get_scale_threshold(const or_options_t *options)
 {
-#define DFLT_PATH_BIAS_SCALE_THRESHOLD 200
-  if (options->PathBiasScaleThreshold >= 2)
+#define DFLT_PATH_BIAS_SCALE_THRESHOLD 300
+  if (options->PathBiasScaleThreshold >= 10)
     return options->PathBiasScaleThreshold;
   else
     return networkstatus_get_param(NULL, "pb_scalecircs",
@@ -1030,6 +1175,13 @@ pathbias_get_scale_threshold(const or_options_t *options)
                                    INT32_MAX);
 }
 
+/**
+ * The scale factor is the denominator for our scaling
+ * of circuit counts for our path bias window.
+ *
+ * Note that our use of doubles for the path bias state
+ * file means that powers of 2 work best here.
+ */
 static int
 pathbias_get_scale_factor(const or_options_t *options)
 {
@@ -1041,40 +1193,116 @@ pathbias_get_scale_factor(const or_options_t *options)
                                 DFLT_PATH_BIAS_SCALE_FACTOR, 1, INT32_MAX);
 }
 
+/**
+ * The mult factor is the numerator for our scaling
+ * of circuit counts for our path bias window. It
+ * allows us to scale by fractions.
+ */
+static int
+pathbias_get_mult_factor(const or_options_t *options)
+{
+#define DFLT_PATH_BIAS_MULT_FACTOR 1
+  if (options->PathBiasMultFactor >= 1)
+    return options->PathBiasMultFactor;
+  else
+    return networkstatus_get_param(NULL, "pb_multfactor",
+                                DFLT_PATH_BIAS_MULT_FACTOR, 1,
+                                pathbias_get_scale_factor(options));
+}
+
+/**
+ * If this parameter is set to a true value (default), we use the
+ * successful_circuits_closed. Otherwise, we use the success_count.
+ */
+static int
+pathbias_use_close_counts(const or_options_t *options)
+{
+#define DFLT_PATH_BIAS_USE_CLOSE_COUNTS 1
+  if (options->PathBiasUseCloseCounts >= 0)
+    return options->PathBiasUseCloseCounts;
+  else
+    return networkstatus_get_param(NULL, "pb_useclosecounts",
+                                DFLT_PATH_BIAS_USE_CLOSE_COUNTS, 0, 1);
+}
+
+/**
+ * Convert a Guard's path state to string.
+ */
 static const char *
 pathbias_state_to_string(path_state_t state)
 {
   switch (state) {
     case PATH_STATE_NEW_CIRC:
       return "new";
-    case PATH_STATE_DID_FIRST_HOP:
-      return "first hop";
-    case PATH_STATE_SUCCEEDED:
-      return "succeeded";
+    case PATH_STATE_BUILD_ATTEMPTED:
+      return "build attempted";
+    case PATH_STATE_BUILD_SUCCEEDED:
+      return "build succeeded";
+    case PATH_STATE_USE_SUCCEEDED:
+      return "use succeeded";
+    case PATH_STATE_USE_FAILED:
+      return "use failed";
   }
 
   return "unknown";
 }
 
 /**
- * Check our circuit state to see if this is a successful first hop.
- * If so, record it in the current guard's path bias first_hop count.
- *
- * Also check for several potential error cases for bug #6475.
+ * This function decides if a circuit has progressed far enough to count
+ * as a circuit "attempt". As long as end-to-end tagging is possible,
+ * we assume the adversary will use it over hop-to-hop failure. Therefore,
+ * we only need to account bias for the last hop. This should make us
+ * much more resilient to ambient circuit failure, and also make that
+ * failure easier to measure (we only need to measure Exit failure rates).
  */
 static int
-pathbias_count_first_hop(origin_circuit_t *circ)
+pathbias_is_new_circ_attempt(origin_circuit_t *circ)
 {
-#define FIRST_HOP_NOTICE_INTERVAL (600)
-  static ratelim_t first_hop_notice_limit =
-    RATELIM_INIT(FIRST_HOP_NOTICE_INTERVAL);
+#define N2N_TAGGING_IS_POSSIBLE
+#ifdef N2N_TAGGING_IS_POSSIBLE
+  /* cpath is a circular list. We want circs with more than one hop,
+   * and the second hop must be waiting for keys still (it's just
+   * about to get them). */
+  return circ->cpath->next != circ->cpath &&
+         circ->cpath->next->state == CPATH_STATE_AWAITING_KEYS;
+#else
+  /* If tagging attacks are no longer possible, we probably want to
+   * count bias from the first hop. However, one could argue that
+   * timing-based tagging is still more useful than per-hop failure.
+   * In which case, we'd never want to use this.
+   */
+  return circ->cpath->state == CPATH_STATE_AWAITING_KEYS;
+#endif
+}
+
+/**
+ * Decide if the path bias code should count a circuit.
+ *
+ * @returns 1 if we should count it, 0 otherwise.
+ */
+static int
+pathbias_should_count(origin_circuit_t *circ)
+{
+#define PATHBIAS_COUNT_INTERVAL (600)
+  static ratelim_t count_limit =
+    RATELIM_INIT(PATHBIAS_COUNT_INTERVAL);
   char *rate_msg = NULL;
 
   /* We can't do path bias accounting without entry guards.
-   * Testing and controller circuits also have no guards. */
+   * Testing and controller circuits also have no guards.
+   *
+   * We also don't count server-side rends, because their
+   * endpoint could be chosen maliciously.
+   * Similarly, we can't count client-side intro attempts,
+   * because clients can be manipulated into connecting to
+   * malicious intro points. */
   if (get_options()->UseEntryGuards == 0 ||
           circ->base_.purpose == CIRCUIT_PURPOSE_TESTING ||
-          circ->base_.purpose == CIRCUIT_PURPOSE_CONTROLLER) {
+          circ->base_.purpose == CIRCUIT_PURPOSE_CONTROLLER ||
+          circ->base_.purpose == CIRCUIT_PURPOSE_S_CONNECT_REND ||
+          circ->base_.purpose == CIRCUIT_PURPOSE_S_REND_JOINED ||
+          (circ->base_.purpose >= CIRCUIT_PURPOSE_C_INTRODUCING &&
+           circ->base_.purpose <= CIRCUIT_PURPOSE_C_INTRODUCE_ACKED)) {
     return 0;
   }
 
@@ -1084,8 +1312,7 @@ pathbias_count_first_hop(origin_circuit_t *circ)
     /* Check for inconsistency */
     if (circ->build_state->desired_path_len != 1 ||
         !circ->build_state->onehop_tunnel) {
-      if ((rate_msg = rate_limit_log(&first_hop_notice_limit,
-              approx_time()))) {
+      if ((rate_msg = rate_limit_log(&count_limit, approx_time()))) {
         log_notice(LD_BUG,
                "One-hop circuit has length %d. Path state is %s. "
                "Circuit is a %s currently %s.%s",
@@ -1101,10 +1328,31 @@ pathbias_count_first_hop(origin_circuit_t *circ)
     return 0;
   }
 
-  if (circ->cpath->state == CPATH_STATE_AWAITING_KEYS) {
+  return 1;
+}
+
+/**
+ * Check our circuit state to see if this is a successful circuit attempt.
+ * If so, record it in the current guard's path bias circ_attempt count.
+ *
+ * Also check for several potential error cases for bug #6475.
+ */
+static int
+pathbias_count_circ_attempt(origin_circuit_t *circ)
+{
+#define CIRC_ATTEMPT_NOTICE_INTERVAL (600)
+  static ratelim_t circ_attempt_notice_limit =
+    RATELIM_INIT(CIRC_ATTEMPT_NOTICE_INTERVAL);
+  char *rate_msg = NULL;
+
+  if (!pathbias_should_count(circ)) {
+    return 0;
+  }
+
+  if (pathbias_is_new_circ_attempt(circ)) {
     /* Help track down the real cause of bug #6475: */
-    if (circ->has_opened && circ->path_state != PATH_STATE_DID_FIRST_HOP) {
-      if ((rate_msg = rate_limit_log(&first_hop_notice_limit,
+    if (circ->has_opened && circ->path_state != PATH_STATE_BUILD_ATTEMPTED) {
+      if ((rate_msg = rate_limit_log(&circ_attempt_notice_limit,
                                      approx_time()))) {
         log_info(LD_BUG,
                 "Opened circuit is in strange path state %s. "
@@ -1117,22 +1365,28 @@ pathbias_count_first_hop(origin_circuit_t *circ)
       }
     }
 
-    /* Don't count cannibalized circs for path bias */
+    /* Don't re-count cannibalized circs.. */
     if (!circ->has_opened) {
-      entry_guard_t *guard;
+      entry_guard_t *guard = NULL;
 
-      guard =
-        entry_guard_get_by_id_digest(circ->base_.n_chan->identity_digest);
+      if (circ->cpath && circ->cpath->extend_info) {
+        guard = entry_guard_get_by_id_digest(
+                  circ->cpath->extend_info->identity_digest);
+      } else if (circ->base_.n_chan) {
+        guard =
+          entry_guard_get_by_id_digest(circ->base_.n_chan->identity_digest);
+      }
+
       if (guard) {
         if (circ->path_state == PATH_STATE_NEW_CIRC) {
-          circ->path_state = PATH_STATE_DID_FIRST_HOP;
+          circ->path_state = PATH_STATE_BUILD_ATTEMPTED;
 
-          if (entry_guard_inc_first_hop_count(guard) < 0) {
+          if (entry_guard_inc_circ_attempt_count(guard) < 0) {
             /* Bogus guard; we already warned. */
             return -END_CIRC_REASON_TORPROTOCOL;
           }
         } else {
-          if ((rate_msg = rate_limit_log(&first_hop_notice_limit,
+          if ((rate_msg = rate_limit_log(&circ_attempt_notice_limit,
                   approx_time()))) {
             log_info(LD_BUG,
                    "Unopened circuit has strange path state %s. "
@@ -1145,9 +1399,9 @@ pathbias_count_first_hop(origin_circuit_t *circ)
           }
         }
       } else {
-        if ((rate_msg = rate_limit_log(&first_hop_notice_limit,
+        if ((rate_msg = rate_limit_log(&circ_attempt_notice_limit,
                 approx_time()))) {
-          log_info(LD_BUG,
+          log_info(LD_CIRC,
               "Unopened circuit has no known guard. "
               "Circuit is a %s currently %s.%s",
               circuit_purpose_to_string(circ->base_.purpose),
@@ -1155,22 +1409,6 @@ pathbias_count_first_hop(origin_circuit_t *circ)
               rate_msg);
           tor_free(rate_msg);
         }
-      }
-    }
-  } else {
-    /* Help track down the real cause of bug #6475: */
-    if (circ->path_state == PATH_STATE_NEW_CIRC) {
-      if ((rate_msg = rate_limit_log(&first_hop_notice_limit,
-                approx_time()))) {
-        log_info(LD_BUG,
-            "A %s circuit is in cpath state %d (opened: %d). "
-            "Circuit is a %s currently %s.%s",
-            pathbias_state_to_string(circ->path_state),
-            circ->cpath->state, circ->has_opened,
-            circuit_purpose_to_string(circ->base_.purpose),
-            circuit_state_to_string(circ->base_.state),
-            rate_msg);
-        tor_free(rate_msg);
       }
     }
   }
@@ -1186,7 +1424,7 @@ pathbias_count_first_hop(origin_circuit_t *circ)
  * Also check for several potential error cases for bug #6475.
  */
 static void
-pathbias_count_success(origin_circuit_t *circ)
+pathbias_count_build_success(origin_circuit_t *circ)
 {
 #define SUCCESS_NOTICE_INTERVAL (600)
   static ratelim_t success_notice_limit =
@@ -1194,49 +1432,25 @@ pathbias_count_success(origin_circuit_t *circ)
   char *rate_msg = NULL;
   entry_guard_t *guard = NULL;
 
-  /* We can't do path bias accounting without entry guards.
-   * Testing and controller circuits also have no guards. */
-  if (get_options()->UseEntryGuards == 0 ||
-          circ->base_.purpose == CIRCUIT_PURPOSE_TESTING ||
-          circ->base_.purpose == CIRCUIT_PURPOSE_CONTROLLER) {
+  if (!pathbias_should_count(circ)) {
     return;
   }
 
-  /* Ignore one hop circuits */
-  if (circ->build_state->onehop_tunnel ||
-      circ->build_state->desired_path_len == 1) {
-    /* Check for consistency */
-    if (circ->build_state->desired_path_len != 1 ||
-        !circ->build_state->onehop_tunnel) {
-      if ((rate_msg = rate_limit_log(&success_notice_limit,
-              approx_time()))) {
-        log_notice(LD_BUG,
-               "One-hop circuit has length %d. Path state is %s. "
-               "Circuit is a %s currently %s.%s",
-               circ->build_state->desired_path_len,
-               pathbias_state_to_string(circ->path_state),
-               circuit_purpose_to_string(circ->base_.purpose),
-               circuit_state_to_string(circ->base_.state),
-               rate_msg);
-        tor_free(rate_msg);
-      }
-      tor_fragile_assert();
-    }
-    return;
-  }
-
-  /* Don't count cannibalized/reused circs for path bias */
+  /* Don't count cannibalized/reused circs for path bias
+   * build success.. They get counted under use success */
   if (!circ->has_opened) {
-    guard =
-      entry_guard_get_by_id_digest(circ->base_.n_chan->identity_digest);
+    if (circ->cpath && circ->cpath->extend_info) {
+      guard = entry_guard_get_by_id_digest(
+                circ->cpath->extend_info->identity_digest);
+    }
 
     if (guard) {
-      if (circ->path_state == PATH_STATE_DID_FIRST_HOP) {
-        circ->path_state = PATH_STATE_SUCCEEDED;
-        guard->circuit_successes++;
+      if (circ->path_state == PATH_STATE_BUILD_ATTEMPTED) {
+        circ->path_state = PATH_STATE_BUILD_SUCCEEDED;
+        guard->circ_successes++;
 
-        log_info(LD_PROTOCOL, "Got success count %u/%u for guard %s=%s",
-                 guard->circuit_successes, guard->first_hops,
+        log_info(LD_CIRC, "Got success count %f/%f for guard %s=%s",
+                 guard->circ_successes, guard->circ_attempts,
                  guard->nickname, hex_str(guard->identity, DIGEST_LEN));
       } else {
         if ((rate_msg = rate_limit_log(&success_notice_limit,
@@ -1252,10 +1466,10 @@ pathbias_count_success(origin_circuit_t *circ)
         }
       }
 
-      if (guard->first_hops < guard->circuit_successes) {
-        log_notice(LD_BUG, "Unexpectedly high circuit_successes (%u/%u) "
+      if (guard->circ_attempts < guard->circ_successes) {
+        log_notice(LD_BUG, "Unexpectedly high successes counts (%f/%f) "
                  "for guard %s=%s",
-                 guard->circuit_successes, guard->first_hops,
+                 guard->circ_successes, guard->circ_attempts,
                  guard->nickname, hex_str(guard->identity, DIGEST_LEN));
       }
     /* In rare cases, CIRCUIT_PURPOSE_TESTING can get converted to
@@ -1264,7 +1478,7 @@ pathbias_count_success(origin_circuit_t *circ)
     } else if (circ->base_.purpose != CIRCUIT_PURPOSE_C_MEASURE_TIMEOUT) {
       if ((rate_msg = rate_limit_log(&success_notice_limit,
               approx_time()))) {
-        log_info(LD_BUG,
+        log_info(LD_CIRC,
             "Completed circuit has no known guard. "
             "Circuit is a %s currently %s.%s",
             circuit_purpose_to_string(circ->base_.purpose),
@@ -1274,7 +1488,7 @@ pathbias_count_success(origin_circuit_t *circ)
       }
     }
   } else {
-    if (circ->path_state != PATH_STATE_SUCCEEDED) {
+    if (circ->path_state < PATH_STATE_BUILD_SUCCEEDED) {
       if ((rate_msg = rate_limit_log(&success_notice_limit,
               approx_time()))) {
         log_info(LD_BUG,
@@ -1290,71 +1504,562 @@ pathbias_count_success(origin_circuit_t *circ)
   }
 }
 
+/**
+ * Send a probe down a circuit that the client attempted to use,
+ * but for which the stream timed out/failed. The probe is a
+ * RELAY_BEGIN cell with a 0.a.b.c destination address, which
+ * the exit will reject and reply back, echoing that address.
+ *
+ * The reason for such probes is because it is possible to bias
+ * a user's paths simply by causing timeouts, and these timeouts
+ * are not possible to differentiate from unresponsive servers.
+ *
+ * The probe is sent at the end of the circuit lifetime for two
+ * reasons: to prevent cyptographic taggers from being able to
+ * drop cells to cause timeouts, and to prevent easy recognition
+ * of probes before any real client traffic happens.
+ *
+ * Returns -1 if we couldn't probe, 0 otherwise.
+ */
+static int
+pathbias_send_usable_probe(circuit_t *circ)
+{
+  /* Based on connection_ap_handshake_send_begin() */
+  char payload[CELL_PAYLOAD_SIZE];
+  int payload_len;
+  origin_circuit_t *ocirc = TO_ORIGIN_CIRCUIT(circ);
+  crypt_path_t *cpath_layer = NULL;
+  char *probe_nonce = NULL;
+
+  tor_assert(ocirc);
+
+  cpath_layer = ocirc->cpath->prev;
+
+  if (cpath_layer->state != CPATH_STATE_OPEN) {
+    /* This can happen for cannibalized circuits. Their
+     * last hop isn't yet open */
+    log_info(LD_CIRC,
+             "Got pathbias probe request for unopened circuit %d. "
+             "Opened %d, len %d", ocirc->global_identifier,
+             ocirc->has_opened, ocirc->build_state->desired_path_len);
+    return -1;
+  }
+
+  /* We already went down this road. */
+  if (circ->purpose == CIRCUIT_PURPOSE_PATH_BIAS_TESTING &&
+      ocirc->pathbias_probe_id) {
+    log_info(LD_CIRC,
+             "Got pathbias probe request for circuit %d with "
+             "outstanding probe", ocirc->global_identifier);
+    return -1;
+  }
+
+  circuit_change_purpose(circ, CIRCUIT_PURPOSE_PATH_BIAS_TESTING);
+
+  /* Update timestamp for circuit_expire_building to kill us */
+  tor_gettimeofday(&circ->timestamp_began);
+
+  /* Generate a random address for the nonce */
+  crypto_rand((char*)&ocirc->pathbias_probe_nonce,
+              sizeof(ocirc->pathbias_probe_nonce));
+  ocirc->pathbias_probe_nonce &= 0x00ffffff;
+  probe_nonce = tor_dup_ip(ocirc->pathbias_probe_nonce);
+
+  tor_snprintf(payload,RELAY_PAYLOAD_SIZE, "%s:25", probe_nonce);
+  payload_len = (int)strlen(payload)+1;
+
+  // XXX: need this? Can we assume ipv4 will always be supported?
+  // If not, how do we tell?
+  //if (payload_len <= RELAY_PAYLOAD_SIZE - 4 && edge_conn->begincell_flags) {
+  //  set_uint32(payload + payload_len, htonl(edge_conn->begincell_flags));
+  //  payload_len += 4;
+  //}
+
+  /* Generate+Store stream id, make sure it's non-zero */
+  ocirc->pathbias_probe_id = get_unique_stream_id_by_circ(ocirc);
+
+  if (ocirc->pathbias_probe_id==0) {
+    log_warn(LD_CIRC,
+             "Ran out of stream IDs on circuit %u during "
+             "pathbias probe attempt.", ocirc->global_identifier);
+    tor_free(probe_nonce);
+    return -1;
+  }
+
+  log_info(LD_CIRC,
+           "Sending pathbias testing cell to %s:25 on stream %d for circ %d.",
+           probe_nonce, ocirc->pathbias_probe_id, ocirc->global_identifier);
+  tor_free(probe_nonce);
+
+  /* Send a test relay cell */
+  if (relay_send_command_from_edge(ocirc->pathbias_probe_id, circ,
+                               RELAY_COMMAND_BEGIN, payload,
+                               payload_len, cpath_layer) < 0) {
+    log_notice(LD_CIRC,
+             "Failed to send pathbias probe cell on circuit %d.",
+             ocirc->global_identifier);
+    return -1;
+  }
+
+  /* Mark it freshly dirty so it doesn't get expired in the meantime */
+  circ->timestamp_dirty = time(NULL);
+
+  return 0;
+}
+
+/**
+ * Check the response to a pathbias probe, to ensure the
+ * cell is recognized and the nonce and other probe
+ * characteristics are as expected.
+ *
+ * If the response is valid, return 0. Otherwise return < 0.
+ */
+int
+pathbias_check_probe_response(circuit_t *circ, const cell_t *cell)
+{
+  /* Based on connection_edge_process_relay_cell() */
+  relay_header_t rh;
+  int reason;
+  uint32_t ipv4_host;
+  origin_circuit_t *ocirc = TO_ORIGIN_CIRCUIT(circ);
+
+  tor_assert(cell);
+  tor_assert(ocirc);
+  tor_assert(circ->purpose == CIRCUIT_PURPOSE_PATH_BIAS_TESTING);
+
+  relay_header_unpack(&rh, cell->payload);
+
+  reason = rh.length > 0 ?
+        get_uint8(cell->payload+RELAY_HEADER_SIZE) : END_STREAM_REASON_MISC;
+
+  if (rh.command == RELAY_COMMAND_END &&
+      reason == END_STREAM_REASON_EXITPOLICY &&
+      ocirc->pathbias_probe_id == rh.stream_id) {
+
+    /* Check length+extract host: It is in network order after the reason code.
+     * See connection_edge_end(). */
+    if (rh.length < 9) { /* reason+ipv4+dns_ttl */
+      log_notice(LD_PROTOCOL,
+             "Short path bias probe response length field (%d).", rh.length);
+      return - END_CIRC_REASON_TORPROTOCOL;
+    }
+
+    ipv4_host = ntohl(get_uint32(cell->payload+RELAY_HEADER_SIZE+1));
+
+    /* Check nonce */
+    if (ipv4_host == ocirc->pathbias_probe_nonce) {
+      ocirc->path_state = PATH_STATE_USE_SUCCEEDED;
+      circuit_mark_for_close(circ, END_CIRC_REASON_FINISHED);
+      log_info(LD_CIRC,
+               "Got valid path bias probe back for circ %d, stream %d.",
+               ocirc->global_identifier, ocirc->pathbias_probe_id);
+      return 0;
+    } else {
+      log_notice(LD_CIRC,
+               "Got strange probe value 0x%x vs 0x%x back for circ %d, "
+               "stream %d.", ipv4_host, ocirc->pathbias_probe_nonce,
+               ocirc->global_identifier, ocirc->pathbias_probe_id);
+      return -1;
+    }
+  }
+  log_info(LD_CIRC,
+             "Got another cell back back on pathbias probe circuit %d: "
+             "Command: %d, Reason: %d, Stream-id: %d",
+             ocirc->global_identifier, rh.command, reason, rh.stream_id);
+  return -1;
+}
+
+/**
+ * Check if a circuit was used and/or closed successfully.
+ *
+ * If we attempted to use the circuit to carry a stream but failed
+ * for whatever reason, or if the circuit mysteriously died before
+ * we could attach any streams, record these two cases.
+ *
+ * If we *have* successfully used the circuit, or it appears to
+ * have been closed by us locally, count it as a success.
+ *
+ * Returns 0 if we're done making decisions with the circ,
+ * or -1 if we want to probe it first.
+ */
+int
+pathbias_check_close(origin_circuit_t *ocirc, int reason)
+{
+  circuit_t *circ = &ocirc->base_;
+
+  if (!pathbias_should_count(ocirc)) {
+    return 0;
+  }
+
+  if (ocirc->path_state == PATH_STATE_BUILD_SUCCEEDED) {
+    if (circ->timestamp_dirty) {
+      if (pathbias_send_usable_probe(circ) == 0)
+        return -1;
+      else
+        pathbias_count_unusable(ocirc);
+
+      /* Any circuit where there were attempted streams but no successful
+       * streams could be bias */
+      log_info(LD_CIRC,
+            "Circuit %d closed without successful use for reason %d. "
+            "Circuit purpose %d currently %d,%s. Len %d.",
+            ocirc->global_identifier,
+            reason, circ->purpose, ocirc->has_opened,
+            circuit_state_to_string(circ->state),
+            ocirc->build_state->desired_path_len);
+
+    } else {
+      if (reason & END_CIRC_REASON_FLAG_REMOTE) {
+        /* Unused remote circ close reasons all could be bias */
+        log_info(LD_CIRC,
+            "Circuit %d remote-closed without successful use for reason %d. "
+            "Circuit purpose %d currently %d,%s. Len %d.",
+            ocirc->global_identifier,
+            reason, circ->purpose, ocirc->has_opened,
+            circuit_state_to_string(circ->state),
+            ocirc->build_state->desired_path_len);
+        pathbias_count_collapse(ocirc);
+      } else if ((reason & ~END_CIRC_REASON_FLAG_REMOTE)
+                  == END_CIRC_REASON_CHANNEL_CLOSED &&
+                 circ->n_chan &&
+                 circ->n_chan->reason_for_closing
+                  != CHANNEL_CLOSE_REQUESTED) {
+        /* If we didn't close the channel ourselves, it could be bias */
+        /* XXX: Only count bias if the network is live?
+         * What about clock jumps/suspends? */
+        log_info(LD_CIRC,
+            "Circuit %d's channel closed without successful use for reason "
+            "%d, channel reason %d. Circuit purpose %d currently %d,%s. Len "
+            "%d.", ocirc->global_identifier,
+            reason, circ->n_chan->reason_for_closing,
+            circ->purpose, ocirc->has_opened,
+            circuit_state_to_string(circ->state),
+            ocirc->build_state->desired_path_len);
+        pathbias_count_collapse(ocirc);
+      } else {
+        pathbias_count_successful_close(ocirc);
+      }
+    }
+  } else if (ocirc->path_state == PATH_STATE_USE_SUCCEEDED) {
+    pathbias_count_successful_close(ocirc);
+  }
+
+  return 0;
+}
+
+/**
+ * Count a successfully closed circuit.
+ */
+static void
+pathbias_count_successful_close(origin_circuit_t *circ)
+{
+  entry_guard_t *guard = NULL;
+  if (!pathbias_should_count(circ)) {
+    return;
+  }
+
+  if (circ->cpath && circ->cpath->extend_info) {
+    guard = entry_guard_get_by_id_digest(
+              circ->cpath->extend_info->identity_digest);
+  }
+
+  if (guard) {
+    /* In the long run: circuit_success ~= successful_circuit_close +
+     *                                     circ_failure + stream_failure */
+    guard->successful_circuits_closed++;
+    entry_guards_changed();
+  } else if (circ->base_.purpose != CIRCUIT_PURPOSE_C_MEASURE_TIMEOUT) {
+   /* In rare cases, CIRCUIT_PURPOSE_TESTING can get converted to
+    * CIRCUIT_PURPOSE_C_MEASURE_TIMEOUT and have no guards here.
+    * No need to log that case. */
+    log_info(LD_CIRC,
+        "Successfully closed circuit has no known guard. "
+        "Circuit is a %s currently %s",
+        circuit_purpose_to_string(circ->base_.purpose),
+        circuit_state_to_string(circ->base_.state));
+  }
+}
+
+/**
+ * Count a circuit that fails after it is built, but before it can
+ * carry any traffic.
+ *
+ * This is needed because there are ways to destroy a
+ * circuit after it has successfully completed. Right now, this is
+ * used for purely informational/debugging purposes.
+ */
+static void
+pathbias_count_collapse(origin_circuit_t *circ)
+{
+  entry_guard_t *guard = NULL;
+  if (!pathbias_should_count(circ)) {
+    return;
+  }
+
+  if (circ->cpath && circ->cpath->extend_info) {
+    guard = entry_guard_get_by_id_digest(
+              circ->cpath->extend_info->identity_digest);
+  }
+
+  if (guard) {
+    guard->collapsed_circuits++;
+    entry_guards_changed();
+  } else if (circ->base_.purpose != CIRCUIT_PURPOSE_C_MEASURE_TIMEOUT) {
+   /* In rare cases, CIRCUIT_PURPOSE_TESTING can get converted to
+    * CIRCUIT_PURPOSE_C_MEASURE_TIMEOUT and have no guards here.
+    * No need to log that case. */
+    log_info(LD_CIRC,
+        "Destroyed circuit has no known guard. "
+        "Circuit is a %s currently %s",
+        circuit_purpose_to_string(circ->base_.purpose),
+        circuit_state_to_string(circ->base_.state));
+  }
+}
+
+static void
+pathbias_count_unusable(origin_circuit_t *circ)
+{
+  entry_guard_t *guard = NULL;
+  if (!pathbias_should_count(circ)) {
+    return;
+  }
+
+  if (circ->cpath && circ->cpath->extend_info) {
+    guard = entry_guard_get_by_id_digest(
+              circ->cpath->extend_info->identity_digest);
+  }
+
+  if (guard) {
+    guard->unusable_circuits++;
+    entry_guards_changed();
+  } else if (circ->base_.purpose != CIRCUIT_PURPOSE_C_MEASURE_TIMEOUT) {
+   /* In rare cases, CIRCUIT_PURPOSE_TESTING can get converted to
+    * CIRCUIT_PURPOSE_C_MEASURE_TIMEOUT and have no guards here.
+    * No need to log that case. */
+    log_info(LD_CIRC,
+        "Stream-failing circuit has no known guard. "
+        "Circuit is a %s currently %s",
+        circuit_purpose_to_string(circ->base_.purpose),
+        circuit_state_to_string(circ->base_.state));
+  }
+}
+
+/**
+ * Count timeouts for path bias log messages.
+ *
+ * These counts are purely informational.
+ */
+void
+pathbias_count_timeout(origin_circuit_t *circ)
+{
+  entry_guard_t *guard = NULL;
+
+  if (!pathbias_should_count(circ)) {
+    return;
+  }
+
+  /* For hidden service circs, they can actually be used
+   * successfully and then time out later (because
+   * the other side declines to use them). */
+  if (circ->path_state == PATH_STATE_USE_SUCCEEDED) {
+    return;
+  }
+
+  if (circ->cpath && circ->cpath->extend_info) {
+    guard = entry_guard_get_by_id_digest(
+              circ->cpath->extend_info->identity_digest);
+  }
+
+  if (guard) {
+    guard->timeouts++;
+    entry_guards_changed();
+  }
+}
+
+/**
+ * Return the number of circuits counted as successfully closed for
+ * this guard.
+ *
+ * Also add in the currently open circuits to give them the benefit
+ * of the doubt.
+ */
+double
+pathbias_get_closed_count(entry_guard_t *guard)
+{
+  circuit_t *circ = global_circuitlist;
+  int open_circuits = 0;
+
+  /* Count currently open circuits. Give them the benefit of the doubt */
+  for ( ; circ; circ = circ->next) {
+    origin_circuit_t *ocirc = NULL;
+    if (!CIRCUIT_IS_ORIGIN(circ) || /* didn't originate here */
+        circ->marked_for_close) /* already counted */
+      continue;
+
+    ocirc = TO_ORIGIN_CIRCUIT(circ);
+
+    if (!ocirc->cpath || !ocirc->cpath->extend_info)
+      continue;
+
+    if (ocirc->path_state >= PATH_STATE_BUILD_SUCCEEDED &&
+        fast_memeq(guard->identity,
+                ocirc->cpath->extend_info->identity_digest,
+                DIGEST_LEN)) {
+      open_circuits++;
+    }
+  }
+
+  return guard->successful_circuits_closed + open_circuits;
+}
+
+/**
+ * This function checks the consensus parameters to decide
+ * if it should return guard->circ_successes or
+ * guard->successful_circuits_closed.
+ */
+double
+pathbias_get_success_count(entry_guard_t *guard)
+{
+  if (pathbias_use_close_counts(get_options())) {
+    return pathbias_get_closed_count(guard);
+  } else {
+    return guard->circ_successes;
+  }
+}
+
 /** Increment the number of times we successfully extended a circuit to
  * 'guard', first checking if the failure rate is high enough that we should
  * eliminate the guard.  Return -1 if the guard looks no good; return 0 if the
  * guard looks fine. */
 static int
-entry_guard_inc_first_hop_count(entry_guard_t *guard)
+entry_guard_inc_circ_attempt_count(entry_guard_t *guard)
 {
   const or_options_t *options = get_options();
 
   entry_guards_changed();
 
-  if (guard->first_hops > (unsigned)pathbias_get_min_circs(options)) {
+  if (guard->circ_attempts > pathbias_get_min_circs(options)) {
     /* Note: We rely on the < comparison here to allow us to set a 0
      * rate and disable the feature entirely. If refactoring, don't
      * change to <= */
-    if (guard->circuit_successes/((double)guard->first_hops)
-        < pathbias_get_disable_rate(options)) {
-
-      /* This message is currently disabled by default. */
-      log_warn(LD_PROTOCOL,
-               "Extremely low circuit success rate %u/%u for guard %s=%s. "
-               "This indicates either an overloaded guard, an attack, or "
-               "a bug.",
-               guard->circuit_successes, guard->first_hops, guard->nickname,
-               hex_str(guard->identity, DIGEST_LEN));
-
-      guard->path_bias_disabled = 1;
-      guard->bad_since = approx_time();
-      return -1;
-    } else if (guard->circuit_successes/((double)guard->first_hops)
-               < pathbias_get_notice_rate(options)
-               && !guard->path_bias_notice) {
-      guard->path_bias_notice = 1;
-      log_notice(LD_PROTOCOL,
-                 "Low circuit success rate %u/%u for guard %s=%s.",
-                 guard->circuit_successes, guard->first_hops, guard->nickname,
-                 hex_str(guard->identity, DIGEST_LEN));
+    if (pathbias_get_success_count(guard)/guard->circ_attempts
+        < pathbias_get_extreme_rate(options)) {
+      /* Dropping is currently disabled by default. */
+      if (pathbias_get_dropguards(options)) {
+        if (!guard->path_bias_disabled) {
+          log_warn(LD_CIRC,
+                 "Your Guard %s=%s is failing an extremely large amount of "
+                 "circuits. To avoid potential route manipluation attacks, "
+                 "Tor has disabled use of this guard. "
+                 "Success counts are %ld/%ld. %ld circuits completed, %ld "
+                 "were unusable, %ld collapsed, and %ld timed out. For "
+                 "reference, your timeout cutoff is %ld seconds.",
+                 guard->nickname, hex_str(guard->identity, DIGEST_LEN),
+                 tor_lround(pathbias_get_closed_count(guard)),
+                 tor_lround(guard->circ_attempts),
+                 tor_lround(guard->circ_successes),
+                 tor_lround(guard->unusable_circuits),
+                 tor_lround(guard->collapsed_circuits),
+                 tor_lround(guard->timeouts),
+                 tor_lround(circ_times.close_ms/1000));
+          guard->path_bias_disabled = 1;
+          guard->bad_since = approx_time();
+          return -1;
+        }
+      } else if (!guard->path_bias_extreme) {
+        guard->path_bias_extreme = 1;
+        log_warn(LD_CIRC,
+                 "Your Guard %s=%s is failing an extremely large amount of "
+                 "circuits. This could indicate a route manipulation attack, "
+                 "extreme network overload, or a bug. "
+                 "Success counts are %ld/%ld. %ld circuits completed, %ld "
+                 "were unusable, %ld collapsed, and %ld timed out. For "
+                 "reference, your timeout cutoff is %ld seconds.",
+                 guard->nickname, hex_str(guard->identity, DIGEST_LEN),
+                 tor_lround(pathbias_get_closed_count(guard)),
+                 tor_lround(guard->circ_attempts),
+                 tor_lround(guard->circ_successes),
+                 tor_lround(guard->unusable_circuits),
+                 tor_lround(guard->collapsed_circuits),
+                 tor_lround(guard->timeouts),
+                 tor_lround(circ_times.close_ms/1000));
+      }
+    } else if (pathbias_get_success_count(guard)/((double)guard->circ_attempts)
+               < pathbias_get_warn_rate(options)) {
+      if (!guard->path_bias_warned) {
+        guard->path_bias_warned = 1;
+        log_warn(LD_CIRC,
+                 "Your Guard %s=%s is failing a very large amount of "
+                 "circuits. Most likely this means the Tor network is "
+                 "overloaded, but it could also mean an attack against "
+                 "you or the potentially the guard itself. "
+                 "Success counts are %ld/%ld. %ld circuits completed, %ld "
+                 "were unusable, %ld collapsed, and %ld timed out. For "
+                 "reference, your timeout cutoff is %ld seconds.",
+                 guard->nickname, hex_str(guard->identity, DIGEST_LEN),
+                 tor_lround(pathbias_get_closed_count(guard)),
+                 tor_lround(guard->circ_attempts),
+                 tor_lround(guard->circ_successes),
+                 tor_lround(guard->unusable_circuits),
+                 tor_lround(guard->collapsed_circuits),
+                 tor_lround(guard->timeouts),
+                 tor_lround(circ_times.close_ms/1000));
+      }
+    } else if (pathbias_get_success_count(guard)/((double)guard->circ_attempts)
+               < pathbias_get_notice_rate(options)) {
+      if (!guard->path_bias_noticed) {
+        guard->path_bias_noticed = 1;
+        log_notice(LD_CIRC,
+                   "Your Guard %s=%s is failing more circuits than usual. "
+                   "Most likely this means the Tor network is overloaded. "
+                   "Success counts are %ld/%ld. %ld circuits completed, %ld "
+                   "were unusable, %ld collapsed, and %ld timed out. For "
+                   "reference, your timeout cutoff is %ld seconds.",
+                   guard->nickname, hex_str(guard->identity, DIGEST_LEN),
+                   tor_lround(pathbias_get_closed_count(guard)),
+                   tor_lround(guard->circ_attempts),
+                   tor_lround(guard->circ_successes),
+                   tor_lround(guard->unusable_circuits),
+                   tor_lround(guard->collapsed_circuits),
+                   tor_lround(guard->timeouts),
+                   tor_lround(circ_times.close_ms/1000));
+      }
     }
   }
 
   /* If we get a ton of circuits, just scale everything down */
-  if (guard->first_hops > (unsigned)pathbias_get_scale_threshold(options)) {
+  if (guard->circ_attempts > pathbias_get_scale_threshold(options)) {
     const int scale_factor = pathbias_get_scale_factor(options);
-    /* For now, only scale if there will be no rounding error...
-     * XXX024: We want to switch to a real moving average for 0.2.4. */
-    if ((guard->first_hops % scale_factor) == 0 &&
-        (guard->circuit_successes % scale_factor) == 0) {
-      log_info(LD_PROTOCOL,
-               "Scaling pathbias counts to (%u/%u)/%d for guard %s=%s",
-               guard->circuit_successes, guard->first_hops,
-               scale_factor, guard->nickname, hex_str(guard->identity,
-               DIGEST_LEN));
-      guard->first_hops /= scale_factor;
-      guard->circuit_successes /= scale_factor;
-    }
+    const int mult_factor = pathbias_get_mult_factor(options);
+    log_info(LD_CIRC,
+             "Scaling pathbias counts to (%f/%f)*(%d/%d) for guard %s=%s",
+             guard->circ_successes, guard->circ_attempts,
+             mult_factor, scale_factor, guard->nickname,
+             hex_str(guard->identity, DIGEST_LEN));
+
+    guard->circ_attempts *= mult_factor;
+    guard->circ_successes *= mult_factor;
+    guard->timeouts *= mult_factor;
+    guard->successful_circuits_closed *= mult_factor;
+    guard->collapsed_circuits *= mult_factor;
+    guard->unusable_circuits *= mult_factor;
+
+    guard->circ_attempts /= scale_factor;
+    guard->circ_successes /= scale_factor;
+    guard->timeouts /= scale_factor;
+    guard->successful_circuits_closed /= scale_factor;
+    guard->collapsed_circuits /= scale_factor;
+    guard->unusable_circuits /= scale_factor;
   }
-  guard->first_hops++;
-  log_info(LD_PROTOCOL, "Got success count %u/%u for guard %s=%s",
-           guard->circuit_successes, guard->first_hops, guard->nickname,
+  guard->circ_attempts++;
+  log_info(LD_CIRC, "Got success count %f/%f for guard %s=%s",
+           guard->circ_successes, guard->circ_attempts, guard->nickname,
            hex_str(guard->identity, DIGEST_LEN));
   return 0;
 }
 
 /** A created or extended cell came back to us on the circuit, and it included
- * <b>reply</b> as its body.  (If <b>reply_type</b> is CELL_CREATED, the body
+ * reply_cell as its body.  (If <b>reply_type</b> is CELL_CREATED, the body
  * contains (the second DH key, plus KH).  If <b>reply_type</b> is
  * CELL_CREATED_FAST, the body contains a secret y and a hash H(x|y).)
  *
@@ -1364,14 +2069,14 @@ entry_guard_inc_first_hop_count(entry_guard_t *guard)
  * Return - reason if we want to mark circ for close, else return 0.
  */
 int
-circuit_finish_handshake(origin_circuit_t *circ, uint8_t reply_type,
-                         const uint8_t *reply)
+circuit_finish_handshake(origin_circuit_t *circ,
+                         const created_cell_t *reply)
 {
   char keys[CPATH_KEY_MATERIAL_LEN];
   crypt_path_t *hop;
   int rv;
 
-  if ((rv = pathbias_count_first_hop(circ)) < 0)
+  if ((rv = pathbias_count_circ_attempt(circ)) < 0)
     return rv;
 
   if (circ->cpath->state == CPATH_STATE_AWAITING_KEYS) {
@@ -1385,39 +2090,25 @@ circuit_finish_handshake(origin_circuit_t *circ, uint8_t reply_type,
   }
   tor_assert(hop->state == CPATH_STATE_AWAITING_KEYS);
 
-  if (reply_type == CELL_CREATED && hop->dh_handshake_state) {
-    if (onion_skin_client_handshake(hop->dh_handshake_state, (char*)reply,keys,
-                                    DIGEST_LEN*2+CIPHER_KEY_LEN*2) < 0) {
+  {
+    if (onion_skin_client_handshake(hop->handshake_state.tag,
+                                    &hop->handshake_state,
+                                    reply->reply, reply->handshake_len,
+                                    (uint8_t*)keys, sizeof(keys),
+                                    (uint8_t*)hop->rend_circ_nonce) < 0) {
       log_warn(LD_CIRC,"onion_skin_client_handshake failed.");
       return -END_CIRC_REASON_TORPROTOCOL;
     }
-    /* Remember hash of g^xy */
-    memcpy(hop->handshake_digest, reply+DH_KEY_LEN, DIGEST_LEN);
-  } else if (reply_type == CELL_CREATED_FAST && !hop->dh_handshake_state) {
-    if (fast_client_handshake(hop->fast_handshake_state, reply,
-                              (uint8_t*)keys,
-                              DIGEST_LEN*2+CIPHER_KEY_LEN*2) < 0) {
-      log_warn(LD_CIRC,"fast_client_handshake failed.");
-      return -END_CIRC_REASON_TORPROTOCOL;
-    }
-    memcpy(hop->handshake_digest, reply+DIGEST_LEN, DIGEST_LEN);
-  } else {
-    log_warn(LD_PROTOCOL,"CREATED cell type did not match CREATE cell type.");
-    return -END_CIRC_REASON_TORPROTOCOL;
   }
 
-  crypto_dh_free(hop->dh_handshake_state); /* don't need it anymore */
-  hop->dh_handshake_state = NULL;
-
-  memset(hop->fast_handshake_state, 0, sizeof(hop->fast_handshake_state));
+  onion_handshake_state_release(&hop->handshake_state);
 
   if (circuit_init_cpath_crypto(hop, keys, 0)<0) {
     return -END_CIRC_REASON_TORPROTOCOL;
   }
 
   hop->state = CPATH_STATE_OPEN;
-  log_info(LD_CIRC,"Finished building %scircuit hop:",
-           (reply_type == CELL_CREATED_FAST) ? "fast " : "");
+  log_info(LD_CIRC,"Finished building circuit hop:");
   circuit_log_path(LOG_INFO,LD_CIRC,circ);
   control_event_circuit_status(circ, CIRC_EVENT_EXTENDED, 0);
 
@@ -1477,23 +2168,24 @@ circuit_truncated(origin_circuit_t *circ, crypt_path_t *layer, int reason)
  * cell back.
  */
 int
-onionskin_answer(or_circuit_t *circ, uint8_t cell_type, const char *payload,
-                 const char *keys)
+onionskin_answer(or_circuit_t *circ,
+                 const created_cell_t *created_cell,
+                 const char *keys,
+                 const uint8_t *rend_circ_nonce)
 {
   cell_t cell;
   crypt_path_t *tmp_cpath;
 
+  if (created_cell_format(&cell, created_cell) < 0) {
+    log_warn(LD_BUG,"couldn't format created cell");
+    return -1;
+  }
+  cell.circ_id = circ->p_circ_id;
+
   tmp_cpath = tor_malloc_zero(sizeof(crypt_path_t));
   tmp_cpath->magic = CRYPT_PATH_MAGIC;
 
-  memset(&cell, 0, sizeof(cell_t));
-  cell.command = cell_type;
-  cell.circ_id = circ->p_circ_id;
-
   circuit_set_state(TO_CIRCUIT(circ), CIRCUIT_STATE_OPEN);
-
-  memcpy(cell.payload, payload,
-         cell_type == CELL_CREATED ? ONIONSKIN_REPLY_LEN : DIGEST_LEN*2);
 
   log_debug(LD_CIRC,"init digest forward 0x%.8x, backward 0x%.8x.",
             (unsigned int)get_uint32(keys),
@@ -1510,12 +2202,9 @@ onionskin_answer(or_circuit_t *circ, uint8_t cell_type, const char *payload,
   tmp_cpath->magic = 0;
   tor_free(tmp_cpath);
 
-  if (cell_type == CELL_CREATED)
-    memcpy(circ->handshake_digest, cell.payload+DH_KEY_LEN, DIGEST_LEN);
-  else
-    memcpy(circ->handshake_digest, cell.payload+DIGEST_LEN, DIGEST_LEN);
+  memcpy(circ->rend_circ_nonce, rend_circ_nonce, DIGEST_LEN);
 
-  circ->is_first_hop = (cell_type == CELL_CREATED_FAST);
+  circ->is_first_hop = (created_cell->cell_type == CELL_CREATED_FAST);
 
   append_cell_to_circuit_queue(TO_CIRCUIT(circ),
                                circ->p_chan, &cell, CELL_DIRECTION_IN, 0);
@@ -2054,6 +2743,9 @@ circuit_extend_to_new_exit(origin_circuit_t *circ, extend_info_t *exit)
 {
   int err_reason = 0;
   warn_if_last_router_excluded(circ, exit);
+
+  tor_gettimeofday(&circ->base_.timestamp_began);
+
   circuit_append_new_exit(circ, exit);
   circuit_set_state(TO_CIRCUIT(circ), CIRCUIT_STATE_BUILDING);
   if ((err_reason = circuit_send_next_onion_skin(circ))<0) {
@@ -2062,6 +2754,11 @@ circuit_extend_to_new_exit(origin_circuit_t *circ, extend_info_t *exit)
     circuit_mark_for_close(TO_CIRCUIT(circ), -err_reason);
     return -1;
   }
+
+  /* Set timestamp_dirty, so we can check it for path use bias */
+  if (!circ->base_.timestamp_dirty)
+    circ->base_.timestamp_dirty = time(NULL);
+
   return 0;
 }
 
@@ -2315,8 +3012,9 @@ onion_append_hop(crypt_path_t **head_ptr, extend_info_t *choice)
 /** Allocate a new extend_info object based on the various arguments. */
 extend_info_t *
 extend_info_new(const char *nickname, const char *digest,
-                  crypto_pk_t *onion_key,
-                  const tor_addr_t *addr, uint16_t port)
+                crypto_pk_t *onion_key,
+                const curve25519_public_key_t *curve25519_key,
+                const tor_addr_t *addr, uint16_t port)
 {
   extend_info_t *info = tor_malloc_zero(sizeof(extend_info_t));
   memcpy(info->identity_digest, digest, DIGEST_LEN);
@@ -2324,6 +3022,13 @@ extend_info_new(const char *nickname, const char *digest,
     strlcpy(info->nickname, nickname, sizeof(info->nickname));
   if (onion_key)
     info->onion_key = crypto_pk_dup_key(onion_key);
+#ifdef CURVE25519_ENABLED
+  if (curve25519_key)
+    memcpy(&info->curve25519_onion_key, curve25519_key,
+           sizeof(curve25519_public_key_t));
+#else
+  (void)curve25519_key;
+#endif
   tor_addr_copy(&info->addr, addr);
   info->port = port;
   return info;
@@ -2358,12 +3063,14 @@ extend_info_from_node(const node_t *node, int for_direct_connect)
     return extend_info_new(node->ri->nickname,
                              node->identity,
                              node->ri->onion_pkey,
+                             node->ri->onion_curve25519_pkey,
                              &ap.addr,
                              ap.port);
   else if (node->rs && node->md)
     return extend_info_new(node->rs->nickname,
                              node->identity,
                              node->md->onion_pkey,
+                             node->md->onion_curve25519_pkey,
                              &ap.addr,
                              ap.port);
   else

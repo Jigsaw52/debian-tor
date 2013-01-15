@@ -23,6 +23,7 @@
 #include "networkstatus.h"
 #include "nodelist.h"
 #include "onion.h"
+#include "onion_fast.h"
 #include "relay.h"
 #include "rendclient.h"
 #include "rendcommon.h"
@@ -251,7 +252,7 @@ circuit_set_state(circuit_t *circ, uint8_t state)
     smartlist_add(circuits_pending_chans, circ);
   }
   if (state == CIRCUIT_STATE_OPEN)
-    tor_assert(!circ->n_chan_onionskin);
+    tor_assert(!circ->n_chan_create_cell);
   circ->state = state;
 }
 
@@ -413,6 +414,8 @@ circuit_purpose_to_controller_string(uint8_t purpose)
       return "MEASURE_TIMEOUT";
     case CIRCUIT_PURPOSE_CONTROLLER:
       return "CONTROLLER";
+    case CIRCUIT_PURPOSE_PATH_BIAS_TESTING:
+      return "PATH_BIAS_TESTING";
 
     default:
       tor_snprintf(buf, sizeof(buf), "UNKNOWN_%d", (int)purpose);
@@ -440,6 +443,7 @@ circuit_purpose_to_controller_hs_state_string(uint8_t purpose)
     case CIRCUIT_PURPOSE_C_MEASURE_TIMEOUT:
     case CIRCUIT_PURPOSE_TESTING:
     case CIRCUIT_PURPOSE_CONTROLLER:
+    case CIRCUIT_PURPOSE_PATH_BIAS_TESTING:
       return NULL;
 
     case CIRCUIT_PURPOSE_INTRO_POINT:
@@ -678,7 +682,7 @@ circuit_free(circuit_t *circ)
   }
 
   extend_info_free(circ->n_hop);
-  tor_free(circ->n_chan_onionskin);
+  tor_free(circ->n_chan_create_cell);
 
   /* Remove from map. */
   circuit_set_n_circid_chan(circ, 0, NULL);
@@ -748,7 +752,8 @@ circuit_free_cpath_node(crypt_path_t *victim)
   crypto_cipher_free(victim->b_crypto);
   crypto_digest_free(victim->f_digest);
   crypto_digest_free(victim->b_digest);
-  crypto_dh_free(victim->dh_handshake_state);
+  onion_handshake_state_release(&victim->handshake_state);
+  crypto_dh_free(victim->rend_dh_handshake_state);
   extend_info_free(victim->extend_info);
 
   memwipe(victim, 0xBB, sizeof(crypt_path_t)); /* poison memory */
@@ -1038,8 +1043,13 @@ circuit_unlink_all_from_channel(channel_t *chan, int reason)
   for (circ = global_circuitlist; circ; circ = circ->next) {
     int mark = 0;
     if (circ->n_chan == chan) {
-        circuit_set_n_circid_chan(circ, 0, NULL);
-        mark = 1;
+      circuit_set_n_circid_chan(circ, 0, NULL);
+      mark = 1;
+
+      /* If we didn't request this closure, pass the remote
+       * bit to mark_for_close. */
+      if (chan->reason_for_closing != CHANNEL_CLOSE_REQUESTED)
+        reason |= END_CIRC_REASON_FLAG_REMOTE;
     }
     if (! CIRCUIT_IS_ORIGIN(circ)) {
       or_circuit_t *or_circ = TO_OR_CIRCUIT(circ);
@@ -1347,7 +1357,13 @@ circuit_mark_for_close_(circuit_t *circ, int reason, int line,
     }
     reason = END_CIRC_REASON_NONE;
   }
+
   if (CIRCUIT_IS_ORIGIN(circ)) {
+    if (pathbias_check_close(TO_ORIGIN_CIRCUIT(circ), reason) == -1) {
+      /* Don't close it yet, we need to test it first */
+      return;
+    }
+
     /* We don't send reasons when closing circuits at the origin. */
     reason = END_CIRC_REASON_NONE;
   }
@@ -1497,7 +1513,8 @@ assert_cpath_layer_ok(const crypt_path_t *cp)
       tor_assert(cp->b_crypto);
       /* fall through */
     case CPATH_STATE_CLOSED:
-      tor_assert(!cp->dh_handshake_state);
+      /*XXXX Assert that there's no handshake_state either. */
+      tor_assert(!cp->rend_dh_handshake_state);
       break;
     case CPATH_STATE_AWAITING_KEYS:
       /* tor_assert(cp->dh_handshake_state); */
@@ -1584,7 +1601,7 @@ assert_circuit_ok(const circuit_t *c)
   tor_assert(c->deliver_window >= 0);
   tor_assert(c->package_window >= 0);
   if (c->state == CIRCUIT_STATE_OPEN) {
-    tor_assert(!c->n_chan_onionskin);
+    tor_assert(!c->n_chan_create_cell);
     if (or_circ) {
       tor_assert(or_circ->n_crypto);
       tor_assert(or_circ->p_crypto);
