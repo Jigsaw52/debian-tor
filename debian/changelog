@@ -1,4 +1,4 @@
-tor (0.2.4.8-alpha-1) experimental; urgency=low
+tor (0.2.4.9-alpha-1) experimental; urgency=low
 
   * New upstream version.
   * Build-Depend on libnacl-dev for curve25519.  If it's not present, tor
@@ -12,7 +12,7 @@ tor (0.2.4.8-alpha-1) experimental; urgency=low
   * If $DAEMON $VERIFY_ARGS fails, call use the same arguments for
     finding the errors and not $DAEMON --verify-config.
 
- -- Peter Palfrader <weasel@debian.org>  Tue, 15 Jan 2013 14:45:53 +0100
+ -- Peter Palfrader <weasel@debian.org>  Tue, 15 Jan 2013 22:10:52 +0100
 
 tor (0.2.4.7-alpha-1) experimental; urgency=low
 
