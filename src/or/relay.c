@@ -27,6 +27,7 @@
 #include "mempool.h"
 #include "networkstatus.h"
 #include "nodelist.h"
+#include "onion.h"
 #include "policies.h"
 #include "reasons.h"
 #include "relay.h"
@@ -185,7 +186,17 @@ circuit_receive_relay_cell(cell_t *cell, circuit_t *circ,
   }
 
   if (recognized) {
-    edge_connection_t *conn = relay_lookup_conn(circ, cell, cell_direction,
+    edge_connection_t *conn = NULL;
+
+    if (circ->purpose == CIRCUIT_PURPOSE_PATH_BIAS_TESTING) {
+      pathbias_check_probe_response(circ, cell);
+
+      /* We need to drop this cell no matter what to avoid code that expects
+       * a certain purpose (such as the hidserv code). */
+      return 0;
+    }
+
+    conn = relay_lookup_conn(circ, cell, cell_direction,
                                                 layer_hint);
     if (cell_direction == CELL_DIRECTION_OUT) {
       ++stats_n_relay_cells_delivered;
@@ -221,7 +232,15 @@ circuit_receive_relay_cell(cell_t *cell, circuit_t *circ,
   } else {
     log_fn(LOG_PROTOCOL_WARN, LD_OR,
            "Dropping unrecognized inbound cell on origin circuit.");
-    return 0;
+    /* If we see unrecognized cells on path bias testing circs,
+     * it's bad mojo. Those circuits need to die.
+     * XXX: Shouldn't they always die? */
+    if (circ->purpose == CIRCUIT_PURPOSE_PATH_BIAS_TESTING) {
+      TO_ORIGIN_CIRCUIT(circ)->path_state = PATH_STATE_USE_FAILED;
+      return -END_CIRC_REASON_TORPROTOCOL;
+    } else {
+      return 0;
+    }
   }
 
   if (!chan) {
@@ -571,6 +590,7 @@ relay_send_command_from_edge(streamid_t stream_id, circuit_t *circ,
     origin_circuit_t *origin_circ = TO_ORIGIN_CIRCUIT(circ);
     if (origin_circ->remaining_relay_early_cells > 0 &&
         (relay_command == RELAY_COMMAND_EXTEND ||
+         relay_command == RELAY_COMMAND_EXTEND2 ||
          cpath_layer != origin_circ->cpath)) {
       /* If we've got any relay_early cells left and (we're sending
        * an extend cell or we're not talking to the first hop), use
@@ -584,7 +604,8 @@ relay_send_command_from_edge(streamid_t stream_id, circuit_t *circ,
        * task 878. */
       origin_circ->relay_early_commands[
           origin_circ->relay_early_cells_sent++] = relay_command;
-    } else if (relay_command == RELAY_COMMAND_EXTEND) {
+    } else if (relay_command == RELAY_COMMAND_EXTEND ||
+               relay_command == RELAY_COMMAND_EXTEND2) {
       /* If no RELAY_EARLY cells can be sent over this circuit, log which
        * commands have been sent as RELAY_EARLY cells before; helps debug
        * task 878. */
@@ -692,6 +713,26 @@ connection_ap_process_end_not_open(
   int control_reason = reason | END_STREAM_REASON_FLAG_REMOTE;
   edge_connection_t *edge_conn = ENTRY_TO_EDGE_CONN(conn);
   (void) layer_hint; /* unused */
+
+  if (rh->length > 0) {
+    if (reason == END_STREAM_REASON_TORPROTOCOL ||
+        reason == END_STREAM_REASON_INTERNAL ||
+        reason == END_STREAM_REASON_DESTROY) {
+      /* All three of these reasons could mean a failed tag
+       * hit the exit and it complained. Do not probe.
+       * Fail the circuit. */
+      circ->path_state = PATH_STATE_USE_FAILED;
+      return -END_CIRC_REASON_TORPROTOCOL;
+    } else {
+      /* Path bias: If we get a valid reason code from the exit,
+       * it wasn't due to tagging.
+       *
+       * We rely on recognized+digest being strong enough to make
+       * tags unlikely to allow us to get tagged, yet 'recognized'
+       * reason codes here. */
+      circ->path_state = PATH_STATE_USE_SUCCEEDED;
+    }
+  }
 
   if (rh->length > 0 && edge_reason_is_retriable(reason) &&
       /* avoid retry if rend */
@@ -1262,7 +1303,8 @@ connection_edge_process_relay_cell(cell_t *cell, circuit_t *circ,
         connection_mark_and_flush(TO_CONN(conn));
       }
       return 0;
-    case RELAY_COMMAND_EXTEND: {
+    case RELAY_COMMAND_EXTEND:
+    case RELAY_COMMAND_EXTEND2: {
       static uint64_t total_n_extend=0, total_nonearly=0;
       total_n_extend++;
       if (rh.stream_id) {
@@ -1297,17 +1339,27 @@ connection_edge_process_relay_cell(cell_t *cell, circuit_t *circ,
       return circuit_extend(cell, circ);
     }
     case RELAY_COMMAND_EXTENDED:
+    case RELAY_COMMAND_EXTENDED2:
       if (!layer_hint) {
         log_fn(LOG_PROTOCOL_WARN, LD_PROTOCOL,
                "'extended' unsupported at non-origin. Dropping.");
         return 0;
       }
       log_debug(domain,"Got an extended cell! Yay.");
-      if ((reason = circuit_finish_handshake(TO_ORIGIN_CIRCUIT(circ),
-                                       CELL_CREATED,
-                                       cell->payload+RELAY_HEADER_SIZE)) < 0) {
-        log_warn(domain,"circuit_finish_handshake failed.");
-        return reason;
+      {
+        extended_cell_t extended_cell;
+        if (extended_cell_parse(&extended_cell, rh.command,
+                        (const uint8_t*)cell->payload+RELAY_HEADER_SIZE,
+                        rh.length)<0) {
+          log_warn(LD_PROTOCOL,
+                   "Can't parse EXTENDED cell; killing circuit.");
+          return -END_CIRC_REASON_TORPROTOCOL;
+        }
+        if ((reason = circuit_finish_handshake(TO_ORIGIN_CIRCUIT(circ),
+                                         &extended_cell.created_cell)) < 0) {
+          log_warn(domain,"circuit_finish_handshake failed.");
+          return reason;
+        }
       }
       if ((reason=circuit_send_next_onion_skin(TO_ORIGIN_CIRCUIT(circ)))<0) {
         log_info(domain,"circuit_send_next_onion_skin() failed.");

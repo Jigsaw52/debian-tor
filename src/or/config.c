@@ -308,16 +308,22 @@ static config_var_t option_vars_[] = {
   OBSOLETE("NoPublish"),
   VAR("NodeFamily",              LINELIST, NodeFamilies,         NULL),
   V(NumCPUs,                     UINT,     "0"),
+  V(NumDirectoryGuards,          UINT,     "3"),
   V(NumEntryGuards,              UINT,     "3"),
   V(ORListenAddress,             LINELIST, NULL),
   VPORT(ORPort,                      LINELIST, NULL),
   V(OutboundBindAddress,         LINELIST,   NULL),
 
+  OBSOLETE("PathBiasDisableRate"),
   V(PathBiasCircThreshold,       INT,      "-1"),
   V(PathBiasNoticeRate,          DOUBLE,   "-1"),
-  V(PathBiasDisableRate,         DOUBLE,   "-1"),
+  V(PathBiasWarnRate,            DOUBLE,   "-1"),
+  V(PathBiasExtremeRate,         DOUBLE,   "-1"),
   V(PathBiasScaleThreshold,      INT,      "-1"),
   V(PathBiasScaleFactor,         INT,      "-1"),
+  V(PathBiasMultFactor,          INT,      "-1"),
+  V(PathBiasDropGuards,          AUTOBOOL, "0"),
+  V(PathBiasUseCloseCounts,      AUTOBOOL, "1"),
 
   OBSOLETE("PathlenCoinWeight"),
   V(PerConnBWBurst,              MEMUNIT,  "0"),
@@ -372,6 +378,7 @@ static config_var_t option_vars_[] = {
   OBSOLETE("TestVia"),
   V(TokenBucketRefillInterval,   MSEC_INTERVAL, "100 msec"),
   V(Tor2webMode,                 BOOL,     "0"),
+  V(TLSECGroup,                  STRING,   NULL),
   V(TrackHostExits,              CSV,      NULL),
   V(TrackHostExitsExpire,        INTERVAL, "30 minutes"),
   OBSOLETE("TrafficShaping"),
@@ -381,7 +388,9 @@ static config_var_t option_vars_[] = {
   V(UpdateBridgesFromAuthority,  BOOL,     "0"),
   V(UseBridges,                  BOOL,     "0"),
   V(UseEntryGuards,              BOOL,     "1"),
+  V(UseEntryGuardsAsDirGuards,   BOOL,     "1"),
   V(UseMicrodescriptors,         AUTOBOOL, "auto"),
+  V(UseNTorHandshake,            AUTOBOOL, "auto"),
   V(User,                        STRING,   NULL),
   V(UserspaceIOCPBuffers,        BOOL,     "0"),
   VAR("V1AuthoritativeDirectory",BOOL, V1AuthoritativeDir,   "0"),
@@ -1192,6 +1201,9 @@ options_transition_requires_fresh_tls_context(const or_options_t *old_options,
   if ((old_options->DynamicDHGroups != new_options->DynamicDHGroups)) {
     return 1;
   }
+
+  if (!opt_streq(old_options->TLSECGroup, new_options->TLSECGroup))
+    return 1;
 
   return 0;
 }
@@ -2299,6 +2311,12 @@ options_validate(or_options_t *old_options, or_options_t *options,
         routerset_free(rs);
       }
     }
+  }
+
+  if (options->TLSECGroup && (strcasecmp(options->TLSECGroup, "P256") &&
+                              strcasecmp(options->TLSECGroup, "P224"))) {
+    COMPLAIN("Unrecognized TLSECGroup: Falling back to the default.");
+    tor_free(options->TLSECGroup);
   }
 
   if (options->ExcludeNodes && options->StrictNodes) {
@@ -4616,12 +4634,15 @@ port_cfg_free(port_cfg_t *port)
   tor_free(port);
 }
 
-/** Warn for every port in <b>ports</b> that is on a publicly routable
- * address. */
+/** Warn for every port in <b>ports</b> of type <b>listener_type</b> that is
+ * on a publicly routable address. */
 static void
-warn_nonlocal_client_ports(const smartlist_t *ports, const char *portname)
+warn_nonlocal_client_ports(const smartlist_t *ports, const char *portname,
+                           int listener_type)
 {
   SMARTLIST_FOREACH_BEGIN(ports, const port_cfg_t *, port) {
+    if (port->type != listener_type)
+      continue;
     if (port->is_unix_addr) {
       /* Unix sockets aren't accessible over a network. */
     } else if (!tor_addr_is_internal(&port->addr, 1)) {
@@ -4818,7 +4839,7 @@ parse_port_config(smartlist_t *out,
       if (is_control)
         warn_nonlocal_controller_ports(out, forbid_nonlocal);
       else
-        warn_nonlocal_client_ports(out, portname);
+        warn_nonlocal_client_ports(out, portname, listener_type);
     }
     return 0;
   } /* end if (listenaddrs) */
@@ -5084,7 +5105,7 @@ parse_port_config(smartlist_t *out,
     if (is_control)
       warn_nonlocal_controller_ports(out, forbid_nonlocal);
     else
-      warn_nonlocal_client_ports(out, portname);
+      warn_nonlocal_client_ports(out, portname, listener_type);
   }
 
   if (got_zero_port && got_nonzero_port) {
