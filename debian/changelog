@@ -8,11 +8,13 @@ tor (0.2.4.9-alpha-1) experimental; urgency=low
     managed to build nacl.  Currently this means not any of armel, armhf,
     mips, s390, s390x.
   * Move the geoip6 file to the tor-geoip package (spotted by George
-    Kargiotakis).
+    Kargiotakis)
+  * add appropriate Replaces and Breaks to the tor-geoip package for
+    tor < 0.2.4.8 since we moved a file to tor-geoip.
   * If $DAEMON $VERIFY_ARGS fails, call use the same arguments for
     finding the errors and not $DAEMON --verify-config.
 
- -- Peter Palfrader <weasel@debian.org>  Tue, 15 Jan 2013 22:10:52 +0100
+ -- Peter Palfrader <weasel@debian.org>  Wed, 16 Jan 2013 10:27:57 +0100
 
 tor (0.2.4.7-alpha-1) experimental; urgency=low
 
