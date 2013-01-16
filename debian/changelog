@@ -1,12 +1,10 @@
 tor (0.2.4.9-alpha-1) experimental; urgency=low
 
   * New upstream version.
-  * Build-Depend on libnacl-dev for curve25519.  If it's not present, tor
-    would fall back to its own implementation, but the nacl one is probably
-    faster.  (For backports this should be easy to drop.)
-    Restrict the build dependency to architectures that actually
-    managed to build nacl.  Currently this means not any of armel, armhf,
-    mips, s390, s390x.
+  * Build-Conflict with libnacl-dev so that we don't pull it in accidentally.
+    For now Tor doesn't manage to use it on at least amd64 anyway, but that
+    may change.  We should review this decision once we know how things work
+    and where we want to use nacl.
   * Move the geoip6 file to the tor-geoip package (spotted by George
     Kargiotakis)
   * add appropriate Replaces and Breaks to the tor-geoip package for
@@ -14,7 +12,7 @@ tor (0.2.4.9-alpha-1) experimental; urgency=low
   * If $DAEMON $VERIFY_ARGS fails, call use the same arguments for
     finding the errors and not $DAEMON --verify-config.
 
- -- Peter Palfrader <weasel@debian.org>  Wed, 16 Jan 2013 10:27:57 +0100
+ -- Peter Palfrader <weasel@debian.org>  Wed, 16 Jan 2013 11:05:43 +0100
 
 tor (0.2.4.7-alpha-1) experimental; urgency=low
 
