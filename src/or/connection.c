@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -731,7 +731,7 @@ connection_mark_for_close_internal_(connection_t *conn,
   tor_assert(file);
 
   if (conn->marked_for_close) {
-    log(LOG_WARN,LD_BUG,"Duplicate call to connection_mark_for_close at %s:%d"
+    log_warn(LD_BUG,"Duplicate call to connection_mark_for_close at %s:%d"
         " (first at %s:%d)", file, line, conn->marked_for_close_file,
         conn->marked_for_close);
     tor_fragile_assert();
@@ -1442,11 +1442,7 @@ connection_connect(connection_t *conn, const char *address,
      * Warn if we do, and refuse to make the connection. */
     static ratelim_t disablenet_violated = RATELIM_INIT(30*60);
     char *m;
-#ifdef _WIN32
-    *socket_error = WSAENETUNREACH;
-#else
-    *socket_error = ENETUNREACH;
-#endif
+    *socket_error = SOCK_ERRNO(ENETUNREACH);
     if ((m = rate_limit_log(&disablenet_violated, approx_time()))) {
       log_warn(LD_BUG, "Tried to open a socket with DisableNetwork set.%s", m);
       tor_free(m);
@@ -2534,7 +2530,7 @@ connection_bucket_refill_helper(int *bucket, int rate, int burst,
         *bucket = burst;
       }
     }
-    log(LOG_DEBUG, LD_NET,"%s now %d.", name, *bucket);
+    log_debug(LD_NET,"%s now %d.", name, *bucket);
   }
 }
 
@@ -3280,6 +3276,7 @@ connection_handle_write_impl(connection_t *conn, int force)
   ssize_t max_to_write;
   time_t now = approx_time();
   size_t n_read = 0, n_written = 0;
+  int dont_stop_writing = 0;
 
   tor_assert(!connection_is_listener(conn));
 
@@ -3336,6 +3333,7 @@ connection_handle_write_impl(connection_t *conn, int force)
   if (connection_speaks_cells(conn) &&
       conn->state > OR_CONN_STATE_PROXY_HANDSHAKING) {
     or_connection_t *or_conn = TO_OR_CONN(conn);
+    size_t initial_size;
     if (conn->state == OR_CONN_STATE_TLS_HANDSHAKING ||
         conn->state == OR_CONN_STATE_TLS_CLIENT_RENEGOTIATING) {
       connection_stop_writing(conn);
@@ -3359,6 +3357,7 @@ connection_handle_write_impl(connection_t *conn, int force)
     }
 
     /* else open, or closing */
+    initial_size = buf_datalen(conn->outbuf);
     result = flush_buf_tls(or_conn->tls, conn->outbuf,
                            max_to_write, &conn->outbuf_flushlen);
 
@@ -3389,7 +3388,8 @@ connection_handle_write_impl(connection_t *conn, int force)
       case TOR_TLS_WANTWRITE:
         log_debug(LD_NET,"wanted write.");
         /* we're already writing */
-        return 0;
+        dont_stop_writing = 1;
+        break;
       case TOR_TLS_WANTREAD:
         /* Make sure to avoid a loop if the receive buckets are empty. */
         log_debug(LD_NET,"wanted read.");
@@ -3411,6 +3411,12 @@ connection_handle_write_impl(connection_t *conn, int force)
     tor_tls_get_n_raw_bytes(or_conn->tls, &n_read, &n_written);
     log_debug(LD_GENERAL, "After TLS write of %d: %ld read, %ld written",
               result, (long)n_read, (long)n_written);
+    /* So we notice bytes were written even on error */
+    /* XXXX024 This cast is safe since we can never write INT_MAX bytes in a
+     * single set of TLS operations. But it looks kinda ugly. If we refactor
+     * the *_buf_tls functions, we should make them return ssize_t or size_t
+     * or something. */
+    result = (int)(initial_size-buf_datalen(conn->outbuf));
   } else {
     CONN_LOG_PROTECT(conn,
              result = flush_buf(conn->s, conn->outbuf,
@@ -3457,7 +3463,8 @@ connection_handle_write_impl(connection_t *conn, int force)
     }
   }
 
-  if (!connection_wants_to_flush(conn)) { /* it's done flushing */
+  if (!connection_wants_to_flush(conn) &&
+      !dont_stop_writing) { /* it's done flushing */
     if (connection_finished_flushing(conn) < 0) {
       /* already marked */
       return -1;
@@ -3901,7 +3908,7 @@ client_check_address_changed(tor_socket_t sock)
   } else {
     /* The interface changed.  We're a client, so we need to regenerate our
      * keys.  First, reset the state. */
-    log(LOG_NOTICE, LD_NET, "Our IP address has changed.  Rotating keys...");
+    log_notice(LD_NET, "Our IP address has changed.  Rotating keys...");
     tor_addr_copy(*last_interface_ip_ptr, &iface_addr);
     SMARTLIST_FOREACH(outgoing_addrs, tor_addr_t*, a_ptr, tor_free(a_ptr));
     smartlist_clear(outgoing_addrs);
@@ -3985,8 +3992,9 @@ connection_flushed_some(connection_t *conn)
   return r;
 }
 
-/** We just finished flushing bytes from conn-\>outbuf, and there
- * are no more bytes remaining.
+/** We just finished flushing bytes to the appropriately low network layer,
+ * and there are no more bytes remaining in conn-\>outbuf, conn-\>bev, or
+ * conn-\>tls to be flushed.
  *
  * This function just passes conn to the connection-specific
  * connection_*_finished_flushing() function.
@@ -4113,14 +4121,14 @@ connection_dump_buffer_mem_stats(int severity)
     total_alloc += alloc_by_type[i];
   }
 
-  log(severity, LD_GENERAL,
+  tor_log(severity, LD_GENERAL,
      "In buffers for %d connections: "U64_FORMAT" used/"U64_FORMAT" allocated",
       smartlist_len(conns),
       U64_PRINTF_ARG(total_used), U64_PRINTF_ARG(total_alloc));
   for (i=CONN_TYPE_MIN_; i <= CONN_TYPE_MAX_; ++i) {
     if (!n_conns_by_type[i])
       continue;
-    log(severity, LD_GENERAL,
+    tor_log(severity, LD_GENERAL,
         "  For %d %s connections: "U64_FORMAT" used/"U64_FORMAT" allocated",
         n_conns_by_type[i], conn_type_to_string(i),
         U64_PRINTF_ARG(used_by_type[i]), U64_PRINTF_ARG(alloc_by_type[i]));

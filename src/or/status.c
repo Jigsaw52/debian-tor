@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2012, The Tor Project, Inc. */
+/* Copyright (c) 2010-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -108,7 +108,7 @@ log_heartbeat(time_t now)
          uptime, count_circuits(),bw_sent,bw_rcvd);
 
   if (stats_n_data_cells_packaged)
-    log(LOG_NOTICE, LD_HEARTBEAT, "Average packaged cell fullness: %2.3f%%",
+    log_notice(LD_HEARTBEAT, "Average packaged cell fullness: %2.3f%%",
         100*(U64_TO_DBL(stats_n_data_bytes_packaged) /
              U64_TO_DBL(stats_n_data_cells_packaged*RELAY_PAYLOAD_SIZE)) );
 

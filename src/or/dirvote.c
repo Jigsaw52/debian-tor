@@ -1,6 +1,6 @@
 /* Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #define DIRVOTE_PRIVATE
@@ -2288,7 +2288,7 @@ networkstatus_add_detached_signatures(networkstatus_t *target,
     if (sig->good_signature || !old_sig || old_sig->bad_signature) {
       log_info(LD_DIR, "Adding signature from %s with %s", voter_identity,
                algorithm);
-      log(severity, LD_DIR, "Added a signature for %s from %s.",
+      tor_log(severity, LD_DIR, "Added a signature for %s from %s.",
           target_voter->nickname, source);
       ++r;
       if (old_sig) {
@@ -3110,7 +3110,7 @@ dirvote_compute_consensuses(void)
   }
   tor_assert(pending_vote_list);
   SMARTLIST_FOREACH(pending_vote_list, pending_vote_t *, v, {
-    if (smartlist_string_isin(v->vote->known_flags, "Running"))
+    if (smartlist_contains_string(v->vote->known_flags, "Running"))
       n_vote_running++;
   });
   if (!n_vote_running) {

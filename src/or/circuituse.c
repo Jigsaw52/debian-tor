@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -452,15 +452,15 @@ circuit_expire_building(void)
   SET_CUTOFF(stream_cutoff, MAX(options->CircuitStreamTimeout,15)*1000 + 1000);
 
   /* Be lenient with cannibalized circs. They already survived the official
-   * CBT, and they're usually not perf-critical. */
+   * CBT, and they're usually not performance-critical. */
   SET_CUTOFF(cannibalized_cutoff,
              MAX(circ_times.close_ms*(4/6.0),
                  options->CircuitStreamTimeout * 1000) + 1000);
 
-  // Intro circs have an extra round trip (and are also 4 hops long)
+  /* Intro circs have an extra round trip (and are also 4 hops long) */
   SET_CUTOFF(c_intro_cutoff, circ_times.timeout_ms * (14/6.0) + 1000);
 
-  // Server intro circs have an extra round trip
+  /* Server intro circs have an extra round trip */
   SET_CUTOFF(s_intro_cutoff, circ_times.timeout_ms * (9/6.0) + 1000);
 
   SET_CUTOFF(close_cutoff, circ_times.close_ms);
@@ -668,18 +668,6 @@ circuit_expire_building(void)
           circuit_build_times_set_timeout(&circ_times);
         }
       }
-
-      if (TO_ORIGIN_CIRCUIT(victim)->has_opened &&
-          victim->purpose != CIRCUIT_PURPOSE_PATH_BIAS_TESTING) {
-        /* For path bias: we want to let these guys live for a while
-         * so we get a chance to test them. */
-        log_info(LD_CIRC,
-                 "Allowing cannibalized circuit %d time to finish building "
-                 "as a pathbias testing circ.",
-                 TO_ORIGIN_CIRCUIT(victim)->global_identifier);
-        circuit_change_purpose(victim, CIRCUIT_PURPOSE_PATH_BIAS_TESTING);
-        continue; /* It now should have a longer timeout next time */
-      }
     }
 
     /* If this is a hidden service client circuit which is far enough
@@ -804,7 +792,8 @@ circuit_stream_is_being_handled(entry_connection_t *conn,
   const node_t *exitnode;
   int num=0;
   time_t now = time(NULL);
-  int need_uptime = smartlist_string_num_isin(get_options()->LongLivedPorts,
+  int need_uptime = smartlist_contains_int_as_string(
+                                   get_options()->LongLivedPorts,
                                    conn ? conn->socks_request->port : port);
 
   for (circ=global_circuitlist;circ;circ = circ->next) {
@@ -1089,7 +1078,10 @@ circuit_expire_old_circuits_clientside(void)
                 "purpose %d)",
                 circ->n_circ_id, (long)(now.tv_sec - circ->timestamp_dirty),
                 circ->purpose);
-      circuit_mark_for_close(circ, END_CIRC_REASON_FINISHED);
+      /* Don't do this magic for testing circuits. Their death is governed
+       * by circuit_expire_building */
+      if (circ->purpose != CIRCUIT_PURPOSE_PATH_BIAS_TESTING)
+        circuit_mark_for_close(circ, END_CIRC_REASON_FINISHED);
     } else if (!circ->timestamp_dirty && circ->state == CIRCUIT_STATE_OPEN) {
       if (timercmp(&circ->timestamp_began, &cutoff, <)) {
         if (circ->purpose == CIRCUIT_PURPOSE_C_GENERAL ||
@@ -1506,17 +1498,19 @@ circuit_launch_by_extend_info(uint8_t purpose,
            purpose == CIRCUIT_PURPOSE_C_INTRODUCING) &&
           circ->path_state == PATH_STATE_BUILD_SUCCEEDED) {
         /* Path bias: Cannibalized rends pre-emptively count as a
-         * successfully used circ. We don't wait until the extend,
-         * because the rend point could be malicious.
+         * successfully built but unused closed circuit. We don't
+         * wait until the extend (or the close) because the rend
+         * point could be malicious.
          *
          * Same deal goes for client side introductions. Clients
          * can be manipulated to connect repeatedly to them
          * (especially web clients).
          *
          * If we decide to probe the initial portion of these circs,
-         * (up to the adversaries final hop), we need to remove this.
+         * (up to the adversary's final hop), we need to remove this,
+         * or somehow mark the circuit with a special path state.
          */
-        circ->path_state = PATH_STATE_USE_SUCCEEDED;
+
         /* This must be called before the purpose change */
         pathbias_check_close(circ, END_CIRC_REASON_FINISHED);
       }
@@ -1621,7 +1615,7 @@ circuit_get_open_circ_or_launch(entry_connection_t *conn,
   want_onehop = conn->want_onehop;
 
   need_uptime = !conn->want_onehop && !conn->use_begindir &&
-                smartlist_string_num_isin(options->LongLivedPorts,
+                smartlist_contains_int_as_string(options->LongLivedPorts,
                                           conn->socks_request->port);
 
   if (desired_circuit_purpose != CIRCUIT_PURPOSE_C_GENERAL)
@@ -2036,6 +2030,8 @@ connection_ap_handshake_attach_chosen_circuit(entry_connection_t *conn,
   if (!circ->base_.timestamp_dirty)
     circ->base_.timestamp_dirty = time(NULL);
 
+  pathbias_count_use_attempt(circ);
+
   link_apconn_to_circ(conn, circ, cpath);
   tor_assert(conn->socks_request);
   if (conn->socks_request->command == SOCKS_COMMAND_CONNECT) {
@@ -2162,6 +2158,11 @@ connection_ap_handshake_attach_circuit(entry_connection_t *conn)
        * feasibility, at this point.
        */
       rendcirc->base_.timestamp_dirty = time(NULL);
+
+      /* We've also attempted to use them. If they fail, we need to
+       * probe them for path bias */
+      pathbias_count_use_attempt(rendcirc);
+
       link_apconn_to_circ(conn, rendcirc, NULL);
       if (connection_ap_handshake_send_begin(conn) < 0)
         return 0; /* already marked, let them fade away */
@@ -2213,6 +2214,10 @@ connection_ap_handshake_attach_circuit(entry_connection_t *conn)
         case 0: /* success */
           rendcirc->base_.timestamp_dirty = time(NULL);
           introcirc->base_.timestamp_dirty = time(NULL);
+
+          pathbias_count_use_attempt(introcirc);
+          pathbias_count_use_attempt(rendcirc);
+
           assert_circuit_ok(TO_CIRCUIT(rendcirc));
           assert_circuit_ok(TO_CIRCUIT(introcirc));
           return 0;

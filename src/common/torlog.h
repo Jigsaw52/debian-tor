@@ -1,7 +1,7 @@
 /* Copyright (c) 2001, Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -153,7 +153,6 @@ void set_log_time_granularity(int granularity_msec);
 
 void tor_log(int severity, log_domain_mask_t domain, const char *format, ...)
   CHECK_PRINTF(3,4);
-#define log tor_log /* hack it so we don't conflict with log() as much */
 
 #if defined(__GNUC__) || defined(RUNNING_DOXYGEN)
 extern int log_global_min_severity_;

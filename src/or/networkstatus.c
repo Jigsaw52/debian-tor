@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -561,7 +561,7 @@ networkstatus_check_consensus_signature(networkstatus_t *consensus,
   if (warn >= 0) {
     SMARTLIST_FOREACH(unrecognized, networkstatus_voter_info_t *, voter,
       {
-        log(severity, LD_DIR, "Consensus includes unrecognized authority "
+        tor_log(severity, LD_DIR, "Consensus includes unrecognized authority "
                  "'%s' at %s:%d (contact %s; identity %s)",
                  voter->nickname, voter->address, (int)voter->dir_port,
                  voter->contact?voter->contact:"n/a",
@@ -569,7 +569,7 @@ networkstatus_check_consensus_signature(networkstatus_t *consensus,
       });
     SMARTLIST_FOREACH(need_certs_from, networkstatus_voter_info_t *, voter,
       {
-        log(severity, LD_DIR, "Looks like we need to download a new "
+        tor_log(severity, LD_DIR, "Looks like we need to download a new "
                  "certificate from authority '%s' at %s:%d (contact %s; "
                  "identity %s)",
                  voter->nickname, voter->address, (int)voter->dir_port,
@@ -578,7 +578,7 @@ networkstatus_check_consensus_signature(networkstatus_t *consensus,
       });
     SMARTLIST_FOREACH(missing_authorities, dir_server_t *, ds,
       {
-        log(severity, LD_DIR, "Consensus does not include configured "
+        tor_log(severity, LD_DIR, "Consensus does not include configured "
                  "authority '%s' at %s:%d (identity %s)",
                  ds->nickname, ds->address, (int)ds->dir_port,
                  hex_str(ds->v3_identity_digest, DIGEST_LEN));
@@ -614,7 +614,7 @@ networkstatus_check_consensus_signature(networkstatus_t *consensus,
                       "because we were missing the keys.", n_missing_key);
       }
       joined = smartlist_join_strings(sl, " ", 0, NULL);
-      log(severity, LD_DIR, "%s", joined);
+      tor_log(severity, LD_DIR, "%s", joined);
       tor_free(joined);
       SMARTLIST_FOREACH(sl, char *, c, tor_free(c));
       smartlist_free(sl);
@@ -774,7 +774,7 @@ router_set_networkstatus_v2(const char *s, time_t arrived_at,
   }
 
   if (requested_fingerprints) {
-    if (smartlist_string_isin(requested_fingerprints, fp)) {
+    if (smartlist_contains_string(requested_fingerprints, fp)) {
       smartlist_string_remove(requested_fingerprints, fp);
     } else {
       if (source != NS_FROM_DIR_ALL) {
@@ -2239,6 +2239,21 @@ networkstatus_get_param(const networkstatus_t *ns, const char *param_name,
                                  default_val, min_val, max_val);
 }
 
+/**
+ * Retrieve the consensus parameter that governs the
+ * fixed-point precision of our network balancing 'bandwidth-weights'
+ * (which are themselves integer consensus values). We divide them
+ * by this value and ensure they never exceed this value.
+ */
+int
+networkstatus_get_weight_scale_param(networkstatus_t *ns)
+{
+  return networkstatus_get_param(ns, "bwweightscale",
+                                 BW_WEIGHT_SCALE,
+                                 BW_MIN_WEIGHT_SCALE,
+                                 BW_MAX_WEIGHT_SCALE);
+}
+
 /** Return the value of a integer bw weight parameter from the networkstatus
  * <b>ns</b> whose name is <b>weight_name</b>.  If <b>ns</b> is NULL, try
  * loading the latest consensus ourselves. Return <b>default_val</b> if no
@@ -2255,7 +2270,7 @@ networkstatus_get_bw_weight(networkstatus_t *ns, const char *weight_name,
   if (!ns || !ns->weight_params)
     return default_val;
 
-  max = circuit_build_times_get_bw_scale(ns);
+  max = networkstatus_get_weight_scale_param(ns);
   param = get_net_param_from_list(ns->weight_params, weight_name,
                                   default_val, -1,
                                   BW_MAX_WEIGHT_SCALE);

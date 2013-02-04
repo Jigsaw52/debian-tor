@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -37,6 +37,7 @@
 #include "router.h"
 #include "routerlist.h"
 #include "routerset.h"
+#include "circuitbuild.h"
 
 #ifdef HAVE_LINUX_TYPES_H
 #include <linux/types.h>
@@ -641,6 +642,10 @@ connection_ap_expire_beginning(void)
                " '%s.onion'.",
                seconds_idle,
                safe_str_client(entry_conn->socks_request->address));
+        /* Roll back path bias use state so that we probe the circuit
+         * if nothing else succeeds on it */
+        pathbias_mark_use_rollback(TO_ORIGIN_CIRCUIT(circ));
+
         connection_edge_end(conn, END_STREAM_REASON_TIMEOUT);
         connection_mark_unattached_ap(entry_conn, END_STREAM_REASON_TIMEOUT);
       }
@@ -805,6 +810,10 @@ connection_ap_detach_retriable(entry_connection_t *conn,
   control_event_stream_status(conn, STREAM_EVENT_FAILED_RETRIABLE, reason);
   ENTRY_TO_CONN(conn)->timestamp_lastread = time(NULL);
 
+  /* Roll back path bias use state so that we probe the circuit
+   * if nothing else succeeds on it */
+  pathbias_mark_use_rollback(circ);
+
   if (conn->pending_optimistic_data) {
     generic_buffer_set_to_copy(&conn->sending_optimistic_data,
                                conn->pending_optimistic_data);
@@ -829,9 +838,10 @@ static int
 consider_plaintext_ports(entry_connection_t *conn, uint16_t port)
 {
   const or_options_t *options = get_options();
-  int reject = smartlist_string_num_isin(options->RejectPlaintextPorts, port);
+  int reject = smartlist_contains_int_as_string(
+                                     options->RejectPlaintextPorts, port);
 
-  if (smartlist_string_num_isin(options->WarnPlaintextPorts, port)) {
+  if (smartlist_contains_int_as_string(options->WarnPlaintextPorts, port)) {
     log_warn(LD_APP, "Application request to port %d: this port is "
              "commonly used for unencrypted protocols. Please make sure "
              "you don't send anything you would mind the rest of the "
@@ -2204,8 +2214,10 @@ connection_ap_handshake_socks_reply(entry_connection_t *conn, char *reply,
                U64_PRINTF_ARG(ENTRY_TO_CONN(conn)->global_identifier),
                endreason);
     } else {
-      TO_ORIGIN_CIRCUIT(conn->edge_.on_circuit)->path_state
-          = PATH_STATE_USE_SUCCEEDED;
+      // XXX: Hrmm. It looks like optimistic data can't go through this
+      // codepath, but someone should probably test it and make sure.
+      // We don't want to mark optimistically opened streams as successful.
+      pathbias_mark_use_success(TO_ORIGIN_CIRCUIT(conn->edge_.on_circuit));
     }
   }
 
@@ -2479,7 +2491,7 @@ connection_exit_begin_conn(cell_t *cell, circuit_t *circ)
     connection_exit_connect(n_stream);
 
     /* For path bias: This circuit was used successfully */
-    origin_circ->path_state = PATH_STATE_USE_SUCCEEDED;
+    pathbias_mark_use_success(origin_circ);
 
     tor_free(address);
     return 0;
@@ -2812,6 +2824,9 @@ connection_ap_can_use_exit(const entry_connection_t *conn, const node_t *exit)
 /** If address is of the form "y.onion" with a well-formed handle y:
  *     Put a NUL after y, lower-case it, and return ONION_HOSTNAME.
  *
+ *  If address is of the form "x.y.onion" with a well-formed handle x:
+ *     Drop "x.", put a NUL after y, lower-case it, and return ONION_HOSTNAME.
+ *
  * If address is of the form "y.onion" with a badly-formed handle y:
  *     Return BAD_HOSTNAME and log a message.
  *
@@ -2825,6 +2840,7 @@ hostname_type_t
 parse_extended_hostname(char *address)
 {
     char *s;
+    char *q;
     char query[REND_SERVICE_ID_LEN_BASE32+1];
 
     s = strrchr(address,'.');
@@ -2839,9 +2855,18 @@ parse_extended_hostname(char *address)
 
     /* so it is .onion */
     *s = 0; /* NUL-terminate it */
-    if (strlcpy(query, address, REND_SERVICE_ID_LEN_BASE32+1) >=
+    /* locate a 'sub-domain' component, in order to remove it */
+    q = strrchr(address, '.');
+    if (q == address) {
+      goto failed; /* reject sub-domain, as DNS does */
+    }
+    q = (NULL == q) ? address : q + 1;
+    if (strlcpy(query, q, REND_SERVICE_ID_LEN_BASE32+1) >=
         REND_SERVICE_ID_LEN_BASE32+1)
       goto failed;
+    if (q != address) {
+      memmove(address, q, strlen(q) + 1 /* also get \0 */);
+    }
     if (rend_valid_service_id(query)) {
       return ONION_HOSTNAME; /* success */
     }

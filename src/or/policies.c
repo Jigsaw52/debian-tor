@@ -1,6 +1,6 @@
 /* Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -374,7 +374,7 @@ addr_is_in_cc_list(uint32_t addr, const smartlist_t *cc_list)
   tor_addr_from_ipv4h(&tar, addr);
   country = geoip_get_country_by_addr(&tar);
   name = geoip_get_country_name(country);
-  return smartlist_string_isin_case(cc_list, name);
+  return smartlist_contains_string_case(cc_list, name);
 }
 
 /** Return 1 if <b>addr</b>:<b>port</b> is permitted to publish to our
@@ -881,7 +881,7 @@ exit_policy_remove_redundancies(smartlist_t *dest)
         char p1[POLICY_BUF_LEN], p2[POLICY_BUF_LEN];
         policy_write_item(p1, sizeof(p1), tmp, 0);
         policy_write_item(p2, sizeof(p2), ap, 0);
-        log(LOG_DEBUG, LD_CONFIG, "Removing exit policy %s (%d).  It is made "
+        log_debug(LD_CONFIG, "Removing exit policy %s (%d).  It is made "
             "redundant by %s (%d).", p1, j, p2, i);
         smartlist_del_keeporder(dest, j--);
         addr_policy_free(tmp);
@@ -910,7 +910,7 @@ exit_policy_remove_redundancies(smartlist_t *dest)
           char p1[POLICY_BUF_LEN], p2[POLICY_BUF_LEN];
           policy_write_item(p1, sizeof(p1), ap, 0);
           policy_write_item(p2, sizeof(p2), tmp, 0);
-          log(LOG_DEBUG, LD_CONFIG, "Removing exit policy %s.  It is already "
+          log_debug(LD_CONFIG, "Removing exit policy %s.  It is already "
               "covered by %s.", p1, p2);
           smartlist_del_keeporder(dest, i--);
           addr_policy_free(ap);

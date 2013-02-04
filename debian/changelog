@@ -1,3 +1,9 @@
+tor (0.2.4.10-alpha-1) experimental; urgency=low
+
+  * New upstream version.
+
+ -- Peter Palfrader <weasel@debian.org>  Tue, 05 Feb 2013 00:08:36 +0100
+
 tor (0.2.4.9-alpha-1) experimental; urgency=low
 
   * New upstream version.

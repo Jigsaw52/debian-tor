@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -730,7 +730,7 @@ connection_ap_process_end_not_open(
        * We rely on recognized+digest being strong enough to make
        * tags unlikely to allow us to get tagged, yet 'recognized'
        * reason codes here. */
-      circ->path_state = PATH_STATE_USE_SUCCEEDED;
+      pathbias_mark_use_success(circ);
     }
   }
 
@@ -1176,6 +1176,23 @@ connection_edge_process_relay_cell(cell_t *cell, circuit_t *circ,
     return - END_CIRC_REASON_TORPROTOCOL;
   }
 
+  if (rh.stream_id == 0) {
+    switch (rh.command) {
+      case RELAY_COMMAND_BEGIN:
+      case RELAY_COMMAND_CONNECTED:
+      case RELAY_COMMAND_DATA:
+      case RELAY_COMMAND_END:
+      case RELAY_COMMAND_RESOLVE:
+      case RELAY_COMMAND_RESOLVED:
+      case RELAY_COMMAND_BEGIN_DIR:
+        log_fn(LOG_PROTOCOL_WARN, LD_PROTOCOL, "Relay command %d with zero "
+               "stream_id. Dropping.", (int)rh.command);
+        return 0;
+      default:
+        ;
+    }
+  }
+
   /* either conn is NULL, in which case we've got a control cell, or else
    * conn points to the recognized stream. */
 
@@ -1426,7 +1443,8 @@ connection_edge_process_relay_cell(cell_t *cell, circuit_t *circ,
             /*XXXX024: Downgrade this back to LOG_PROTOCOL_WARN after a while*/
             log_fn(LOG_WARN, LD_PROTOCOL,
                    "Bug/attack: unexpected sendme cell from client. "
-                   "Closing circ.");
+                   "Closing circ (window %d).",
+                   circ->package_window);
             return -END_CIRC_REASON_TORPROTOCOL;
           }
           circ->package_window += CIRCWINDOW_INCREMENT;
@@ -2006,8 +2024,9 @@ dump_cell_pool_usage(int severity)
       n_cells += TO_OR_CIRCUIT(c)->p_chan_cells.n;
     ++n_circs;
   }
-  log(severity, LD_MM, "%d cells allocated on %d circuits. %d cells leaked.",
-      n_cells, n_circs, total_cells_allocated - n_cells);
+  tor_log(severity, LD_MM,
+          "%d cells allocated on %d circuits. %d cells leaked.",
+          n_cells, n_circs, total_cells_allocated - n_cells);
   mp_pool_log_status(cell_pool, severity);
 }
 

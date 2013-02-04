@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -762,7 +762,7 @@ entry_guards_set_from_config(const or_options_t *options)
                     smartlist_add(entry_fps, (void*)node->identity));
 
   SMARTLIST_FOREACH(entry_guards, entry_guard_t *, e, {
-    if (smartlist_digest_isin(entry_fps, e->identity))
+    if (smartlist_contains_digest(entry_fps, e->identity))
       smartlist_add(old_entry_guards_on_list, e);
     else
       smartlist_add(old_entry_guards_not_on_list, e);
@@ -901,7 +901,7 @@ choose_random_entry_impl(cpath_build_state_t *state, int for_directory,
       }
       if (node == chosen_exit)
         continue; /* don't pick the same node for entry and exit */
-      if (consider_exit_family && smartlist_isin(exit_family, node))
+      if (consider_exit_family && smartlist_contains(exit_family, node))
         continue; /* avoid relays that are family members of our exit */
 #if 0 /* since EntryNodes is always strict now, this clause is moot */
       if (options->EntryNodes &&
@@ -1098,6 +1098,40 @@ entry_guards_parse_state(or_state_t *state, int set, char **msg)
         continue;
       }
       digestmap_set(added_by, d, tor_strdup(line->value+HEX_DIGEST_LEN+1));
+    } else if (!strcasecmp(line->key, "EntryGuardPathUseBias")) {
+      const or_options_t *options = get_options();
+      double use_cnt, success_cnt;
+
+      if (!node) {
+        *msg = tor_strdup("Unable to parse entry nodes: "
+               "EntryGuardPathUseBias without EntryGuard");
+        break;
+      }
+
+      if (tor_sscanf(line->value, "%lf %lf",
+                     &use_cnt, &success_cnt) != 2) {
+        log_info(LD_GENERAL, "Malformed path use bias line for node %s",
+                 node->nickname);
+        continue;
+      }
+
+      node->use_attempts = use_cnt;
+      node->use_successes = success_cnt;
+
+      log_info(LD_GENERAL, "Read %f/%f path use bias for node %s",
+               node->use_successes, node->use_attempts, node->nickname);
+
+      /* Note: We rely on the < comparison here to allow us to set a 0
+       * rate and disable the feature entirely. If refactoring, don't
+       * change to <= */
+      if (pathbias_get_use_success_count(node)/node->use_attempts
+            < pathbias_get_extreme_use_rate(options) &&
+          pathbias_get_dropguards(options)) {
+        node->path_bias_disabled = 1;
+        log_info(LD_GENERAL,
+                 "Path use bias is too high (%f/%f); disabling node %s",
+                 node->circ_successes, node->circ_attempts, node->nickname);
+      }
     } else if (!strcasecmp(line->key, "EntryGuardPathBias")) {
       const or_options_t *options = get_options();
       double hop_cnt, success_cnt, timeouts, collapsed, successful_closed,
@@ -1144,7 +1178,7 @@ entry_guards_parse_state(or_state_t *state, int set, char **msg)
       /* Note: We rely on the < comparison here to allow us to set a 0
        * rate and disable the feature entirely. If refactoring, don't
        * change to <= */
-      if (pathbias_get_success_count(node)/node->circ_attempts
+      if (pathbias_get_close_success_count(node)/node->circ_attempts
             < pathbias_get_extreme_rate(options) &&
           pathbias_get_dropguards(options)) {
         node->path_bias_disabled = 1;
@@ -1282,8 +1316,18 @@ entry_guards_update_state(or_state_t *state)
          *                                     unusable_circuits */
         tor_asprintf(&line->value, "%f %f %f %f %f %f",
                      e->circ_attempts, e->circ_successes,
-                     pathbias_get_closed_count(e), e->collapsed_circuits,
+                     pathbias_get_close_success_count(e),
+                     e->collapsed_circuits,
                      e->unusable_circuits, e->timeouts);
+        next = &(line->next);
+      }
+      if (e->use_attempts > 0) {
+        *next = line = tor_malloc_zero(sizeof(config_line_t));
+        line->key = tor_strdup("EntryGuardPathUseBias");
+
+        tor_asprintf(&line->value, "%f %f",
+                     e->use_attempts,
+                     pathbias_get_use_success_count(e));
         next = &(line->next);
       }
 
@@ -1501,9 +1545,17 @@ learned_router_identity(const tor_addr_t *addr, uint16_t port,
   bridge_info_t *bridge =
     get_configured_bridge_by_addr_port_digest(addr, port, digest);
   if (bridge && tor_digest_is_zero(bridge->identity)) {
+    char *transport_info = NULL;
+    const char *transport_name =
+      find_transport_name_by_bridge_addrport(addr, port);
+    if (transport_name)
+      tor_asprintf(&transport_info, " (with transport '%s')", transport_name);
+
     memcpy(bridge->identity, digest, DIGEST_LEN);
-    log_notice(LD_DIR, "Learned fingerprint %s for bridge %s",
-               hex_str(digest, DIGEST_LEN), fmt_addrport(addr, port));
+    log_notice(LD_DIR, "Learned fingerprint %s for bridge %s%s.",
+               hex_str(digest, DIGEST_LEN), fmt_addrport(addr, port),
+               transport_info ? transport_info : "");
+    tor_free(transport_info);
   }
 }
 
@@ -1629,7 +1681,9 @@ find_bridge_by_digest(const char *digest)
   return NULL;
 }
 
-/* DOCDOC find_transport_name_by_bridge_addrport */
+/** Given the <b>addr</b> and <b>port</b> of a bridge, if that bridge
+ *  supports a pluggable transport, return its name. Otherwise, return
+ *  NULL. */
 const char *
 find_transport_name_by_bridge_addrport(const tor_addr_t *addr, uint16_t port)
 {

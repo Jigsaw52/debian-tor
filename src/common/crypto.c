@@ -1,7 +1,7 @@
 /* Copyright (c) 2001, Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -151,10 +151,11 @@ crypto_log_errors(int severity, const char *doing)
     if (!lib) lib = "(null)";
     if (!func) func = "(null)";
     if (doing) {
-      log(severity, LD_CRYPTO, "crypto error while %s: %s (in %s:%s)",
-          doing, msg, lib, func);
+      tor_log(severity, LD_CRYPTO, "crypto error while %s: %s (in %s:%s)",
+              doing, msg, lib, func);
     } else {
-      log(severity, LD_CRYPTO, "crypto error: %s (in %s:%s)", msg, lib, func);
+      tor_log(severity, LD_CRYPTO, "crypto error: %s (in %s:%s)",
+              msg, lib, func);
     }
   }
 }
@@ -168,10 +169,10 @@ log_engine(const char *fn, ENGINE *e)
     const char *name, *id;
     name = ENGINE_get_name(e);
     id = ENGINE_get_id(e);
-    log(LOG_NOTICE, LD_CRYPTO, "Using OpenSSL engine %s [%s] for %s",
+    log_notice(LD_CRYPTO, "Using OpenSSL engine %s [%s] for %s",
         name?name:"?", id?id:"?", fn);
   } else {
-    log(LOG_INFO, LD_CRYPTO, "Using default implementation for %s", fn);
+    log_info(LD_CRYPTO, "Using default implementation for %s", fn);
   }
 }
 #endif
@@ -1505,7 +1506,7 @@ struct crypto_digest_t {
     SHA256_CTX sha2; /**< state for SHA256 */
   } d; /**< State for the digest we're using.  Only one member of the
         * union is usable, depending on the value of <b>algorithm</b>. */
-  digest_algorithm_t algorithm : 8; /**< Which algorithm is in use? */
+  ENUM_BF(digest_algorithm_t) algorithm : 8; /**< Which algorithm is in use? */
 };
 
 /** Allocate and return a new digest object to compute SHA1 digests.
@@ -2579,7 +2580,7 @@ smartlist_shuffle(smartlist_t *sl)
   }
 }
 
-/** Base-64 encode <b>srclen</b> bytes of data from <b>src</b>.  Write
+/** Base64 encode <b>srclen</b> bytes of data from <b>src</b>.  Write
  * the result into <b>dest</b>, if it will fit within <b>destlen</b>
  * bytes.  Return the number of bytes written on success; -1 if
  * destlen is too short, or other failure.
@@ -2638,7 +2639,7 @@ static const uint8_t base64_decode_table[256] = {
   X, X, X, X, X, X, X, X, X, X, X, X, X, X, X, X,
 };
 
-/** Base-64 decode <b>srclen</b> bytes of data from <b>src</b>.  Write
+/** Base64 decode <b>srclen</b> bytes of data from <b>src</b>.  Write
  * the result into <b>dest</b>, if it will fit within <b>destlen</b>
  * bytes.  Return the number of bytes written on success; -1 if
  * destlen is too short, or other failure.
@@ -2745,7 +2746,7 @@ base64_decode(char *dest, size_t destlen, const char *src, size_t srclen)
 #undef SP
 #undef PAD
 
-/** Base-64 encode DIGEST_LINE bytes from <b>digest</b>, remove the trailing =
+/** Base64 encode DIGEST_LINE bytes from <b>digest</b>, remove the trailing =
  * and newline characters, and store the nul-terminated result in the first
  * BASE64_DIGEST_LEN+1 bytes of <b>d64</b>.  */
 int
@@ -2758,7 +2759,7 @@ digest_to_base64(char *d64, const char *digest)
   return 0;
 }
 
-/** Given a base-64 encoded, nul-terminated digest in <b>d64</b> (without
+/** Given a base64 encoded, nul-terminated digest in <b>d64</b> (without
  * trailing newline or = characters), decode it and store the result in the
  * first DIGEST_LEN bytes at <b>digest</b>. */
 int
@@ -2783,7 +2784,7 @@ digest_from_base64(char *digest, const char *d64)
 #endif
 }
 
-/** Base-64 encode DIGEST256_LINE bytes from <b>digest</b>, remove the
+/** Base64 encode DIGEST256_LINE bytes from <b>digest</b>, remove the
  * trailing = and newline characters, and store the nul-terminated result in
  * the first BASE64_DIGEST256_LEN+1 bytes of <b>d64</b>.  */
 int
@@ -2796,7 +2797,7 @@ digest256_to_base64(char *d64, const char *digest)
   return 0;
 }
 
-/** Given a base-64 encoded, nul-terminated digest in <b>d64</b> (without
+/** Given a base64 encoded, nul-terminated digest in <b>d64</b> (without
  * trailing newline or = characters), decode it and store the result in the
  * first DIGEST256_LEN bytes at <b>digest</b>. */
 int

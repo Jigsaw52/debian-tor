@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #include "or.h"
@@ -95,7 +95,7 @@ routerset_refresh_countries(routerset_t *target)
       tor_assert(cc < target->n_countries);
       bitarray_set(target->countries, cc);
     } else {
-      log(LOG_WARN, LD_CONFIG, "Country code '%s' is not recognized.",
+      log_warn(LD_CONFIG, "Country code '%s' is not recognized.",
           country);
     }
   } SMARTLIST_FOREACH_END(country);
@@ -222,6 +222,45 @@ routerset_contains(const routerset_t *set, const tor_addr_t *addr,
     if (country >= 0 && country < set->n_countries &&
         bitarray_is_set(set->countries, country))
       return 2;
+  }
+  return 0;
+}
+
+/** If *<b>setp</b> includes at least one country code, or if
+ * <b>only_some_cc_set</b> is 0, add the ?? and A1 country codes to
+ * *<b>setp</b>, creating it as needed.  Return true iff *<b>setp</b> changed.
+ */
+int
+routerset_add_unknown_ccs(routerset_t **setp, int only_if_some_cc_set)
+{
+  routerset_t *set;
+  int add_unknown, add_a1;
+  if (only_if_some_cc_set) {
+    if (!*setp || smartlist_len((*setp)->country_names) == 0)
+      return 0;
+  }
+  if (!*setp)
+    *setp = routerset_new();
+
+  set = *setp;
+
+  add_unknown = ! smartlist_contains_string_case(set->country_names, "??") &&
+    geoip_get_country("??") >= 0;
+  add_a1 = ! smartlist_contains_string_case(set->country_names, "a1") &&
+    geoip_get_country("A1") >= 0;
+
+  if (add_unknown) {
+    smartlist_add(set->country_names, tor_strdup("??"));
+    smartlist_add(set->list, tor_strdup("{??}"));
+  }
+  if (add_a1) {
+    smartlist_add(set->country_names, tor_strdup("a1"));
+    smartlist_add(set->country_names, tor_strdup("{a1}"));
+  }
+
+  if (add_unknown || add_a1) {
+    routerset_refresh_countries(set);
+    return 1;
   }
   return 0;
 }

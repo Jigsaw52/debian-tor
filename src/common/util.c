@@ -1,6 +1,6 @@
 /* Copyright (c) 2003, Roger Dingledine
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -20,7 +20,6 @@
 #define UTIL_PRIVATE
 #include "util.h"
 #include "torlog.h"
-#undef log
 #include "crypto.h"
 #include "torint.h"
 #include "container.h"
@@ -323,8 +322,8 @@ tor_log_mallinfo(int severity)
  * ===== */
 
 /**
- * Returns the natural logarithm of d base 2.  We define this wrapper here so
- * as to make it easier not to conflict with Tor's log() macro.
+ * Returns the natural logarithm of d base e.  We defined this wrapper here so
+ * to avoid conflicts with old versions of tor_log(), which were named log().
  */
 double
 tor_mathlog(double d)
@@ -4919,7 +4918,8 @@ tor_check_port_forwarding(const char *filename,
     status = tor_spawn_background(filename, argv, NULL, &child_handle);
 #endif
 
-    tor_free(argv);
+    tor_free_((void*)argv);
+    argv=NULL;
 
     if (PROCESS_STATUS_ERROR == status) {
       log_warn(LD_GENERAL, "Failed to start port forwarding helper %s",

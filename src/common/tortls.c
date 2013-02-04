@@ -1,6 +1,6 @@
 /* Copyright (c) 2003, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -147,6 +147,12 @@ typedef struct tor_tls_context_t {
 
 #define TOR_TLS_MAGIC 0x71571571
 
+typedef enum {
+    TOR_TLS_ST_HANDSHAKE, TOR_TLS_ST_OPEN, TOR_TLS_ST_GOTCLOSE,
+    TOR_TLS_ST_SENTCLOSE, TOR_TLS_ST_CLOSED, TOR_TLS_ST_RENEGOTIATE,
+    TOR_TLS_ST_BUFFEREVENT
+} tor_tls_state_t;
+
 /** Holds a SSL object and its associated data.  Members are only
  * accessed from within tortls.c.
  */
@@ -156,12 +162,9 @@ struct tor_tls_t {
   SSL *ssl; /**< An OpenSSL SSL object. */
   int socket; /**< The underlying file descriptor for this TLS connection. */
   char *address; /**< An address to log when describing this connection. */
-  enum {
-    TOR_TLS_ST_HANDSHAKE, TOR_TLS_ST_OPEN, TOR_TLS_ST_GOTCLOSE,
-    TOR_TLS_ST_SENTCLOSE, TOR_TLS_ST_CLOSED, TOR_TLS_ST_RENEGOTIATE,
-    TOR_TLS_ST_BUFFEREVENT
-  } state : 3; /**< The current SSL state, depending on which operations have
-                * completed successfully. */
+  ENUM_BF(tor_tls_state_t) state : 3; /**< The current SSL state,
+                                       * depending on which operations
+                                       * have completed successfully. */
   unsigned int isServer:1; /**< True iff this is a server-side connection */
   unsigned int wasV2Handshake:1; /**< True iff the original handshake for
                                   * this connection used the updated version
@@ -331,11 +334,11 @@ tor_tls_log_one_error(tor_tls_t *tls, unsigned long err,
   if (!lib) lib = "(null)";
   if (!func) func = "(null)";
   if (doing) {
-    log(severity, domain, "TLS error while %s%s%s: %s (in %s:%s:%s)",
+    tor_log(severity, domain, "TLS error while %s%s%s: %s (in %s:%s:%s)",
         doing, addr?" with ":"", addr?addr:"",
         msg, lib, func, state);
   } else {
-    log(severity, domain, "TLS error%s%s: %s (in %s:%s:%s)",
+    tor_log(severity, domain, "TLS error%s%s: %s (in %s:%s:%s)",
         addr?" with ":"", addr?addr:"",
         msg, lib, func, state);
   }
@@ -359,35 +362,19 @@ tls_log_errors(tor_tls_t *tls, int severity, int domain, const char *doing)
 static int
 tor_errno_to_tls_error(int e)
 {
-#if defined(_WIN32)
   switch (e) {
-    case WSAECONNRESET: // most common
+    case SOCK_ERRNO(ECONNRESET): // most common
       return TOR_TLS_ERROR_CONNRESET;
-    case WSAETIMEDOUT:
+    case SOCK_ERRNO(ETIMEDOUT):
       return TOR_TLS_ERROR_TIMEOUT;
-    case WSAENETUNREACH:
-    case WSAEHOSTUNREACH:
+    case SOCK_ERRNO(EHOSTUNREACH):
+    case SOCK_ERRNO(ENETUNREACH):
       return TOR_TLS_ERROR_NO_ROUTE;
-    case WSAECONNREFUSED:
+    case SOCK_ERRNO(ECONNREFUSED):
       return TOR_TLS_ERROR_CONNREFUSED; // least common
     default:
       return TOR_TLS_ERROR_MISC;
   }
-#else
-  switch (e) {
-    case ECONNRESET: // most common
-      return TOR_TLS_ERROR_CONNRESET;
-    case ETIMEDOUT:
-      return TOR_TLS_ERROR_TIMEOUT;
-    case EHOSTUNREACH:
-    case ENETUNREACH:
-      return TOR_TLS_ERROR_NO_ROUTE;
-    case ECONNREFUSED:
-      return TOR_TLS_ERROR_CONNREFUSED; // least common
-    default:
-      return TOR_TLS_ERROR_MISC;
-  }
-#endif
 }
 
 /** Given a TOR_TLS_* error code, return a string equivalent. */
@@ -440,12 +427,12 @@ tor_tls_get_error(tor_tls_t *tls, int r, int extra,
       if (extra&CATCH_SYSCALL)
         return TOR_TLS_SYSCALL_;
       if (r == 0) {
-        log(severity, LD_NET, "TLS error: unexpected close while %s (%s)",
+        tor_log(severity, LD_NET, "TLS error: unexpected close while %s (%s)",
             doing, SSL_state_string_long(tls->ssl));
         tor_error = TOR_TLS_ERROR_IO;
       } else {
         int e = tor_socket_errno(tls->socket);
-        log(severity, LD_NET,
+        tor_log(severity, LD_NET,
             "TLS error: <syscall error while %s> (errno=%d: %s; state=%s)",
             doing, e, tor_socket_strerror(e),
             SSL_state_string_long(tls->ssl));
@@ -456,7 +443,7 @@ tor_tls_get_error(tor_tls_t *tls, int r, int extra,
     case SSL_ERROR_ZERO_RETURN:
       if (extra&CATCH_ZERO)
         return TOR_TLS_ZERORETURN_;
-      log(severity, LD_NET, "TLS connection closed while %s in state %s",
+      tor_log(severity, LD_NET, "TLS connection closed while %s in state %s",
           doing, SSL_state_string_long(tls->ssl));
       tls_log_errors(tls, severity, domain, doing);
       return TOR_TLS_CLOSE;
@@ -1237,7 +1224,7 @@ tor_tls_context_new(crypto_pk_t *identity, unsigned int key_lifetime,
     authcert = tor_tls_create_certificate(rsa_auth, identity, nickname, nn2,
                                           key_lifetime);
     if (!cert || !idcert || !authcert) {
-      log(LOG_WARN, LD_CRYPTO, "Error creating certificate");
+      log_warn(LD_CRYPTO, "Error creating certificate");
       goto error;
     }
   }
@@ -2285,7 +2272,7 @@ tor_tls_shutdown(tor_tls_t *tls)
        */
       if (tls->state == TOR_TLS_ST_GOTCLOSE ||
          tls->state == TOR_TLS_ST_SENTCLOSE) {
-        log(LOG_WARN, LD_NET,
+        log_warn(LD_NET,
             "TLS returned \"half-closed\" value while already half-closed");
         return TOR_TLS_ERROR_MISC;
       }
@@ -2335,7 +2322,7 @@ log_cert_lifetime(int severity, const X509 *cert, const char *problem)
   struct tm tm;
 
   if (problem)
-    log(severity, LD_GENERAL,
+    tor_log(severity, LD_GENERAL,
         "Certificate %s. Either their clock is set wrong, or your clock "
         "is wrong.",
            problem);
@@ -2360,7 +2347,7 @@ log_cert_lifetime(int severity, const X509 *cert, const char *problem)
 
   strftime(mytime, 32, "%b %d %H:%M:%S %Y UTC", tor_gmtime_r(&now, &tm));
 
-  log(severity, LD_GENERAL,
+  tor_log(severity, LD_GENERAL,
       "(certificate lifetime runs from %s through %s. Your time is %s.)",
       s1,s2,mytime);
 
@@ -2581,7 +2568,7 @@ check_no_tls_errors_(const char *fname, int line)
 {
   if (ERR_peek_error() == 0)
     return;
-  log(LOG_WARN, LD_CRYPTO, "Unhandled OpenSSL errors found at %s:%d: ",
+  log_warn(LD_CRYPTO, "Unhandled OpenSSL errors found at %s:%d: ",
       tor_fix_source_file(fname), line);
   tls_log_errors(NULL, LOG_WARN, LD_NET, NULL);
 }

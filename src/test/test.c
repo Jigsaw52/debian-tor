@@ -1,6 +1,6 @@
 /* Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /* Ordinarily defined in tor_main.c; this bit is just here to provide one
@@ -1412,11 +1412,20 @@ test_rend_fns(void)
   char address2[] = "aaaaaaaaaaaaaaaa.onion";
   char address3[] = "fooaddress.exit";
   char address4[] = "www.torproject.org";
+  char address5[] = "foo.abcdefghijklmnop.onion";
+  char address6[] = "foo.bar.abcdefghijklmnop.onion";
+  char address7[] = ".abcdefghijklmnop.onion";
 
   test_assert(BAD_HOSTNAME == parse_extended_hostname(address1));
   test_assert(ONION_HOSTNAME == parse_extended_hostname(address2));
+  test_streq(address2, "aaaaaaaaaaaaaaaa");
   test_assert(EXIT_HOSTNAME == parse_extended_hostname(address3));
   test_assert(NORMAL_HOSTNAME == parse_extended_hostname(address4));
+  test_assert(ONION_HOSTNAME == parse_extended_hostname(address5));
+  test_streq(address5, "abcdefghijklmnop");
+  test_assert(ONION_HOSTNAME == parse_extended_hostname(address6));
+  test_streq(address6, "abcdefghijklmnop");
+  test_assert(BAD_HOSTNAME == parse_extended_hostname(address7));
 
   pk1 = pk_generate(0);
   pk2 = pk_generate(1);
@@ -1520,59 +1529,35 @@ test_geoip(void)
   *dirreq_stats_1 =
       "dirreq-stats-end 2010-08-12 13:27:30 (86400 s)\n"
       "dirreq-v3-ips ab=8\n"
-      "dirreq-v2-ips \n"
       "dirreq-v3-reqs ab=8\n"
-      "dirreq-v2-reqs \n"
       "dirreq-v3-resp ok=0,not-enough-sigs=0,unavailable=0,not-found=0,"
           "not-modified=0,busy=0\n"
-      "dirreq-v2-resp ok=0,unavailable=0,not-found=0,not-modified=0,"
-          "busy=0\n"
       "dirreq-v3-direct-dl complete=0,timeout=0,running=0\n"
-      "dirreq-v2-direct-dl complete=0,timeout=0,running=0\n"
-      "dirreq-v3-tunneled-dl complete=0,timeout=0,running=0\n"
-      "dirreq-v2-tunneled-dl complete=0,timeout=0,running=0\n",
+      "dirreq-v3-tunneled-dl complete=0,timeout=0,running=0\n",
   *dirreq_stats_2 =
       "dirreq-stats-end 2010-08-12 13:27:30 (86400 s)\n"
       "dirreq-v3-ips \n"
-      "dirreq-v2-ips \n"
       "dirreq-v3-reqs \n"
-      "dirreq-v2-reqs \n"
       "dirreq-v3-resp ok=0,not-enough-sigs=0,unavailable=0,not-found=0,"
           "not-modified=0,busy=0\n"
-      "dirreq-v2-resp ok=0,unavailable=0,not-found=0,not-modified=0,"
-          "busy=0\n"
       "dirreq-v3-direct-dl complete=0,timeout=0,running=0\n"
-      "dirreq-v2-direct-dl complete=0,timeout=0,running=0\n"
-      "dirreq-v3-tunneled-dl complete=0,timeout=0,running=0\n"
-      "dirreq-v2-tunneled-dl complete=0,timeout=0,running=0\n",
+      "dirreq-v3-tunneled-dl complete=0,timeout=0,running=0\n",
   *dirreq_stats_3 =
       "dirreq-stats-end 2010-08-12 13:27:30 (86400 s)\n"
       "dirreq-v3-ips \n"
-      "dirreq-v2-ips \n"
       "dirreq-v3-reqs \n"
-      "dirreq-v2-reqs \n"
       "dirreq-v3-resp ok=8,not-enough-sigs=0,unavailable=0,not-found=0,"
           "not-modified=0,busy=0\n"
-      "dirreq-v2-resp ok=0,unavailable=0,not-found=0,not-modified=0,"
-          "busy=0\n"
       "dirreq-v3-direct-dl complete=0,timeout=0,running=0\n"
-      "dirreq-v2-direct-dl complete=0,timeout=0,running=0\n"
-      "dirreq-v3-tunneled-dl complete=0,timeout=0,running=0\n"
-      "dirreq-v2-tunneled-dl complete=0,timeout=0,running=0\n",
+      "dirreq-v3-tunneled-dl complete=0,timeout=0,running=0\n",
   *dirreq_stats_4 =
       "dirreq-stats-end 2010-08-12 13:27:30 (86400 s)\n"
       "dirreq-v3-ips \n"
-      "dirreq-v2-ips \n"
       "dirreq-v3-reqs \n"
-      "dirreq-v2-reqs \n"
       "dirreq-v3-resp ok=8,not-enough-sigs=0,unavailable=0,not-found=0,"
           "not-modified=0,busy=0\n"
-      "dirreq-v2-resp ok=0,unavailable=0,not-found=0,not-modified=0,"
-          "busy=0\n"
       "dirreq-v3-direct-dl complete=0,timeout=0,running=0\n"
-      "dirreq-v2-direct-dl complete=0,timeout=0,running=0\n"
-      "dirreq-v3-tunneled-dl complete=0,timeout=0,running=4\n"
-      "dirreq-v2-tunneled-dl complete=0,timeout=0,running=0\n",
+      "dirreq-v3-tunneled-dl complete=0,timeout=0,running=4\n",
   *entry_stats_1 =
       "entry-stats-end 2010-08-12 13:27:30 (86400 s)\n"
       "entry-ips ab=8\n",
@@ -1745,14 +1730,13 @@ test_geoip(void)
 
   /* Note a successful network status response and make sure that it
    * appears in the history string. */
-  geoip_note_ns_response(GEOIP_CLIENT_NETWORKSTATUS, GEOIP_SUCCESS);
+  geoip_note_ns_response(GEOIP_SUCCESS);
   s = geoip_format_dirreq_stats(now + 86400);
   test_streq(dirreq_stats_3, s);
   tor_free(s);
 
   /* Start a tunneled directory request. */
-  geoip_start_dirreq((uint64_t) 1, 1024, GEOIP_CLIENT_NETWORKSTATUS,
-                     DIRREQ_TUNNELED);
+  geoip_start_dirreq((uint64_t) 1, 1024, DIRREQ_TUNNELED);
   s = geoip_format_dirreq_stats(now + 86400);
   test_streq(dirreq_stats_4, s);
 

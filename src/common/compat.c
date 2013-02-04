@@ -1,6 +1,6 @@
 /* Copyright (c) 2003-2004, Roger Dingledine
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -2758,7 +2758,7 @@ tor_cond_wait(tor_cond_t *cond, tor_mutex_t *mutex)
   EnterCriticalSection(&cond->mutex);
 
   tor_assert(WaitForSingleObject(event, 0) == WAIT_TIMEOUT);
-  tor_assert(!smartlist_isin(cond->events, event));
+  tor_assert(!smartlist_contains(cond->events, event));
   smartlist_add(cond->events, event);
 
   LeaveCriticalSection(&cond->mutex);

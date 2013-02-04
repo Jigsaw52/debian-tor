@@ -1,4 +1,4 @@
-/* Copyright (c) 2012, The Tor Project, Inc. */
+/* Copyright (c) 2012-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /* Wrapper code for a curve25519 implementation. */
@@ -22,7 +22,11 @@ int curve25519_donna(uint8_t *mypublic,
                      const uint8_t *secret, const uint8_t *basepoint);
 #endif
 #ifdef USE_CURVE25519_NACL
+#ifdef HAVE_CRYPTO_SCALARMULT_CURVE25519_H
 #include <crypto_scalarmult_curve25519.h>
+#elif defined(HAVE_NACL_CRYPTO_SCALARMULT_CURVE25519_H)
+#include <nacl/crypto_scalarmult_curve25519.h>
+#endif
 #endif
 
 int
@@ -65,7 +69,7 @@ curve25519_secret_key_generate(curve25519_secret_key_t *key_out,
     return -1;
   if (extra_strong && !crypto_strongest_rand(k_tmp, CURVE25519_SECKEY_LEN)) {
     /* If they asked for extra-strong entropy and we have some, use it as an
-     * HMAC key to improve not-so-good entopy rather than using it directly,
+     * HMAC key to improve not-so-good entropy rather than using it directly,
      * just in case the extra-strong entropy is less amazing than we hoped. */
     crypto_hmac_sha256((char *)key_out->secret_key,
                     (const char *)k_tmp, sizeof(k_tmp),
@@ -178,33 +182,3 @@ curve25519_handshake(uint8_t *output,
   curve25519_impl(output, skey->secret_key, pkey->public_key);
 }
 
-int
-curve25519_public_to_base64(char *output,
-                            const curve25519_public_key_t *pkey)
-{
-  char buf[128];
-  base64_encode(buf, sizeof(buf),
-                (const char*)pkey->public_key, CURVE25519_PUBKEY_LEN);
-  buf[CURVE25519_BASE64_PADDED_LEN] = '\0';
-  memcpy(output, buf, CURVE25519_BASE64_PADDED_LEN+1);
-  return 0;
-}
-
-int
-curve25519_public_from_base64(curve25519_public_key_t *pkey,
-                              const char *input)
-{
-  size_t len = strlen(input);
-  if (len == CURVE25519_BASE64_PADDED_LEN - 1) {
-    /* not padded */
-    return digest256_from_base64((char*)pkey->public_key, input);
-  } else if (len == CURVE25519_BASE64_PADDED_LEN) {
-    char buf[128];
-    if (base64_decode(buf, sizeof(buf), input, len) != CURVE25519_PUBKEY_LEN)
-      return -1;
-    memcpy(pkey->public_key, buf, CURVE25519_PUBKEY_LEN);
-    return 0;
-  } else {
-    return -1;
-  }
-}
