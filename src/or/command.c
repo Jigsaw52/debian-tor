@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -218,6 +218,14 @@ command_process_create_cell(cell_t *cell, channel_t *chan)
            (int)cell->command, channel_get_canonical_remote_descr(chan));
     channel_send_destroy(cell->circ_id, chan,
                          END_CIRC_REASON_TORPROTOCOL);
+    return;
+  }
+
+  if (cell->circ_id == 0) {
+    log_fn(LOG_PROTOCOL_WARN, LD_PROTOCOL,
+           "Received a create cell (type %d) from %s with zero circID; "
+           " ignoring.", (int)cell->command,
+           channel_get_actual_remote_descr(chan));
     return;
   }
 

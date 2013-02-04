@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #include "or.h"
@@ -52,6 +52,7 @@ static config_var_t state_vars_[] = {
   VAR("EntryGuardUnlistedSince", LINELIST_S,  EntryGuards,             NULL),
   VAR("EntryGuardAddedBy",       LINELIST_S,  EntryGuards,             NULL),
   VAR("EntryGuardPathBias",      LINELIST_S,  EntryGuards,             NULL),
+  VAR("EntryGuardPathUseBias",   LINELIST_S,  EntryGuards,             NULL),
   V(EntryGuards,                 LINELIST_V,  NULL),
 
   VAR("TransportProxy",               LINELIST_S, TransportProxies, NULL),

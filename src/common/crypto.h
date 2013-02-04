@@ -1,7 +1,7 @@
 /* Copyright (c) 2001, Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -266,7 +266,7 @@ void smartlist_shuffle(struct smartlist_t *sl);
 
 int base64_encode(char *dest, size_t destlen, const char *src, size_t srclen);
 int base64_decode(char *dest, size_t destlen, const char *src, size_t srclen);
-/** Characters that can appear (case-insensitively) in a base-32 encoding. */
+/** Characters that can appear (case-insensitively) in a base32 encoding. */
 #define BASE32_CHARS "abcdefghijklmnopqrstuvwxyz234567"
 void base32_encode(char *dest, size_t destlen, const char *src, size_t srclen);
 int base32_decode(char *dest, size_t destlen, const char *src, size_t srclen);

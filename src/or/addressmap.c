@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #define ADDRESSMAP_PRIVATE
@@ -45,7 +45,7 @@
 typedef struct {
   char *new_address;
   time_t expires;
-  addressmap_entry_source_t source:3;
+  ENUM_BF(addressmap_entry_source_t) source:3;
   unsigned src_wildcard:1;
   unsigned dst_wildcard:1;
   short num_resolve_failures;

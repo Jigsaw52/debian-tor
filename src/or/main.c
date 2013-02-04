@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -422,7 +422,7 @@ connection_unlink(connection_t *conn)
 void
 add_connection_to_closeable_list(connection_t *conn)
 {
-  tor_assert(!smartlist_isin(closeable_connection_lst, conn));
+  tor_assert(!smartlist_contains(closeable_connection_lst, conn));
   tor_assert(conn->marked_for_close);
   assert_connection_ok(conn, time(NULL));
   smartlist_add(closeable_connection_lst, conn);
@@ -432,14 +432,14 @@ add_connection_to_closeable_list(connection_t *conn)
 int
 connection_is_on_closeable_list(connection_t *conn)
 {
-  return smartlist_isin(closeable_connection_lst, conn);
+  return smartlist_contains(closeable_connection_lst, conn);
 }
 
 /** Return true iff conn is in the current poll array. */
 int
 connection_in_array(connection_t *conn)
 {
-  return smartlist_isin(connection_array, conn);
+  return smartlist_contains(connection_array, conn);
 }
 
 /** Set <b>*array</b> to an array of all connections, and <b>*n</b>
@@ -666,7 +666,7 @@ connection_start_reading_from_linked_conn(connection_t *conn)
       tor_event_base_loopexit(tor_libevent_get_base(), &tv);
     }
   } else {
-    tor_assert(smartlist_isin(active_linked_connection_lst, conn));
+    tor_assert(smartlist_contains(active_linked_connection_lst, conn));
   }
 }
 
@@ -686,7 +686,7 @@ connection_stop_reading_from_linked_conn(connection_t *conn)
      * so let's leave it alone for now. */
     smartlist_remove(active_linked_connection_lst, conn);
   } else {
-    tor_assert(!smartlist_isin(active_linked_connection_lst, conn));
+    tor_assert(!smartlist_contains(active_linked_connection_lst, conn));
   }
 }
 
@@ -973,7 +973,7 @@ directory_info_has_arrived(time_t now, int from_cache)
   if (!router_have_minimum_dir_info()) {
     int quiet = from_cache ||
                 directory_too_idle_to_fetch_descriptors(options, now);
-    log(quiet ? LOG_INFO : LOG_NOTICE, LD_DIR,
+    tor_log(quiet ? LOG_INFO : LOG_NOTICE, LD_DIR,
         "I learned some more directory information, but not enough to "
         "build a circuit: %s", get_dir_info_status_string());
     update_all_descriptor_downloads(now);
@@ -1201,7 +1201,7 @@ run_scheduled_events(time_t now)
    * eventually. */
   if (signewnym_is_pending &&
       time_of_last_signewnym + MAX_SIGNEWNYM_RATE <= now) {
-    log(LOG_INFO, LD_CONTROL, "Honoring delayed NEWNYM request");
+    log_info(LD_CONTROL, "Honoring delayed NEWNYM request");
     signewnym_impl(now);
   }
 
@@ -2083,7 +2083,7 @@ process_signal(uintptr_t sig)
       time_t now = time(NULL);
       if (time_of_last_signewnym + MAX_SIGNEWNYM_RATE > now) {
         signewnym_is_pending = 1;
-        log(LOG_NOTICE, LD_CONTROL,
+        log_notice(LD_CONTROL,
             "Rate limiting NEWNYM request: delaying by %d second(s)",
             (int)(MAX_SIGNEWNYM_RATE+time_of_last_signewnym-now));
       } else {
@@ -2115,7 +2115,7 @@ static void
 dumpmemusage(int severity)
 {
   connection_dump_buffer_mem_stats(severity);
-  log(severity, LD_GENERAL, "In rephist: "U64_FORMAT" used by %d Tors.",
+  tor_log(severity, LD_GENERAL, "In rephist: "U64_FORMAT" used by %d Tors.",
       U64_PRINTF_ARG(rephist_total_alloc), rephist_total_num);
   dump_routerlist_mem_usage(severity);
   dump_cell_pool_usage(severity);
@@ -2133,27 +2133,27 @@ dumpstats(int severity)
   time_t elapsed;
   size_t rbuf_cap, wbuf_cap, rbuf_len, wbuf_len;
 
-  log(severity, LD_GENERAL, "Dumping stats:");
+  tor_log(severity, LD_GENERAL, "Dumping stats:");
 
   SMARTLIST_FOREACH_BEGIN(connection_array, connection_t *, conn) {
     int i = conn_sl_idx;
-    log(severity, LD_GENERAL,
+    tor_log(severity, LD_GENERAL,
         "Conn %d (socket %d) type %d (%s), state %d (%s), created %d secs ago",
         i, (int)conn->s, conn->type, conn_type_to_string(conn->type),
         conn->state, conn_state_to_string(conn->type, conn->state),
         (int)(now - conn->timestamp_created));
     if (!connection_is_listener(conn)) {
-      log(severity,LD_GENERAL,
+      tor_log(severity,LD_GENERAL,
           "Conn %d is to %s:%d.", i,
           safe_str_client(conn->address),
           conn->port);
-      log(severity,LD_GENERAL,
+      tor_log(severity,LD_GENERAL,
           "Conn %d: %d bytes waiting on inbuf (len %d, last read %d secs ago)",
           i,
           (int)connection_get_inbuf_len(conn),
           (int)buf_allocation(conn->inbuf),
           (int)(now - conn->timestamp_lastread));
-      log(severity,LD_GENERAL,
+      tor_log(severity,LD_GENERAL,
           "Conn %d: %d bytes waiting on outbuf "
           "(len %d, last written %d secs ago)",i,
           (int)connection_get_outbuf_len(conn),
@@ -2164,7 +2164,7 @@ dumpstats(int severity)
         if (or_conn->tls) {
           tor_tls_get_buffer_sizes(or_conn->tls, &rbuf_cap, &rbuf_len,
                                    &wbuf_cap, &wbuf_len);
-          log(severity, LD_GENERAL,
+          tor_log(severity, LD_GENERAL,
               "Conn %d: %d/%d bytes used on OpenSSL read buffer; "
               "%d/%d bytes used on write buffer.",
               i, (int)rbuf_len, (int)rbuf_cap, (int)wbuf_len, (int)wbuf_cap);
@@ -2178,7 +2178,7 @@ dumpstats(int severity)
   channel_dumpstats(severity);
   channel_listener_dumpstats(severity);
 
-  log(severity, LD_NET,
+  tor_log(severity, LD_NET,
       "Cells processed: "U64_FORMAT" padding\n"
       "                 "U64_FORMAT" create\n"
       "                 "U64_FORMAT" created\n"
@@ -2194,13 +2194,16 @@ dumpstats(int severity)
       U64_PRINTF_ARG(stats_n_relay_cells_delivered),
       U64_PRINTF_ARG(stats_n_destroy_cells_processed));
   if (stats_n_data_cells_packaged)
-    log(severity,LD_NET,"Average packaged cell fullness: %2.3f%%",
+    tor_log(severity,LD_NET,"Average packaged cell fullness: %2.3f%%",
         100*(U64_TO_DBL(stats_n_data_bytes_packaged) /
              U64_TO_DBL(stats_n_data_cells_packaged*RELAY_PAYLOAD_SIZE)) );
   if (stats_n_data_cells_received)
-    log(severity,LD_NET,"Average delivered cell fullness: %2.3f%%",
+    tor_log(severity,LD_NET,"Average delivered cell fullness: %2.3f%%",
         100*(U64_TO_DBL(stats_n_data_bytes_received) /
              U64_TO_DBL(stats_n_data_cells_received*RELAY_PAYLOAD_SIZE)) );
+
+  cpuworker_log_onionskin_overhead(severity, ONION_HANDSHAKE_TYPE_TAP, "TAP");
+  cpuworker_log_onionskin_overhead(severity, ONION_HANDSHAKE_TYPE_NTOR,"ntor");
 
   if (now - time_of_process_start >= 0)
     elapsed = now - time_of_process_start;
@@ -2208,19 +2211,19 @@ dumpstats(int severity)
     elapsed = 0;
 
   if (elapsed) {
-    log(severity, LD_NET,
+    tor_log(severity, LD_NET,
         "Average bandwidth: "U64_FORMAT"/%d = %d bytes/sec reading",
         U64_PRINTF_ARG(stats_n_bytes_read),
         (int)elapsed,
         (int) (stats_n_bytes_read/elapsed));
-    log(severity, LD_NET,
+    tor_log(severity, LD_NET,
         "Average bandwidth: "U64_FORMAT"/%d = %d bytes/sec writing",
         U64_PRINTF_ARG(stats_n_bytes_written),
         (int)elapsed,
         (int) (stats_n_bytes_written/elapsed));
   }
 
-  log(severity, LD_NET, "--------------- Dumping memory information:");
+  tor_log(severity, LD_NET, "--------------- Dumping memory information:");
   dumpmemusage(severity);
 
   rep_hist_dump_stats(now,severity);
@@ -2361,7 +2364,7 @@ tor_init(int argc, char *argv[])
   }
 
 #ifdef NON_ANONYMOUS_MODE_ENABLED
-  log(LOG_WARN, LD_GENERAL, "This copy of Tor was compiled to run in a "
+  log_warn(LD_GENERAL, "This copy of Tor was compiled to run in a "
       "non-anonymous mode. It will provide NO ANONYMITY.");
 #endif
 

@@ -1,4 +1,4 @@
-/* Copyright (c) 2007-2012, The Tor Project, Inc. */
+/* Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #include "orconfig.h"
@@ -82,10 +82,11 @@ crypto_log_errors(int severity, const char *doing)
     if (!lib) lib = "(null)";
     if (!func) func = "(null)";
     if (doing) {
-      log(severity, LD_CRYPTO, "crypto error while %s: %s (in %s:%s)",
-          doing, msg, lib, func);
+      tor_log(severity, LD_CRYPTO, "crypto error while %s: %s (in %s:%s)",
+              doing, msg, lib, func);
     } else {
-      log(severity, LD_CRYPTO, "crypto error: %s (in %s:%s)", msg, lib, func);
+      tor_log(severity, LD_CRYPTO, "crypto error: %s (in %s:%s)",
+              msg, lib, func);
     }
   }
 }

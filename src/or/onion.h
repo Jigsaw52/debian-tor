@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -101,9 +101,9 @@ typedef struct extended_cell_t {
 
 int create_cell_parse(create_cell_t *cell_out, const cell_t *cell_in);
 int created_cell_parse(created_cell_t *cell_out, const cell_t *cell_in);
-int extend_cell_parse(extend_cell_t *cell_out, uint8_t command,
+int extend_cell_parse(extend_cell_t *cell_out, const uint8_t command,
                       const uint8_t *payload_in, size_t payload_len);
-int extended_cell_parse(extended_cell_t *cell_out, uint8_t command,
+int extended_cell_parse(extended_cell_t *cell_out, const uint8_t command,
                         const uint8_t *payload_in, size_t payload_len);
 
 int create_cell_format(cell_t *cell_out, const create_cell_t *cell_in);

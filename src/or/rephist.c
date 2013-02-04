@@ -1,5 +1,5 @@
 /* Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -422,6 +422,21 @@ rep_hist_note_router_unreachable(const char *id, time_t when)
   }
 }
 
+/** Mark a router with ID <b>id</b> as non-Running, and retroactively declare
+ * that it has never been running: give it no stability and no WFU. */
+void
+rep_hist_make_router_pessimal(const char *id, time_t when)
+{
+  or_history_t *hist = get_or_history(id);
+  tor_assert(hist);
+
+  rep_hist_note_router_unreachable(id, when);
+  mark_or_down(hist, when, 1);
+
+  hist->weighted_run_length = 0;
+  hist->weighted_uptime = 0;
+}
+
 /** Helper: Discount all old MTBF data, if it is time to do so.  Return
  * the time at which we should next discount MTBF data. */
 time_t
@@ -648,7 +663,7 @@ rep_hist_dump_stats(time_t now, int severity)
 
   rep_history_clean(now - get_options()->RephistTrackTime);
 
-  log(severity, LD_HIST, "--------------- Dumping history information:");
+  tor_log(severity, LD_HIST, "--------------- Dumping history information:");
 
   for (orhist_it = digestmap_iter_init(history_map);
        !digestmap_iter_done(orhist_it);
@@ -673,7 +688,7 @@ rep_hist_dump_stats(time_t now, int severity)
     } else {
       uptime=1.0;
     }
-    log(severity, LD_HIST,
+    tor_log(severity, LD_HIST,
         "OR %s [%s]: %ld/%ld good connections; uptime %ld/%ld sec (%.2f%%); "
         "wmtbf %lu:%02lu:%02lu",
         name1, hexdigest1,
@@ -707,7 +722,7 @@ rep_hist_dump_stats(time_t now, int severity)
         else
           len += ret;
       }
-      log(severity, LD_HIST, "%s", buffer);
+      tor_log(severity, LD_HIST, "%s", buffer);
     }
   }
 }
@@ -2042,7 +2057,7 @@ note_crypto_pk_op(pk_op_t operation)
 void
 dump_pk_ops(int severity)
 {
-  log(severity, LD_HIST,
+  tor_log(severity, LD_HIST,
       "PK operations: %lu directory objects signed, "
       "%lu directory objects verified, "
       "%lu routerdescs signed, "

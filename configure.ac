@@ -1,9 +1,9 @@
 dnl Copyright (c) 2001-2004, Roger Dingledine
 dnl Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson
-dnl Copyright (c) 2007-2012, The Tor Project, Inc.
+dnl Copyright (c) 2007-2013, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
-AC_INIT([tor],[0.2.4.9-alpha])
+AC_INIT([tor],[0.2.4.10-alpha])
 AC_CONFIG_SRCDIR([src/or/main.c])
 AM_INIT_AUTOMAKE
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
@@ -689,13 +689,20 @@ if test x$enable_curve25519 != xno; then
             [tor_cv_can_use_curve25519_donna_c64=cross],
 	    [tor_cv_can_use_curve25519_donna_c64=no])])])
 
+  AC_CHECK_HEADERS([crypto_scalarmult_curve25519.h \
+                    nacl/crypto_scalarmult_curve25519.h])
+
   AC_CACHE_CHECK([whether we can use curve25519 from nacl],
     tor_cv_can_use_curve25519_nacl,
     [tor_saved_LIBS="$LIBS"
      LIBS="$LIBS -lnacl"
      AC_LINK_IFELSE(
        [AC_LANG_PROGRAM([dnl
+         #ifdef HAVE_CRYPTO_SCALARMULT_CURVE25519_H
          #include <crypto_scalarmult_curve25519.h>
+	 #elif defined(HAVE_NACL_CRYPTO_SCALARMULT_CURVE25519_H)
+	 #include <nacl/crypto_scalarmult_curve25519.h>
+	 #endif
          #ifdef crypto_scalarmult_curve25519_ref_BYTES
 	 #error Hey, this is the reference implementation!
 	 #endif
@@ -1024,6 +1031,30 @@ fi
 if test "$tor_cv_null_is_zero" != no; then
   AC_DEFINE([NULL_REP_IS_ZERO_BYTES], 1,
             [Define to 1 iff memset(0) sets pointers to NULL])
+fi
+
+AC_CACHE_CHECK([whether memset(0) sets doubles to 0.0], tor_cv_dbl0_is_zero,
+[AC_RUN_IFELSE([AC_LANG_SOURCE(
+[[#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#ifdef HAVE_STDDEF_H
+#include <stddef.h>
+#endif
+int main () { double d1,d2; d1=0; memset(&d2,0,sizeof(d2));
+return memcmp(&d1,&d2,sizeof(d1))?1:0; }]])],
+       [tor_cv_dbl0_is_zero=yes],
+       [tor_cv_dbl0_is_zero=no],
+       [tor_cv_dbl0_is_zero=cross])])
+
+if test "$tor_cv_dbl0_is_zero" = cross ; then
+  # Cross-compiling; let's hope that the target isn't raving mad.
+  AC_MSG_NOTICE([Cross-compiling: we'll assume that 0.0 can be represented as a sequence of 0-valued bytes.])
+fi
+
+if test "$tor_cv_dbl0_is_zero" != no; then
+  AC_DEFINE([DOUBLE_0_REP_IS_ZERO_BYTES], 1,
+            [Define to 1 iff memset(0) sets doubles to 0.0])
 fi
 
 # And what happens when we malloc zero?

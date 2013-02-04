@@ -1,5 +1,5 @@
 /* Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -931,7 +931,7 @@ rend_service_requires_uptime(rend_service_t *service)
 
   for (i=0; i < smartlist_len(service->ports); ++i) {
     p = smartlist_get(service->ports, i);
-    if (smartlist_string_num_isin(get_options()->LongLivedPorts,
+    if (smartlist_contains_int_as_string(get_options()->LongLivedPorts,
                                   p->virtual_port))
       return 1;
   }
@@ -1383,9 +1383,6 @@ rend_service_introduce(origin_circuit_t *circuit, const uint8_t *request,
   if (circuit_init_cpath_crypto(cpath,keys+DIGEST_LEN,1)<0)
     goto err;
   memcpy(cpath->rend_circ_nonce, keys, DIGEST_LEN);
-
-  /* For path bias: This intro circuit was used successfully */
-  circuit->path_state = PATH_STATE_USE_SUCCEEDED;
 
   goto done;
 
@@ -2511,6 +2508,9 @@ rend_service_intro_has_opened(origin_circuit_t *circuit)
     goto err;
   }
 
+  /* We've attempted to use this circuit */
+  pathbias_count_use_attempt(circuit);
+
   goto done;
 
  err:
@@ -2558,6 +2558,10 @@ rend_service_intro_established(origin_circuit_t *circuit,
            "Received INTRO_ESTABLISHED cell on circuit %d for service %s",
            circuit->base_.n_circ_id, serviceid);
 
+  /* Getting a valid INTRODUCE_ESTABLISHED means we've successfully
+   * used the circ */
+  pathbias_mark_use_success(circuit);
+
   return 0;
  err:
   circuit_mark_for_close(TO_CIRCUIT(circuit), END_CIRC_REASON_TORPROTOCOL);
@@ -2588,6 +2592,9 @@ rend_service_rendezvous_has_opened(origin_circuit_t *circuit)
   /* Declare the circuit dirty to avoid reuse, and for path-bias */
   if (!circuit->base_.timestamp_dirty)
     circuit->base_.timestamp_dirty = time(NULL);
+
+  /* This may be redundant */
+  pathbias_count_use_attempt(circuit);
 
   hop = circuit->build_state->service_pending_final_cpath_ref->cpath;
 
@@ -2774,7 +2781,7 @@ directory_post_to_hs_dir(rend_service_descriptor_t *renddesc,
       char *hs_dir_ip;
       const node_t *node;
       hs_dir = smartlist_get(responsible_dirs, j);
-      if (smartlist_digest_isin(renddesc->successful_uploads,
+      if (smartlist_contains_digest(renddesc->successful_uploads,
                                 hs_dir->identity_digest))
         /* Don't upload descriptor if we succeeded in doing so last time. */
         continue;
@@ -2809,7 +2816,8 @@ directory_post_to_hs_dir(rend_service_descriptor_t *renddesc,
                hs_dir->or_port);
       tor_free(hs_dir_ip);
       /* Remember successful upload to this router for next time. */
-      if (!smartlist_digest_isin(successful_uploads, hs_dir->identity_digest))
+      if (!smartlist_contains_digest(successful_uploads,
+                                     hs_dir->identity_digest))
         smartlist_add(successful_uploads, hs_dir->identity_digest);
     }
     smartlist_clear(responsible_dirs);
@@ -2827,7 +2835,7 @@ directory_post_to_hs_dir(rend_service_descriptor_t *renddesc,
     if (!renddesc->successful_uploads)
       renddesc->successful_uploads = smartlist_new();
     SMARTLIST_FOREACH(successful_uploads, const char *, c, {
-      if (!smartlist_digest_isin(renddesc->successful_uploads, c)) {
+      if (!smartlist_contains_digest(renddesc->successful_uploads, c)) {
         char *hsdir_id = tor_memdup(c, DIGEST_LEN);
         smartlist_add(renddesc->successful_uploads, hsdir_id);
       }
@@ -3060,7 +3068,8 @@ rend_services_introduce(void)
       if (intro->time_expiring + INTRO_POINT_EXPIRATION_GRACE_PERIOD > now) {
         /* This intro point has completely expired.  Remove it, and
          * mark the circuit for close if it's still alive. */
-        if (intro_circ != NULL) {
+        if (intro_circ != NULL &&
+            intro_circ->base_.purpose != CIRCUIT_PURPOSE_PATH_BIAS_TESTING) {
           circuit_mark_for_close(TO_CIRCUIT(intro_circ),
                                  END_CIRC_REASON_FINISHED);
         }
@@ -3295,7 +3304,7 @@ rend_service_dump_stats(int severity)
 
   for (i=0; i < smartlist_len(rend_service_list); ++i) {
     service = smartlist_get(rend_service_list, i);
-    log(severity, LD_GENERAL, "Service configured in \"%s\":",
+    tor_log(severity, LD_GENERAL, "Service configured in \"%s\":",
         service->directory);
     for (j=0; j < smartlist_len(service->intro_nodes); ++j) {
       intro = smartlist_get(service->intro_nodes, j);
@@ -3303,11 +3312,11 @@ rend_service_dump_stats(int severity)
 
       circ = find_intro_circuit(intro, service->pk_digest);
       if (!circ) {
-        log(severity, LD_GENERAL, "  Intro point %d at %s: no circuit",
+        tor_log(severity, LD_GENERAL, "  Intro point %d at %s: no circuit",
             j, safe_name);
         continue;
       }
-      log(severity, LD_GENERAL, "  Intro point %d at %s: circuit is %s",
+      tor_log(severity, LD_GENERAL, "  Intro point %d at %s: circuit is %s",
           j, safe_name, circuit_state_to_string(circ->base_.state));
     }
   }

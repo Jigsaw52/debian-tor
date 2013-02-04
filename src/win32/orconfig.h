@@ -151,6 +151,9 @@
 /* Define to 1 iff NULL is represented by a 0 in memory. */
 #define NULL_REP_IS_ZERO_BYTES 1
 
+/* Define to 1 iff memset(0) sets doubles to 0.0 */
+#define DOUBLE_0_REP_IS_ZERO_BYTES 1
+
 /* Name of package */
 #define PACKAGE "tor"
 
@@ -238,7 +241,7 @@
 #define USING_TWOS_COMPLEMENT
 
 /* Version number of package */
-#define VERSION "0.2.4.9-alpha"
+#define VERSION "0.2.4.10-alpha"
 
 
 
@@ -248,3 +251,8 @@
 #define FLEXIBLE_ARRAY_MEMBER 0
 #define HAVE_EVENT2_EVENT_H
 #define SHARE_DATADIR ""
+#define HAVE_EVENT2_DNS_H
+#define HAVE_EVENT_BASE_LOOPEXIT
+#define CURVE25519_ENABLED
+#define USE_CURVE25519_DONNA
+

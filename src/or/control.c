@@ -1,5 +1,5 @@
 /* Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -4663,7 +4663,7 @@ control_event_bootstrap(bootstrap_status_t status, int progress)
   if (status > bootstrap_percent ||
       (progress && progress > bootstrap_percent)) {
     bootstrap_status_to_string(status, &tag, &summary);
-    log(status ? LOG_NOTICE : LOG_INFO, LD_CONTROL,
+    tor_log(status ? LOG_NOTICE : LOG_INFO, LD_CONTROL,
         "Bootstrapped %d%%: %s.", progress ? progress : status, summary);
     tor_snprintf(buf, sizeof(buf),
         "BOOTSTRAP PROGRESS=%d TAG=%s SUMMARY=\"%s\"",

@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -1029,7 +1029,7 @@ dump_distinct_digest_count(int severity)
 #ifdef COUNT_DISTINCT_DIGESTS
   if (!verified_digests)
     verified_digests = digestmap_new();
-  log(severity, LD_GENERAL, "%d *distinct* router digests verified",
+  tor_log(severity, LD_GENERAL, "%d *distinct* router digests verified",
       digestmap_size(verified_digests));
 #else
   (void)severity; /* suppress "unused parameter" warning */
@@ -2255,7 +2255,7 @@ networkstatus_verify_bw_weights(networkstatus_t *ns)
   const char *casename = NULL;
   int valid = 1;
 
-  weight_scale = circuit_build_times_get_bw_scale(ns);
+  weight_scale = networkstatus_get_weight_scale_param(ns);
   Wgg = networkstatus_get_bw_weight(ns, "Wgg", -1);
   Wgm = networkstatus_get_bw_weight(ns, "Wgm", -1);
   Wgd = networkstatus_get_bw_weight(ns, "Wgd", -1);
@@ -3844,7 +3844,7 @@ get_next_token(memarea_t *area,
   if ((size_t)(eol-next) != 9+obname_len+5 ||
       strcmp_len(next+9, tok->object_type, obname_len) ||
       strcmp_len(eol-5, "-----", 5)) {
-    snprintf(ebuf, sizeof(ebuf), "Malformed object: mismatched end tag %s",
+    tor_snprintf(ebuf, sizeof(ebuf), "Malformed object: mismatched end tag %s",
              tok->object_type);
     ebuf[sizeof(ebuf)-1] = '\0';
     RET_ERR(ebuf);

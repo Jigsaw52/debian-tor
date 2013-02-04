@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #define CIRCUITSTATS_PRIVATE
@@ -181,16 +181,6 @@ circuit_build_times_quantile_cutoff(void)
   }
 
   return num/100.0;
-}
-
-/* DOCDOC circuit_build_times_get_bw_scale */
-int
-circuit_build_times_get_bw_scale(networkstatus_t *ns)
-{
-  return networkstatus_get_param(ns, "bwweightscale",
-                                 BW_WEIGHT_SCALE,
-                                 BW_MIN_WEIGHT_SCALE,
-                                 BW_MAX_WEIGHT_SCALE);
 }
 
 /**

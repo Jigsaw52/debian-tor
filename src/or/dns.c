@@ -1,6 +1,6 @@
 /* Copyright (c) 2003-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -262,7 +262,7 @@ evdns_log_cb(int warn, const char *msg)
   int severity = warn ? LOG_WARN : LOG_INFO;
   if (!strcmpstart(msg, "Resolve requested for") &&
       get_options()->SafeLogging) {
-    log(LOG_INFO, LD_EXIT, "eventdns: Resolve requested.");
+    log_info(LD_EXIT, "eventdns: Resolve requested.");
     return;
   } else if (!strcmpstart(msg, "Search: ")) {
     return;
@@ -291,7 +291,7 @@ evdns_log_cb(int warn, const char *msg)
     control_event_server_status(LOG_WARN, "NAMESERVER_ALL_DOWN");
     all_down = 1;
   }
-  log(severity, LD_EXIT, "eventdns: %s", msg);
+  tor_log(severity, LD_EXIT, "eventdns: %s", msg);
 }
 
 /** Helper: passed to eventdns.c as a callback so it can generate random
@@ -835,7 +835,7 @@ dns_resolve_impl(edge_connection_t *exitconn, int is_resolve,
     return -1;
 
   if (address_is_invalid_destination(exitconn->base_.address, 0)) {
-    log(LOG_PROTOCOL_WARN, LD_EXIT,
+    tor_log(LOG_PROTOCOL_WARN, LD_EXIT,
         "Rejecting invalid destination address %s",
         escaped_safe_str(exitconn->base_.address));
     return -1;
@@ -1218,7 +1218,7 @@ is_test_address(const char *address)
 {
   const or_options_t *options = get_options();
   return options->ServerDNSTestAddresses &&
-    smartlist_string_isin_case(options->ServerDNSTestAddresses, address);
+    smartlist_contains_string_case(options->ServerDNSTestAddresses, address);
 }
 
 /** Called on the OR side when the eventdns library tells us the outcome of a
@@ -1843,8 +1843,8 @@ wildcard_increment_answer(const char *id)
 
   if (*ip > 5 && n_wildcard_requests > 10) {
     if (!dns_wildcard_list) dns_wildcard_list = smartlist_new();
-    if (!smartlist_string_isin(dns_wildcard_list, id)) {
-    log(dns_wildcard_notice_given ? LOG_INFO : LOG_NOTICE, LD_EXIT,
+    if (!smartlist_contains_string(dns_wildcard_list, id)) {
+    tor_log(dns_wildcard_notice_given ? LOG_INFO : LOG_NOTICE, LD_EXIT,
         "Your DNS provider has given \"%s\" as an answer for %d different "
         "invalid addresses. Apparently they are hijacking DNS failures. "
         "I'll try to correct for this by treating future occurrences of "
@@ -1866,7 +1866,8 @@ add_wildcarded_test_address(const char *address)
   if (!dns_wildcarded_test_address_list)
     dns_wildcarded_test_address_list = smartlist_new();
 
-  if (smartlist_string_isin_case(dns_wildcarded_test_address_list, address))
+  if (smartlist_contains_string_case(dns_wildcarded_test_address_list,
+                                     address))
     return;
 
   n_test_addrs = get_options()->ServerDNSTestAddresses ?
@@ -1875,7 +1876,7 @@ add_wildcarded_test_address(const char *address)
   smartlist_add(dns_wildcarded_test_address_list, tor_strdup(address));
   n = smartlist_len(dns_wildcarded_test_address_list);
   if (n > n_test_addrs/2) {
-    log(dns_wildcarded_test_address_notice_given ? LOG_INFO : LOG_NOTICE,
+    tor_log(dns_wildcarded_test_address_notice_given ? LOG_INFO : LOG_NOTICE,
         LD_EXIT, "Your DNS provider tried to redirect \"%s\" to a junk "
         "address.  It has done this with %d test addresses so far.  I'm "
         "going to stop being an exit node for now, since our DNS seems so "
@@ -1919,7 +1920,7 @@ evdns_wildcard_check_callback(int result, char type, int count, int ttl,
       }
     }
 
-    log(dns_wildcard_one_notice_given ? LOG_INFO : LOG_NOTICE, LD_EXIT,
+    tor_log(dns_wildcard_one_notice_given ? LOG_INFO : LOG_NOTICE, LD_EXIT,
         "Your DNS provider gave an answer for \"%s\", which "
         "is not supposed to exist. Apparently they are hijacking "
         "DNS failures. Trying to correct for this. We've noticed %d "
@@ -2104,7 +2105,7 @@ dns_reset_correctness_checks(void)
 static int
 answer_is_wildcarded(const char *ip)
 {
-  return dns_wildcard_list && smartlist_string_isin(dns_wildcard_list, ip);
+  return dns_wildcard_list && smartlist_contains_string(dns_wildcard_list, ip);
 }
 
 /** Exit with an assertion if <b>resolve</b> is corrupt. */
@@ -2150,8 +2151,8 @@ dump_dns_mem_usage(int severity)
   /* Print out the count and estimated size of our &cache_root.  It undercounts
      hostnames in cached reverse resolves.
    */
-  log(severity, LD_MM, "Our DNS cache has %d entries.", hash_count);
-  log(severity, LD_MM, "Our DNS cache size is approximately %u bytes.",
+  tor_log(severity, LD_MM, "Our DNS cache has %d entries.", hash_count);
+  tor_log(severity, LD_MM, "Our DNS cache size is approximately %u bytes.",
       (unsigned)hash_mem);
 }
 

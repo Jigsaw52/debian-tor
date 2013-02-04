@@ -1,6 +1,6 @@
 /* Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -47,8 +47,10 @@ const routerinfo_t *routerlist_find_my_routerinfo(void);
 uint32_t router_get_advertised_bandwidth(const routerinfo_t *router);
 uint32_t router_get_advertised_bandwidth_capped(const routerinfo_t *router);
 
-const node_t *node_sl_choose_by_bandwidth(smartlist_t *sl,
+const node_t *node_sl_choose_by_bandwidth(const smartlist_t *sl,
                                           bandwidth_weight_rule_t rule);
+double frac_nodes_with_descriptors(const smartlist_t *sl,
+                                   bandwidth_weight_rule_t rule);
 
 const node_t *router_choose_random_node(smartlist_t *excludedsmartlist,
                                         struct routerset_t *excludedset,

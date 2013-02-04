@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -81,7 +81,6 @@
 #include <process.h>
 #include <direct.h>
 #include <windows.h>
-#define snprintf _snprintf
 #endif
 
 #ifdef USE_BUFFEREVENTS
@@ -1592,6 +1591,13 @@ typedef struct entry_connection_t {
 
 } entry_connection_t;
 
+typedef enum {
+    DIR_SPOOL_NONE=0, DIR_SPOOL_SERVER_BY_DIGEST, DIR_SPOOL_SERVER_BY_FP,
+    DIR_SPOOL_EXTRA_BY_DIGEST, DIR_SPOOL_EXTRA_BY_FP,
+    DIR_SPOOL_CACHED_DIR, DIR_SPOOL_NETWORKSTATUS,
+    DIR_SPOOL_MICRODESC, /* NOTE: if we add another entry, add another bit. */
+} dir_spool_source_t;
+
 /** Subtype of connection_t for an "directory connection" -- that is, an HTTP
  * connection to retrieve or serve directory material. */
 typedef struct dir_connection_t {
@@ -1610,12 +1616,8 @@ typedef struct dir_connection_t {
    * "spooling" of directory material to the outbuf.  Otherwise, we'd have
    * to append everything to the outbuf in one enormous chunk. */
   /** What exactly are we spooling right now? */
-  enum {
-    DIR_SPOOL_NONE=0, DIR_SPOOL_SERVER_BY_DIGEST, DIR_SPOOL_SERVER_BY_FP,
-    DIR_SPOOL_EXTRA_BY_DIGEST, DIR_SPOOL_EXTRA_BY_FP,
-    DIR_SPOOL_CACHED_DIR, DIR_SPOOL_NETWORKSTATUS,
-    DIR_SPOOL_MICRODESC, /* NOTE: if we add another entry, add another bit. */
-  } dir_spool_src : 3;
+  ENUM_BF(dir_spool_source_t)  dir_spool_src : 3;
+
   /** If we're fetching descriptors, what router purpose shall we assign
    * to them? */
   uint8_t router_purpose;
@@ -1791,7 +1793,8 @@ typedef enum {
 /** A reference-counted address policy rule. */
 typedef struct addr_policy_t {
   int refcnt; /**< Reference count */
-  addr_policy_action_t policy_type:2;/**< What to do when the policy matches.*/
+  /** What to do when the policy matches.*/
+  ENUM_BF(addr_policy_action_t) policy_type:2;
   unsigned int is_private:1; /**< True iff this is the pseudo-address,
                               * "private". */
   unsigned int is_canonical:1; /**< True iff this policy is the canonical
@@ -1859,7 +1862,7 @@ typedef struct download_status_t {
                            * again? */
   uint8_t n_download_failures; /**< Number of failures trying to download the
                                 * most recent descriptor. */
-  download_schedule_t schedule : 8;
+  ENUM_BF(download_schedule_t) schedule : 8;
 } download_status_t;
 
 /** If n_download_failures is this high, the download can never happen. */
@@ -2128,7 +2131,7 @@ typedef struct microdesc_t {
    */
   time_t last_listed;
   /** Where is this microdescriptor currently stored? */
-  saved_location_t saved_location : 3;
+  ENUM_BF(saved_location_t) saved_location : 3;
   /** If true, do not attempt to cache this microdescriptor on disk. */
   unsigned int no_save : 1;
   /** If true, this microdesc has an entry in the microdesc_map */
@@ -2378,8 +2381,8 @@ typedef enum {
 /** A common structure to hold a v3 network status vote, or a v3 network
  * status consensus. */
 typedef struct networkstatus_t {
-  networkstatus_type_t type : 8; /**< Vote, consensus, or opinion? */
-  consensus_flavor_t flavor : 8; /**< If a consensus, what kind? */
+  ENUM_BF(networkstatus_type_t) type : 8; /**< Vote, consensus, or opinion? */
+  ENUM_BF(consensus_flavor_t) flavor : 8; /**< If a consensus, what kind? */
   time_t published; /**< Vote only: Time when vote was written. */
   time_t valid_after; /**< Time after which this vote or consensus applies. */
   time_t fresh_until; /**< Time before which this is the most recent vote or
@@ -2578,9 +2581,10 @@ typedef enum {
 
 struct fast_handshake_state_t;
 struct ntor_handshake_state_t;
-#define ONION_HANDSHAKE_TYPE_TAP 0x0000
+#define ONION_HANDSHAKE_TYPE_TAP  0x0000
 #define ONION_HANDSHAKE_TYPE_FAST 0x0001
 #define ONION_HANDSHAKE_TYPE_NTOR 0x0002
+#define MAX_ONION_HANDSHAKE_TYPE 0x0002
 typedef struct {
   uint16_t tag;
   union {
@@ -2823,8 +2827,18 @@ typedef struct circuit_t {
 
 /**
  * Describes the circuit building process in simplified terms based
- * on the path bias accounting state for a circuit. Created to prevent
- * overcounting due to unknown cases of circuit reuse. See Bug #6475.
+ * on the path bias accounting state for a circuit.
+ *
+ * NOTE: These state values are enumerated in the order for which we
+ * expect circuits to transition through them. If you add states,
+ * you need to preserve this overall ordering. The various pathbias
+ * state transition and accounting functions (pathbias_mark_* and
+ * pathbias_count_*) contain ordinal comparisons to enforce proper
+ * state transitions for corrections.
+ *
+ * This state machine and the associated logic was created to prevent
+ * miscounting due to unknown cases of circuit reuse. See also tickets
+ * #6475 and #7802.
  */
 typedef enum {
     /** This circuit is "new". It has not yet completed a first hop
@@ -2835,7 +2849,7 @@ typedef enum {
     PATH_STATE_BUILD_ATTEMPTED = 1,
     /** This circuit has been completely built */
     PATH_STATE_BUILD_SUCCEEDED = 2,
-    /** Did any SOCKS streams or hidserv introductions actually succeed on
+    /** Did we try to attach any SOCKS streams or hidserv introductions to
       * this circuit?
       *
       * Note: If we ever implement end-to-end stream timing through test
@@ -2843,13 +2857,28 @@ typedef enum {
       * (or any other automatic streams) because the adversary could
       * just tag at a later point.
       */
-    PATH_STATE_USE_SUCCEEDED = 3,
+    PATH_STATE_USE_ATTEMPTED = 3,
+    /** Did any SOCKS streams or hidserv introductions actually succeed on
+      * this circuit?
+      *
+      * If any streams detatch/fail from this circuit, the code transitions
+      * the circuit back to PATH_STATE_USE_ATTEMPTED to ensure we probe. See
+      * pathbias_mark_use_rollback() for that.
+      */
+    PATH_STATE_USE_SUCCEEDED = 4,
 
     /**
      * This is a special state to indicate that we got a corrupted
      * relay cell on a circuit and we don't intend to probe it.
      */
-    PATH_STATE_USE_FAILED = 4,
+    PATH_STATE_USE_FAILED = 5,
+
+    /**
+     * This is a special state to indicate that we already counted
+     * the circuit. Used to guard against potential state machine
+     * violations.
+     */
+    PATH_STATE_ALREADY_COUNTED = 6,
 } path_state_t;
 
 /** An origin_circuit_t holds data necessary to build and use a circuit.
@@ -2885,9 +2914,24 @@ typedef struct origin_circuit_t {
    * cannibalized circuits. */
   unsigned int has_opened : 1;
 
-  /** Kludge to help us prevent the warn in bug #6475 and eventually
-   * debug why we are not seeing first hops in some cases. */
-  path_state_t path_state : 3;
+  /**
+   * Path bias state machine. Used to ensure integrity of our
+   * circuit building and usage accounting. See path_state_t
+   * for more details.
+   */
+  ENUM_BF(path_state_t) path_state : 3;
+
+  /**
+   * Tristate variable to guard against pathbias miscounting
+   * due to circuit purpose transitions changing the decision
+   * of pathbias_should_count(). This variable is informational
+   * only. The current results of pathbias_should_count() are
+   * the official decision for pathbias accounting.
+   */
+  uint8_t pathbias_shouldcount;
+#define PATHBIAS_SHOULDCOUNT_UNDECIDED 0
+#define PATHBIAS_SHOULDCOUNT_IGNORED   1
+#define PATHBIAS_SHOULDCOUNT_COUNTED   2
 
   /** For path probing. Store the temporary probe stream ID
    * for response comparison */
@@ -2994,8 +3038,9 @@ typedef struct origin_circuit_t {
    * ISO_STREAM. */
   uint64_t associated_isolated_stream_global_id;
   /**@}*/
-
 } origin_circuit_t;
+
+struct onion_queue_t;
 
 /** An or_circuit_t holds information needed to implement a circuit at an
  * OR. */
@@ -3010,6 +3055,9 @@ typedef struct or_circuit_t {
    * cells to p_chan.  NULL if we have no cells pending, or if we're not
    * linked to an OR connection. */
   struct circuit_t *prev_active_on_p_chan;
+  /** Pointer to an entry on the onion queue, if this circuit is waiting for a
+   * chance to give an onionskin to a cpuworker. Used only in onion.c */
+  struct onion_queue_t *onionqueue_entry;
 
   /** The circuit_id used in the previous (backward) hop of this circuit. */
   circid_t p_circ_id;
@@ -3493,9 +3541,7 @@ typedef struct {
                              * and try a new circuit if the stream has been
                              * waiting for this many seconds. If zero, use
                              * our default internal timeout schedule. */
-  int MaxOnionsPending; /**< How many circuit CREATE requests do we allow
-                         * to wait simultaneously before we start dropping
-                         * them? */
+  int MaxOnionQueueDelay; /**<DOCDOC*/
   int NewCircuitPeriod; /**< How long do we use a circuit before building
                          * a new one? */
   int MaxCircuitDirtiness; /**< Never use circs that were first used more than
@@ -3837,6 +3883,11 @@ typedef struct {
   char *GeoIPFile;
   char *GeoIPv6File;
 
+  /** Autobool: if auto, then any attempt to Exclude{Exit,}Nodes a particular
+   * country code will exclude all nodes in ?? and A1.  If true, all nodes in
+   * ?? and A1 are excluded. Has no effect if we don't know any GeoIP data. */
+  int GeoIPExcludeUnknown;
+
   /** If true, SIGHUP should reload the torrc.  Sometimes controllers want
    * to make this false. */
   int ReloadTorrcOnSIGHUP;
@@ -3904,9 +3955,16 @@ typedef struct {
   double PathBiasExtremeRate;
   int PathBiasDropGuards;
   int PathBiasScaleThreshold;
-  int PathBiasScaleFactor;
-  int PathBiasMultFactor;
-  int PathBiasUseCloseCounts;
+  /** @} */
+
+  /**
+   * Parameters for path-bias use detection
+   * @{
+   */
+  int PathBiasUseThreshold;
+  double PathBiasNoticeUseRate;
+  double PathBiasExtremeUseRate;
+  int PathBiasScaleUseThreshold;
   /** @} */
 
   int IPv6Exit; /**< Do we support exiting to IPv6 addresses? */
@@ -3915,6 +3973,9 @@ typedef struct {
 
   /** Autobool: should we use the ntor handshake if we can? */
   int UseNTorHandshake;
+
+  /** Fraction: */
+  double PathsNeededToBuildCircuits;
 } or_options_t;
 
 /** Persistent state for an onion router, as saved to disk. */

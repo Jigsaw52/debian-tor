@@ -1,6 +1,6 @@
 /* Copyright (c) 2003-2004, Roger Dingledine
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2012, The Tor Project, Inc. */
+ * Copyright (c) 2007-2013, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #ifndef TOR_COMPAT_H
@@ -60,7 +60,6 @@
 #include <io.h>
 #include <math.h>
 #include <projects.h>
-#define snprintf _snprintf
 /* this is not exported as W .... */
 #define SHGetPathFromIDListW SHGetPathFromIDList
 /* wcecompat has vasprintf */
@@ -73,6 +72,10 @@
 
 #ifndef NULL_REP_IS_ZERO_BYTES
 #error "It seems your platform does not represent NULL as zero. We can't cope."
+#endif
+
+#ifndef DOUBLE_0_REP_IS_ZERO_BYTES
+#error "It seems your platform does not represent 0.0 as zeros. We can't cope."
 #endif
 
 #if 'a'!=97 || 'z'!=122 || 'A'!=65 || ' '!=32
@@ -131,6 +134,17 @@ extern INLINE double U64_TO_DBL(uint64_t x) {
 #else
 #define U64_TO_DBL(x) ((double) (x))
 #define DBL_TO_U64(x) ((uint64_t) (x))
+#endif
+
+#if defined(_MSC_VER)
+/* XXXX024 we should instead have a more general check for "Is enum signed?"*/
+#define ENUM_BF(t) unsigned
+#else
+/** Wrapper for having a bitfield of an enumerated type. Where possible, we
+ * just use the enumerated type (so the compiler can help us and notice
+ * problems), but if enumerated types are unsigned, we must use unsigned,
+ * so that the loss of precision doesn't make large values negative. */
+#define ENUM_BF(t) t
 #endif
 
 /* GCC has several useful attributes. */
@@ -546,7 +560,8 @@ const char *tor_socket_strerror(int e);
 #endif
 #define ERRNO_IS_EINPROGRESS(e)      ((e) == EINPROGRESS)
 #define ERRNO_IS_CONN_EINPROGRESS(e) ((e) == EINPROGRESS)
-#define ERRNO_IS_ACCEPT_EAGAIN(e)    (ERRNO_IS_EAGAIN(e) || (e) == ECONNABORTED)
+#define ERRNO_IS_ACCEPT_EAGAIN(e) \
+  (ERRNO_IS_EAGAIN(e) || (e) == ECONNABORTED)
 #define ERRNO_IS_ACCEPT_RESOURCE_LIMIT(e) \
   ((e) == EMFILE || (e) == ENFILE || (e) == ENOBUFS || (e) == ENOMEM)
 #define ERRNO_IS_EADDRINUSE(e)       ((e) == EADDRINUSE)
