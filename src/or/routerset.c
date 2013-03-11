@@ -141,7 +141,7 @@ routerset_parse(routerset_t *target, const char *s, const char *description)
         log_debug(LD_CONFIG, "Adding address %s to %s", nick, description);
         smartlist_add(target->policies, p);
       } else {
-        log_warn(LD_CONFIG, "Entry '%s' in %s is misformed.", nick,
+        log_warn(LD_CONFIG, "Entry '%s' in %s is malformed.", nick,
                  description);
         r = -1;
         tor_free(nick);
@@ -255,7 +255,7 @@ routerset_add_unknown_ccs(routerset_t **setp, int only_if_some_cc_set)
   }
   if (add_a1) {
     smartlist_add(set->country_names, tor_strdup("a1"));
-    smartlist_add(set->country_names, tor_strdup("{a1}"));
+    smartlist_add(set->list, tor_strdup("{a1}"));
   }
 
   if (add_unknown || add_a1) {

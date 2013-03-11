@@ -310,9 +310,10 @@ rep_hist_note_router_reachable(const char *id, const tor_addr_t *at_addr,
   tor_assert(hist);
   tor_assert((!at_addr && !at_port) || (at_addr && at_port));
 
-  addr_changed = at_addr &&
+  addr_changed = at_addr && !tor_addr_is_null(&hist->last_reached_addr) &&
     tor_addr_compare(at_addr, &hist->last_reached_addr, CMP_EXACT) != 0;
-  port_changed = at_port && at_port != hist->last_reached_port;
+  port_changed = at_port && hist->last_reached_port &&
+                 at_port != hist->last_reached_port;
 
   if (!started_tracking_stability)
     started_tracking_stability = time(NULL);
@@ -1549,7 +1550,7 @@ rep_hist_get_bandwidth_lines(void)
   /* [dirreq-](read|write)-history yyyy-mm-dd HH:MM:SS (n s) n,n,n... */
 /* The n,n,n part above. Largest representation of a uint64_t is 20 chars
  * long, plus the comma. */
-#define MAX_HIST_VALUE_LEN 21*NUM_TOTALS
+#define MAX_HIST_VALUE_LEN (21*NUM_TOTALS)
   len = (67+MAX_HIST_VALUE_LEN)*4;
   buf = tor_malloc_zero(len);
   cp = buf;

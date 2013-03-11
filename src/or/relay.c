@@ -70,6 +70,9 @@ uint64_t stats_n_relay_cells_relayed = 0;
  */
 uint64_t stats_n_relay_cells_delivered = 0;
 
+/** Used to tell which stream to read from first on a circuit. */
+static tor_weak_rng_t stream_choice_rng = TOR_WEAK_RNG_INIT;
+
 /** Update digest from the payload of cell. Assign integrity part to
  * cell.
  */
@@ -710,7 +713,7 @@ connection_ap_process_end_not_open(
   struct in_addr in;
   node_t *exitrouter;
   int reason = *(cell->payload+RELAY_HEADER_SIZE);
-  int control_reason = reason | END_STREAM_REASON_FLAG_REMOTE;
+  int control_reason;
   edge_connection_t *edge_conn = ENTRY_TO_EDGE_CONN(conn);
   (void) layer_hint; /* unused */
 
@@ -734,7 +737,13 @@ connection_ap_process_end_not_open(
     }
   }
 
-  if (rh->length > 0 && edge_reason_is_retriable(reason) &&
+  if (rh->length == 0) {
+    reason = END_STREAM_REASON_MISC;
+  }
+
+  control_reason = reason | END_STREAM_REASON_FLAG_REMOTE;
+
+  if (edge_reason_is_retriable(reason) &&
       /* avoid retry if rend */
       !connection_edge_is_rendezvous_stream(edge_conn)) {
     const char *chosen_exit_digest =
@@ -1554,11 +1563,12 @@ connection_edge_package_raw_inbuf(edge_connection_t *conn, int package_partial,
   circuit_t *circ;
   const unsigned domain = conn->base_.type == CONN_TYPE_AP ? LD_APP : LD_EXIT;
   int sending_from_optimistic = 0;
-  const int sending_optimistically =
-    conn->base_.type == CONN_TYPE_AP &&
-    conn->base_.state != AP_CONN_STATE_OPEN;
   entry_connection_t *entry_conn =
     conn->base_.type == CONN_TYPE_AP ? EDGE_TO_ENTRY_CONN(conn) : NULL;
+  const int sending_optimistically =
+    entry_conn &&
+    conn->base_.type == CONN_TYPE_AP &&
+    conn->base_.state != AP_CONN_STATE_OPEN;
   crypt_path_t *cpath_layer = conn->cpath_layer;
 
   tor_assert(conn);
@@ -1734,6 +1744,12 @@ circuit_resume_edge_reading(circuit_t *circ, crypt_path_t *layer_hint)
                                        circ, layer_hint);
 }
 
+void
+stream_choice_seed_weak_rng(void)
+{
+  crypto_seed_weak_rng(&stream_choice_rng);
+}
+
 /** A helper function for circuit_resume_edge_reading() above.
  * The arguments are the same, except that <b>conn</b> is the head
  * of a linked list of edge streams that should each be considered.
@@ -1749,11 +1765,18 @@ circuit_resume_edge_reading_helper(edge_connection_t *first_conn,
   int cells_on_queue;
   int cells_per_conn;
   edge_connection_t *chosen_stream = NULL;
+  int max_to_package;
+
+  if (first_conn == NULL) {
+    /* Don't bother to try to do the rest of this if there are no connections
+     * to resume. */
+    return 0;
+  }
 
   /* How many cells do we have space for?  It will be the minimum of
    * the number needed to exhaust the package window, and the minimum
    * needed to fill the cell queue. */
-  int max_to_package = circ->package_window;
+  max_to_package = circ->package_window;
   if (CIRCUIT_IS_ORIGIN(circ)) {
     cells_on_queue = circ->n_chan_cells.n;
   } else {
@@ -1778,10 +1801,19 @@ circuit_resume_edge_reading_helper(edge_connection_t *first_conn,
     int num_streams = 0;
     for (conn = first_conn; conn; conn = conn->next_stream) {
       num_streams++;
-      if ((tor_weak_random() % num_streams)==0)
+      if (tor_weak_random_one_in_n(&stream_choice_rng, num_streams)) {
         chosen_stream = conn;
+      }
       /* Invariant: chosen_stream has been chosen uniformly at random from
-       * among the first num_streams streams on first_conn. */
+       * among the first num_streams streams on first_conn.
+       *
+       * (Note that we iterate over every stream on the circuit, so that after
+       * we've considered the first stream, we've chosen it with P=1; and
+       * after we consider the second stream, we've switched to it with P=1/2
+       * and stayed with the first stream with P=1/2; and after we've
+       * considered the third stream, we've switched to it with P=1/3 and
+       * remained with one of the first two streams with P=(2/3), giving each
+       * one P=(1/2)(2/3) )=(1/3).) */
     }
   }
 
@@ -2032,10 +2064,10 @@ dump_cell_pool_usage(int severity)
 
 /** Allocate a new copy of packed <b>cell</b>. */
 static INLINE packed_cell_t *
-packed_cell_copy(const cell_t *cell)
+packed_cell_copy(const cell_t *cell, int wide_circ_ids)
 {
   packed_cell_t *c = packed_cell_new();
-  cell_pack(c, cell);
+  cell_pack(c, cell, wide_circ_ids);
   c->next = NULL;
   return c;
 }
@@ -2057,9 +2089,10 @@ cell_queue_append(cell_queue_t *queue, packed_cell_t *cell)
 
 /** Append a newly allocated copy of <b>cell</b> to the end of <b>queue</b> */
 void
-cell_queue_append_packed_copy(cell_queue_t *queue, const cell_t *cell)
+cell_queue_append_packed_copy(cell_queue_t *queue, const cell_t *cell,
+                              int wide_circ_ids)
 {
-  packed_cell_t *copy = packed_cell_copy(cell);
+  packed_cell_t *copy = packed_cell_copy(cell, wide_circ_ids);
   /* Remember the time when this cell was put in the queue. */
   if (get_options()->CellStatistics) {
     struct timeval now;
@@ -2391,7 +2424,7 @@ append_cell_to_circuit_queue(circuit_t *circ, channel_t *chan,
     streams_blocked = circ->streams_blocked_on_p_chan;
   }
 
-  cell_queue_append_packed_copy(queue, cell);
+  cell_queue_append_packed_copy(queue, cell, chan->wide_circ_ids);
 
   /* If we have too many cells on the circuit, we should stop reading from
    * the edge streams for a while. */

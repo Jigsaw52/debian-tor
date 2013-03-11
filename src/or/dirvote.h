@@ -20,7 +20,7 @@
 #define MIN_VOTE_INTERVAL 300
 
 /** The highest consensus method that we currently support. */
-#define MAX_SUPPORTED_CONSENSUS_METHOD 16
+#define MAX_SUPPORTED_CONSENSUS_METHOD 17
 
 /** Lowest consensus method that contains a 'directory-footer' marker */
 #define MIN_METHOD_FOR_FOOTER 9
@@ -51,6 +51,14 @@
 /** Lowest consensus method where microdescs may include an onion-key-ntor
  * line */
 #define MIN_METHOD_FOR_NTOR_KEY 16
+
+/** Lowest consensus method that ensures that authorities output an
+ * Unmeasured=1 flag for unmeasured bandwidths */
+#define MIN_METHOD_TO_CLIP_UNMEASURED_BW 17
+
+/** Default bandwidth to clip unmeasured bandwidths to using method >=
+ * MIN_METHOD_TO_CLIP_UNMEASURED_BW */
+#define DEFAULT_MAX_UNMEASURED_BW 20
 
 void dirvote_free_all(void);
 
@@ -109,6 +117,11 @@ ssize_t dirvote_format_microdesc_vote_line(char *out, size_t out_len,
                                            const microdesc_t *md,
                                            int consensus_method_low,
                                            int consensus_method_high);
+vote_microdesc_hash_t *dirvote_format_all_microdesc_vote_lines(
+                                        const routerinfo_t *ri,
+                                        time_t now,
+                                        smartlist_t *microdescriptors_out);
+
 int vote_routerstatus_find_microdesc_hash(char *digest256_out,
                                           const vote_routerstatus_t *vrs,
                                           int method,

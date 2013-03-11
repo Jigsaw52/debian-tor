@@ -70,6 +70,7 @@ int list_server_status_v1(smartlist_t *routers, char **router_status_out,
                           int for_controller);
 int dirserv_dump_directory_to_string(char **dir_out,
                                      crypto_pk_t *private_key);
+char *dirserv_get_flag_thresholds_line(void);
 
 int directory_fetches_from_authorities(const or_options_t *options);
 int directory_fetches_dir_info_early(const or_options_t *options);
@@ -130,7 +131,8 @@ size_t dirserv_estimate_microdesc_size(const smartlist_t *fps, int compressed);
 
 int routerstatus_format_entry(char *buf, size_t buf_len,
                               const routerstatus_t *rs, const char *platform,
-                              routerstatus_format_type_t format);
+                              routerstatus_format_type_t format,
+                              const vote_routerstatus_t *vrs);
 void dirserv_free_all(void);
 void cached_dir_decref(cached_dir_t *d);
 cached_dir_t *new_cached_dir(char *s, time_t published);

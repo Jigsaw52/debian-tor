@@ -241,7 +241,7 @@
 #define USING_TWOS_COMPLEMENT
 
 /* Version number of package */
-#define VERSION "0.2.4.10-alpha"
+#define VERSION "0.2.4.11-alpha"
 
 
 
@@ -256,3 +256,4 @@
 #define CURVE25519_ENABLED
 #define USE_CURVE25519_DONNA
 
+#define ENUM_VALS_ARE_SIGNED 1

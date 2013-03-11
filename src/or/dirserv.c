@@ -66,19 +66,6 @@ static cached_dir_t *the_directory = NULL;
 /** For authoritative directories: the current (v1) network status. */
 static cached_dir_t the_runningrouters;
 
-/** Array of start and end of consensus methods used for supported
-    microdescriptor formats. */
-static const struct consensus_method_range_t {
-  int low;
-  int high;
-} microdesc_consensus_methods[] = {
-  {MIN_METHOD_FOR_MICRODESC, MIN_METHOD_FOR_A_LINES - 1},
-  {MIN_METHOD_FOR_A_LINES, MIN_METHOD_FOR_P6_LINES - 1},
-  {MIN_METHOD_FOR_P6_LINES, MIN_METHOD_FOR_NTOR_KEY - 1},
-  {MIN_METHOD_FOR_NTOR_KEY, MAX_SUPPORTED_CONSENSUS_METHOD},
-  {-1, -1}
-};
-
 static void directory_remove_invalid(void);
 static cached_dir_t *dirserv_regenerate_directory(void);
 static char *format_versions_list(config_line_t *ln);
@@ -2059,6 +2046,30 @@ dirserv_compute_performance_thresholds(routerlist_t *rl,
   tor_free(wfus);
 }
 
+/** Give a statement of our current performance thresholds for inclusion
+ * in a vote document. */
+char *
+dirserv_get_flag_thresholds_line(void)
+{
+  char *result=NULL;
+  tor_asprintf(&result,
+      "stable-uptime=%lu stable-mtbf=%lu "
+      "fast-speed=%lu "
+      "guard-wfu=%.03f%% guard-tk=%lu "
+      "guard-bw-inc-exits=%lu guard-bw-exc-exits=%lu "
+      "enough-mtbf=%d",
+      (unsigned long)stable_uptime,
+      (unsigned long)stable_mtbf,
+      (unsigned long)fast_bandwidth,
+      guard_wfu*100,
+      (unsigned long)guard_tk,
+      (unsigned long)guard_bandwidth_including_exits,
+      (unsigned long)guard_bandwidth_excluding_exits,
+      enough_mtbf_info ? 1 : 0);
+
+  return result;
+}
+
 /** Given a platform string as in a routerinfo_t (possibly null), return a
  * newly allocated version string for a networkstatus document, or NULL if the
  * platform doesn't give a Tor version. */
@@ -2090,13 +2101,15 @@ version_from_platform(const char *platform)
  *   NS_V3_CONSENSUS - Output the first portion of a V3 NS consensus entry
  *   NS_V3_CONSENSUS_MICRODESC - Output the first portion of a V3 microdesc
  *        consensus entry.
- *   NS_V3_VOTE - Output a complete V3 NS vote
+ *   NS_V3_VOTE - Output a complete V3 NS vote. If <b>vrs</b> is present,
+ *        it contains additional information for the vote.
  *   NS_CONTROL_PORT - Output a NS document for the control port
  */
 int
 routerstatus_format_entry(char *buf, size_t buf_len,
                           const routerstatus_t *rs, const char *version,
-                          routerstatus_format_type_t format)
+                          routerstatus_format_type_t format,
+                          const vote_routerstatus_t *vrs)
 {
   int r;
   char *cp;
@@ -2242,10 +2255,10 @@ routerstatus_format_entry(char *buf, size_t buf_len,
       return -1;
     }
     cp += strlen(cp);
-    if (format == NS_V3_VOTE && rs->has_measured_bw) {
+    if (format == NS_V3_VOTE && vrs && vrs->has_measured_bw) {
       *--cp = '\0'; /* Kill "\n" */
       r = tor_snprintf(cp, buf_len - (cp-buf),
-                       " Measured=%d\n", rs->measured_bw);
+                       " Measured=%d\n", vrs->measured_bw);
       if (r<0) {
         log_warn(LD_BUG, "Not enough space in buffer for weight line.");
         return -1;
@@ -2628,12 +2641,12 @@ int
 measured_bw_line_apply(measured_bw_line_t *parsed_line,
                        smartlist_t *routerstatuses)
 {
-  routerstatus_t *rs = NULL;
+  vote_routerstatus_t *rs = NULL;
   if (!routerstatuses)
     return 0;
 
   rs = smartlist_bsearch(routerstatuses, parsed_line->node_id,
-                         compare_digest_to_routerstatus_entry);
+                         compare_digest_to_vote_routerstatus_entry);
 
   if (rs) {
     rs->has_measured_bw = 1;
@@ -2648,7 +2661,7 @@ measured_bw_line_apply(measured_bw_line_t *parsed_line,
 
 /**
  * Read the measured bandwidth file and apply it to the list of
- * routerstatuses. Returns -1 on error, 0 otherwise.
+ * vote_routerstatus_t. Returns -1 on error, 0 otherwise.
  */
 int
 dirserv_read_measured_bandwidths(const char *from_file,
@@ -2690,7 +2703,7 @@ dirserv_read_measured_bandwidths(const char *from_file,
   }
 
   if (routerstatuses)
-    smartlist_sort(routerstatuses, compare_routerstatus_entries);
+    smartlist_sort(routerstatuses, compare_vote_routerstatus_entries);
 
   while (!feof(fp)) {
     measured_bw_line_t parsed_line;
@@ -2739,11 +2752,11 @@ dirserv_generate_networkstatus_vote_obj(crypto_pk_t *private_key,
   tor_assert(private_key);
   tor_assert(cert);
 
-  if (resolve_my_address(LOG_WARN, options, &addr, &hostname)<0) {
+  if (resolve_my_address(LOG_WARN, options, &addr, NULL, &hostname)<0) {
     log_warn(LD_NET, "Couldn't resolve my hostname");
     return NULL;
   }
-  if (!strchr(hostname, '.')) {
+  if (!hostname || !strchr(hostname, '.')) {
     tor_free(hostname);
     hostname = tor_dup_ip(addr);
   }
@@ -2787,11 +2800,9 @@ dirserv_generate_networkstatus_vote_obj(crypto_pk_t *private_key,
   microdescriptors = smartlist_new();
 
   SMARTLIST_FOREACH_BEGIN(routers, routerinfo_t *, ri) {
-    const struct consensus_method_range_t *cmr = NULL;
     if (ri->cache_info.published_on >= cutoff) {
       routerstatus_t *rs;
       vote_routerstatus_t *vrs;
-      microdesc_t *md;
       node_t *node = node_get_mutable_by_id(ri->cache_info.identity_digest);
       if (!node)
         continue;
@@ -2809,23 +2820,8 @@ dirserv_generate_networkstatus_vote_obj(crypto_pk_t *private_key,
         rs->is_flagged_running = 0;
 
       vrs->version = version_from_platform(ri->platform);
-      for (cmr = microdesc_consensus_methods;
-           cmr->low != -1 && cmr->high != -1;
-           cmr++) {
-        md = dirvote_create_microdescriptor(ri, cmr->low);
-        if (md) {
-          char buf[128];
-          vote_microdesc_hash_t *h;
-          dirvote_format_microdesc_vote_line(buf, sizeof(buf), md,
-                                             cmr->low, cmr->high);
-          h = tor_malloc_zero(sizeof(vote_microdesc_hash_t));
-          h->microdesc_hash_line = tor_strdup(buf);
-          h->next = vrs->microdesc;
-          vrs->microdesc = h;
-          md->last_listed = now;
-          smartlist_add(microdescriptors, md);
-        }
-      }
+      vrs->microdesc = dirvote_format_all_microdesc_vote_lines(ri, now,
+                                                        microdescriptors);
 
       smartlist_add(routerstatuses, vrs);
     }
@@ -2966,10 +2962,12 @@ generate_v2_networkstatus_opinion(void)
 
   private_key = get_server_identity_key();
 
-  if (resolve_my_address(LOG_WARN, options, &addr, &hostname)<0) {
+  if (resolve_my_address(LOG_WARN, options, &addr, NULL, &hostname)<0) {
     log_warn(LD_NET, "Couldn't resolve my hostname");
     goto done;
   }
+  if (!hostname)
+    hostname = tor_dup_ip(addr);
 
   format_iso_time(published, now);
 
@@ -3056,7 +3054,8 @@ generate_v2_networkstatus_opinion(void)
       if (digestmap_get(omit_as_sybil, ri->cache_info.identity_digest))
         clear_status_flags_on_sybil(&rs);
 
-      if (routerstatus_format_entry(outp, endp-outp, &rs, version, NS_V2)) {
+      if (routerstatus_format_entry(outp, endp-outp, &rs, version, NS_V2,
+                                    NULL)) {
         log_warn(LD_BUG, "Unable to print router status.");
         tor_free(version);
         goto done;

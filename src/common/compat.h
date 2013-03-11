@@ -136,8 +136,7 @@ extern INLINE double U64_TO_DBL(uint64_t x) {
 #define DBL_TO_U64(x) ((uint64_t) (x))
 #endif
 
-#if defined(_MSC_VER)
-/* XXXX024 we should instead have a more general check for "Is enum signed?"*/
+#ifdef ENUM_VALS_ARE_SIGNED
 #define ENUM_BF(t) unsigned
 #else
 /** Wrapper for having a bitfield of an enumerated type. Where possible, we
@@ -581,11 +580,6 @@ typedef enum {
   SOCKS5_COMMAND_NOT_SUPPORTED      = 0x07,
   SOCKS5_ADDRESS_TYPE_NOT_SUPPORTED = 0x08,
 } socks5_reply_status_t;
-
-/* ===== Insecure rng */
-void tor_init_weak_random(unsigned seed);
-long tor_weak_random(void);
-#define TOR_RAND_MAX (RAND_MAX)
 
 /* ===== OS compatibility */
 const char *get_uname(void);

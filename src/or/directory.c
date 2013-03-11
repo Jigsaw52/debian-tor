@@ -472,12 +472,13 @@ directory_get_from_dirserver(uint8_t dir_purpose, uint8_t router_purpose,
     if (options->UseBridges && type != BRIDGE_DIRINFO) {
       /* We want to ask a running bridge for which we have a descriptor.
        *
-       * Be careful here: we should only ask questions that we know our
-       * bridges can answer. So far we're solving that by backing off to
-       * the behavior supported by our oldest bridge; see for example
-       * any_bridges_dont_support_microdescriptors().
+       * When we ask choose_random_entry() for a bridge, we specify what
+       * sort of dir fetch we'll be doing, so it won't return a bridge
+       * that can't answer our question.
        */
-      const node_t *node = choose_random_entry(NULL);
+      /* XXX024 Not all bridges handle conditional consensus downloading,
+       * so, for now, never assume the server supports that. -PP */
+      const node_t *node = choose_random_dirguard(type);
       if (node && node->ri) {
         /* every bridge has a routerinfo. */
         tor_addr_t addr;
@@ -2803,6 +2804,19 @@ directory_handle_command_get(dir_connection_t *conn, const char *headers,
     const char *request_type = NULL;
     const char *key = url + strlen("/tor/status/");
     long lifetime = NETWORKSTATUS_CACHE_LIFETIME;
+
+    if (options->DisableV2DirectoryInfo_ && !is_v3) {
+      static ratelim_t reject_v2_ratelim = RATELIM_INIT(1800);
+      char *m;
+      write_http_status_line(conn, 404, "Not found");
+      smartlist_free(dir_fps);
+      geoip_note_ns_response(GEOIP_REJECT_NOT_FOUND);
+      if ((m = rate_limit_log(&reject_v2_ratelim, approx_time()))) {
+        log_notice(LD_DIR, "Rejected a v2 networkstatus request.%s", m);
+        tor_free(m);
+      }
+      goto done;
+    }
 
     if (!is_v3) {
       dirserv_get_networkstatus_v2_fingerprints(dir_fps, key);
