@@ -39,6 +39,10 @@ typedef struct entry_guard_t {
                                        * bias for this node already? */
   unsigned int path_bias_disabled : 1; /**< Have we disabled this node because
                                         * of path bias issues? */
+  unsigned int path_bias_use_noticed : 1; /**< Did we alert the user about path
+                                       * use bias for this node already? */
+  unsigned int path_bias_use_extreme : 1; /**< Did we alert the user about path
+                                       * use bias for this node already? */
   unsigned int is_dir_cache : 1; /**< Is this node a directory cache? */
   time_t bad_since; /**< 0 if this guard is currently usable, or the time at
                       * which it was observed to become (according to the
@@ -104,7 +108,7 @@ int any_pending_bridge_descriptor_fetches(void);
 int entries_known_but_down(const or_options_t *options);
 void entries_retry_all(const or_options_t *options);
 
-int any_bridges_dont_support_microdescriptors(void);
+int any_bridge_supports_microdescriptors(void);
 
 void entry_guards_free_all(void);
 

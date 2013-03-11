@@ -941,6 +941,26 @@ test_crypto_curve25519_impl(void *arg)
   /* adapted from curve25519_donna, which adapted it from test-curve25519
      version 20050915, by D. J. Bernstein, Public domain. */
 
+  const int randomize_high_bit = (arg != NULL);
+
+#ifdef SLOW_CURVE25519_TEST
+  const int loop_max=10000;
+  const char e1_expected[]    = "4faf81190869fd742a33691b0e0824d5"
+                                "7e0329f4dd2819f5f32d130f1296b500";
+  const char e2k_expected[]   = "05aec13f92286f3a781ccae98995a3b9"
+                                "e0544770bc7de853b38f9100489e3e79";
+  const char e1e2k_expected[] = "cd6e8269104eb5aaee886bd2071fba88"
+                                "bd13861475516bc2cd2b6e005e805064";
+#else
+  const int loop_max=200;
+  const char e1_expected[]    = "bc7112cde03f97ef7008cad1bdc56be3"
+                                "c6a1037d74cceb3712e9206871dcf654";
+  const char e2k_expected[]   = "dd8fa254fb60bdb5142fe05b1f5de44d"
+                                "8e3ee1a63c7d14274ea5d4c67f065467";
+  const char e1e2k_expected[] = "7ddb98bd89025d2347776b33901b3e7e"
+                                "c0ee98cb2257a4545c0cfb2ca3e1812b";
+#endif
+
   unsigned char e1k[32];
   unsigned char e2k[32];
   unsigned char e1e2k[32];
@@ -949,15 +969,22 @@ test_crypto_curve25519_impl(void *arg)
   unsigned char e2[32] = {5};
   unsigned char k[32] = {9};
   int loop, i;
-  const int loop_max=10000;
-  char *mem_op_hex_tmp = NULL;
 
-  (void)arg;
+  char *mem_op_hex_tmp = NULL;
 
   for (loop = 0; loop < loop_max; ++loop) {
     curve25519_impl(e1k,e1,k);
     curve25519_impl(e2e1k,e2,e1k);
     curve25519_impl(e2k,e2,k);
+    if (randomize_high_bit) {
+      /* We require that the high bit of the public key be ignored. So if
+       * we're doing this variant test, we randomize the high bit of e2k, and
+       * make sure that the handshake still works out the same as it would
+       * otherwise. */
+      uint8_t byte;
+      crypto_rand((char*)&byte, 1);
+      e2k[31] |= (byte & 0x80);
+    }
     curve25519_impl(e1e2k,e1,e2k);
     test_memeq(e1e2k, e2e1k, 32);
     if (loop == loop_max-1) {
@@ -968,15 +995,9 @@ test_crypto_curve25519_impl(void *arg)
     for (i = 0;i < 32;++i) k[i] ^= e1e2k[i];
   }
 
-  test_memeq_hex(e1,
-                 "4faf81190869fd742a33691b0e0824d5"
-                 "7e0329f4dd2819f5f32d130f1296b500");
-  test_memeq_hex(e2k,
-                 "05aec13f92286f3a781ccae98995a3b9"
-                 "e0544770bc7de853b38f9100489e3e79");
-  test_memeq_hex(e1e2k,
-                 "cd6e8269104eb5aaee886bd2071fba88"
-                 "bd13861475516bc2cd2b6e005e805064");
+  test_memeq_hex(e1, e1_expected);
+  test_memeq_hex(e2k, e2k_expected);
+  test_memeq_hex(e1e2k, e1e2k_expected);
 
  done:
   tor_free(mem_op_hex_tmp);
@@ -1061,6 +1082,7 @@ test_crypto_curve25519_persist(void *arg)
   tt_int_op(0,==,curve25519_keypair_write_to_file(&keypair, fname, "testing"));
   tt_int_op(0,==,curve25519_keypair_read_from_file(&keypair2, &tag, fname));
   tt_str_op(tag,==,"testing");
+  tor_free(tag);
 
   test_memeq(keypair.pubkey.public_key,
              keypair2.pubkey.public_key,
@@ -1088,6 +1110,7 @@ test_crypto_curve25519_persist(void *arg)
   fname = tor_strdup(get_fname("bogus_keypair"));
 
   tt_int_op(-1, ==, curve25519_keypair_read_from_file(&keypair2, &tag, fname));
+  tor_free(tag);
 
   content[69] ^= 0xff;
   tt_int_op(0, ==, write_bytes_to_file(fname, content, st.st_size, 1));
@@ -1096,6 +1119,7 @@ test_crypto_curve25519_persist(void *arg)
  done:
   tor_free(fname);
   tor_free(content);
+  tor_free(tag);
 }
 
 #endif
@@ -1135,6 +1159,7 @@ struct testcase_t crypto_tests[] = {
   { "hkdf_sha256", test_crypto_hkdf_sha256, 0, NULL, NULL },
 #ifdef CURVE25519_ENABLED
   { "curve25519_impl", test_crypto_curve25519_impl, 0, NULL, NULL },
+  { "curve25519_impl_hibit", test_crypto_curve25519_impl, 0, NULL, (void*)"y"},
   { "curve25519_wrappers", test_crypto_curve25519_wrappers, 0, NULL, NULL },
   { "curve25519_encode", test_crypto_curve25519_encode, 0, NULL, NULL },
   { "curve25519_persist", test_crypto_curve25519_persist, 0, NULL, NULL },

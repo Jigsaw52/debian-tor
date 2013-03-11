@@ -25,6 +25,7 @@
 #include "directory.h"
 #include "entrynodes.h"
 #include "main.h"
+#include "microdesc.h"
 #include "networkstatus.h"
 #include "nodelist.h"
 #include "onion.h"
@@ -99,7 +100,7 @@ get_unique_circ_id_by_chan(channel_t *chan)
 {
   circid_t test_circ_id;
   circid_t attempts=0;
-  circid_t high_bit;
+  circid_t high_bit, max_range;
 
   tor_assert(chan);
 
@@ -109,17 +110,17 @@ get_unique_circ_id_by_chan(channel_t *chan)
              "a client with no identity.");
     return 0;
   }
-  high_bit =
-    (chan->circ_id_type == CIRC_ID_TYPE_HIGHER) ? 1<<15 : 0;
+  max_range =  (chan->wide_circ_ids) ? (1u<<31) : (1u<<15);
+  high_bit = (chan->circ_id_type == CIRC_ID_TYPE_HIGHER) ? max_range : 0;
   do {
-    /* Sequentially iterate over test_circ_id=1...1<<15-1 until we find a
+    /* Sequentially iterate over test_circ_id=1...max_range until we find a
      * circID such that (high_bit|test_circ_id) is not already used. */
     test_circ_id = chan->next_circ_id++;
-    if (test_circ_id == 0 || test_circ_id >= 1<<15) {
+    if (test_circ_id == 0 || test_circ_id >= max_range) {
       test_circ_id = 1;
       chan->next_circ_id = 2;
     }
-    if (++attempts > 1<<15) {
+    if (++attempts > max_range) {
       /* Make sure we don't loop forever if all circ_id's are used. This
        * matters because it's an external DoS opportunity.
        */
@@ -522,7 +523,7 @@ circuit_deliver_create_cell(circuit_t *circ, const create_cell_t *create_cell,
     log_warn(LD_CIRC,"failed to get unique circID.");
     return -1;
   }
-  log_debug(LD_CIRC,"Chosen circID %u.", id);
+  log_debug(LD_CIRC,"Chosen circID %u.", (unsigned)id);
   circuit_set_n_circid_chan(circ, id, circ->n_chan);
 
   memset(&cell, 0, sizeof(cell_t));
@@ -1222,7 +1223,7 @@ pathbias_get_min_use(const or_options_t *options)
 static double
 pathbias_get_notice_use_rate(const or_options_t *options)
 {
-#define DFLT_PATH_BIAS_NOTICE_USE_PCT 90
+#define DFLT_PATH_BIAS_NOTICE_USE_PCT 80
   if (options->PathBiasNoticeUseRate >= 0.0)
     return options->PathBiasNoticeUseRate;
   else
@@ -1238,7 +1239,7 @@ pathbias_get_notice_use_rate(const or_options_t *options)
 double
 pathbias_get_extreme_use_rate(const or_options_t *options)
 {
-#define DFLT_PATH_BIAS_EXTREME_USE_PCT 70
+#define DFLT_PATH_BIAS_EXTREME_USE_PCT 60
   if (options->PathBiasExtremeUseRate >= 0.0)
     return options->PathBiasExtremeUseRate;
   else
@@ -1268,7 +1269,7 @@ pathbias_get_scale_use_threshold(const or_options_t *options)
 /**
  * Convert a Guard's path state to string.
  */
-static const char *
+const char *
 pathbias_state_to_string(path_state_t state)
 {
   switch (state) {
@@ -1307,7 +1308,8 @@ pathbias_is_new_circ_attempt(origin_circuit_t *circ)
   /* cpath is a circular list. We want circs with more than one hop,
    * and the second hop must be waiting for keys still (it's just
    * about to get them). */
-  return circ->cpath->next != circ->cpath &&
+  return circ->cpath &&
+         circ->cpath->next != circ->cpath &&
          circ->cpath->next->state == CPATH_STATE_AWAITING_KEYS;
 #else
   /* If tagging attacks are no longer possible, we probably want to
@@ -1315,7 +1317,8 @@ pathbias_is_new_circ_attempt(origin_circuit_t *circ)
    * timing-based tagging is still more useful than per-hop failure.
    * In which case, we'd never want to use this.
    */
-  return circ->cpath->state == CPATH_STATE_AWAITING_KEYS;
+  return circ->cpath &&
+         circ->cpath->state == CPATH_STATE_AWAITING_KEYS;
 #endif
 }
 
@@ -2273,8 +2276,8 @@ pathbias_measure_use_rate(entry_guard_t *guard)
           entry_guards_changed();
           return;
         }
-      } else if (!guard->path_bias_extreme) {
-        guard->path_bias_extreme = 1;
+      } else if (!guard->path_bias_use_extreme) {
+        guard->path_bias_use_extreme = 1;
         log_warn(LD_CIRC,
                  "Your Guard %s=%s is failing to carry an extremely large "
                  "amount of streams on its circuits. "
@@ -2297,8 +2300,8 @@ pathbias_measure_use_rate(entry_guard_t *guard)
       }
     } else if (pathbias_get_use_success_count(guard)/guard->use_attempts
                < pathbias_get_notice_use_rate(options)) {
-      if (!guard->path_bias_noticed) {
-        guard->path_bias_noticed = 1;
+      if (!guard->path_bias_use_noticed) {
+        guard->path_bias_use_noticed = 1;
         log_notice(LD_CIRC,
                  "Your Guard %s=%s is failing to carry more streams on its "
                  "circuits than usual. "
@@ -2336,7 +2339,10 @@ pathbias_measure_use_rate(entry_guard_t *guard)
  * pathbias_measure_use_rate(). It may be possible to combine them
  * eventually, especially if we can ever remove the need for 3
  * levels of closure warns (if the overall circuit failure rate
- * goes down with ntor).
+ * goes down with ntor). One way to do so would be to multiply
+ * the build rate with the use rate to get an idea of the total
+ * fraction of the total network paths the user is able to use.
+ * See ticket #8159.
  */
 static void
 pathbias_measure_close_rate(entry_guard_t *guard)
@@ -2457,7 +2463,7 @@ pathbias_measure_close_rate(entry_guard_t *guard)
  *
  * XXX: The attempt count transfer stuff here might be done
  * better by keeping separate pending counters that get
- * transfered at circuit close.
+ * transfered at circuit close. See ticket #8160.
  */
 static void
 pathbias_scale_close_rates(entry_guard_t *guard)
@@ -2503,7 +2509,7 @@ pathbias_scale_close_rates(entry_guard_t *guard)
  *
  * XXX: The attempt count transfer stuff here might be done
  * better by keeping separate pending counters that get
- * transfered at circuit close.
+ * transfered at circuit close. See ticket #8160.
  */
 void
 pathbias_scale_use_rates(entry_guard_t *guard)

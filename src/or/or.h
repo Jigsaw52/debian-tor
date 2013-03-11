@@ -177,8 +177,6 @@
 #define MIN_ONION_KEY_LIFETIME (7*24*60*60)
 /** How often do we rotate TLS contexts? */
 #define MAX_SSL_KEY_LIFETIME_INTERNAL (2*60*60)
-/** What expiry time shall we place on our SSL certs? */
-#define MAX_SSL_KEY_LIFETIME_ADVERTISED (365*24*60*60)
 
 /** How old do we allow a router to get before removing it
  * from the router list? In seconds. */
@@ -869,11 +867,29 @@ typedef enum {
 
 /** Number of bytes in a cell, minus cell header. */
 #define CELL_PAYLOAD_SIZE 509
-/** Number of bytes in a cell transmitted over the network. */
-#define CELL_NETWORK_SIZE 512
+/** Number of bytes in a cell transmitted over the network, in the longest
+ * form */
+#define CELL_MAX_NETWORK_SIZE 514
 
-/** Length of a header on a variable-length cell. */
-#define VAR_CELL_HEADER_SIZE 5
+/** Maximum length of a header on a variable-length cell. */
+#define VAR_CELL_MAX_HEADER_SIZE 7
+
+static int get_cell_network_size(int wide_circ_ids);
+static INLINE int get_cell_network_size(int wide_circ_ids)
+{
+  return wide_circ_ids ? CELL_MAX_NETWORK_SIZE : CELL_MAX_NETWORK_SIZE - 2;
+}
+static int get_var_cell_header_size(int wide_circ_ids);
+static INLINE int get_var_cell_header_size(int wide_circ_ids)
+{
+  return wide_circ_ids ? VAR_CELL_MAX_HEADER_SIZE :
+    VAR_CELL_MAX_HEADER_SIZE - 2;
+}
+static int get_circ_id_size(int wide_circ_ids);
+static INLINE int get_circ_id_size(int wide_circ_ids)
+{
+  return wide_circ_ids ? 4 : 2;
+}
 
 /** Number of bytes in a relay cell's header (not including general cell
  * header). */
@@ -882,7 +898,7 @@ typedef enum {
 #define RELAY_PAYLOAD_SIZE (CELL_PAYLOAD_SIZE-RELAY_HEADER_SIZE)
 
 /** Identifies a circuit on an or_connection */
-typedef uint16_t circid_t;
+typedef uint32_t circid_t;
 /** Identifies a stream on a circuit */
 typedef uint16_t streamid_t;
 
@@ -1051,7 +1067,7 @@ typedef struct var_cell_t {
 /** A cell as packed for writing to the network. */
 typedef struct packed_cell_t {
   struct packed_cell_t *next; /**< Next cell queued on this circuit. */
-  char body[CELL_NETWORK_SIZE]; /**< Cell as packed for network. */
+  char body[CELL_MAX_NETWORK_SIZE]; /**< Cell as packed for network. */
 } packed_cell_t;
 
 /** Number of cells added to a circuit queue including their insertion
@@ -1400,6 +1416,7 @@ typedef struct or_connection_t {
   /** True iff this is an outgoing connection. */
   unsigned int is_outgoing:1;
   unsigned int proxy_type:2; /**< One of PROXY_NONE...PROXY_SOCKS5 */
+  unsigned int wide_circ_ids:1;
   uint8_t link_proto; /**< What protocol version are we using? 0 for
                        * "none negotiated yet." */
 
@@ -2072,9 +2089,8 @@ typedef struct routerstatus_t {
 
   unsigned int has_bandwidth:1; /**< The vote/consensus had bw info */
   unsigned int has_exitsummary:1; /**< The vote/consensus had exit summaries */
-  unsigned int has_measured_bw:1; /**< The vote/consensus had a measured bw */
-
-  uint32_t measured_bw; /**< Measured bandwidth (capacity) of the router */
+  unsigned int bw_is_unmeasured:1; /**< This is a consensus entry, with
+                                    * the Unmeasured flag set. */
 
   uint32_t bandwidth; /**< Bandwidth (capacity) of the router as reported in
                        * the vote/consensus, in kilobytes/sec. */
@@ -2318,6 +2334,8 @@ typedef struct vote_routerstatus_t {
                    * networkstatus_t.known_flags. */
   char *version; /**< The version that the authority says this router is
                   * running. */
+  unsigned int has_measured_bw:1; /**< The vote had a measured bw */
+  uint32_t measured_bw; /**< Measured bandwidth (capacity) of the router */
   /** The hash or hashes that the authority claims this microdesc has. */
   vote_microdesc_hash_t *microdesc;
 } vote_routerstatus_t;
@@ -2383,6 +2401,9 @@ typedef enum {
 typedef struct networkstatus_t {
   ENUM_BF(networkstatus_type_t) type : 8; /**< Vote, consensus, or opinion? */
   ENUM_BF(consensus_flavor_t) flavor : 8; /**< If a consensus, what kind? */
+  unsigned int has_measured_bws : 1;/**< True iff this networkstatus contains
+                                     * measured= bandwidth values. */
+
   time_t published; /**< Vote only: Time when vote was written. */
   time_t valid_after; /**< Time after which this vote or consensus applies. */
   time_t fresh_until; /**< Time before which this is the most recent vote or
@@ -3976,6 +3997,21 @@ typedef struct {
 
   /** Fraction: */
   double PathsNeededToBuildCircuits;
+
+  /** Do we serve v2 directory info at all?  This is a temporary option, since
+   * we'd like to disable v2 directory serving entirely, but we need a way to
+   * make it temporarily disableable, in order to do fast testing and be
+   * able to turn it back on if it turns out to be non-workable.
+   *
+   * XXXX025 Make this always-on, or always-off.  Right now, it's only
+   * enableable for authorities.
+   */
+  int DisableV2DirectoryInfo_;
+
+  /** What expiry time shall we place on our SSL certs? "0" means we
+   * should guess a suitable value. */
+  int SSLKeyLifetime;
+
 } or_options_t;
 
 /** Persistent state for an onion router, as saved to disk. */
@@ -4586,12 +4622,12 @@ typedef struct rend_encoded_v2_service_descriptor_t {
  * sooner.)
  *
  * XXX023 Should this be configurable? */
-#define INTRO_POINT_LIFETIME_MIN_SECONDS 18*60*60
+#define INTRO_POINT_LIFETIME_MIN_SECONDS (18*60*60)
 /** The maximum number of seconds that an introduction point will last
  * before expiring due to old age.
  *
  * XXX023 Should this be configurable? */
-#define INTRO_POINT_LIFETIME_MAX_SECONDS 24*60*60
+#define INTRO_POINT_LIFETIME_MAX_SECONDS (24*60*60)
 
 /** Introduction point information.  Used both in rend_service_t (on
  * the service side) and in rend_service_descriptor_t (on both the

@@ -134,6 +134,8 @@ format_networkstatus_vote(crypto_pk_t *private_signing_key,
     char fu[ISO_TIME_LEN+1];
     char vu[ISO_TIME_LEN+1];
     char *flags = smartlist_join_strings(v3_ns->known_flags, " ", 0, NULL);
+    /* XXXX Abstraction violation: should be pulling a field out of v3_ns.*/
+    char *flag_thresholds = dirserv_get_flag_thresholds_line();
     char *params;
     authority_cert_t *cert = v3_ns->cert;
     char *methods =
@@ -160,6 +162,7 @@ format_networkstatus_vote(crypto_pk_t *private_signing_key,
                  "voting-delay %d %d\n"
                  "%s" /* versions */
                  "known-flags %s\n"
+                 "flag-thresholds %s\n"
                  "params %s\n"
                  "dir-source %s %s %s %s %d %d\n"
                  "contact %s\n",
@@ -169,6 +172,7 @@ format_networkstatus_vote(crypto_pk_t *private_signing_key,
                  v3_ns->vote_seconds, v3_ns->dist_seconds,
                  version_lines,
                  flags,
+                 flag_thresholds,
                  params,
                  voter->nickname, fingerprint, voter->address,
                  fmt_addr32(addr), voter->dir_port, voter->or_port,
@@ -181,6 +185,7 @@ format_networkstatus_vote(crypto_pk_t *private_signing_key,
 
     tor_free(params);
     tor_free(flags);
+    tor_free(flag_thresholds);
     tor_free(methods);
     outp = status + strlen(status);
     endp = status + len;
@@ -207,7 +212,7 @@ format_networkstatus_vote(crypto_pk_t *private_signing_key,
                           vrs) {
     vote_microdesc_hash_t *h;
     if (routerstatus_format_entry(outp, endp-outp, &vrs->status,
-                                  vrs->version, NS_V3_VOTE) < 0) {
+                                  vrs->version, NS_V3_VOTE, vrs) < 0) {
       log_warn(LD_BUG, "Unable to print router status.");
       goto err;
     }
@@ -1383,6 +1388,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
   char *client_versions = NULL, *server_versions = NULL;
   smartlist_t *flags;
   const char *flavor_name;
+  uint32_t max_unmeasured_bw = DEFAULT_MAX_UNMEASURED_BW;
   int64_t G=0, M=0, E=0, D=0, T=0; /* For bandwidth weights */
   const routerstatus_format_type_t rs_format =
     flavor == FLAV_NS ? NS_V3_CONSENSUS : NS_V3_CONSENSUS_MICRODESC;
@@ -1581,6 +1587,30 @@ networkstatus_compute_consensus(smartlist_t *votes,
     smartlist_free(dir_sources);
   }
 
+  if (consensus_method >= MIN_METHOD_TO_CLIP_UNMEASURED_BW) {
+    char *max_unmeasured_param = NULL;
+    /* XXXX Extract this code into a common function */
+    if (params) {
+      if (strcmpstart(params, "maxunmeasuredbw=") == 0)
+        max_unmeasured_param = params;
+      else
+        max_unmeasured_param = strstr(params, " maxunmeasuredbw=");
+    }
+    if (max_unmeasured_param) {
+      int ok = 0;
+      char *eq = strchr(max_unmeasured_param, '=');
+      if (eq) {
+        max_unmeasured_bw = (uint32_t)
+          tor_parse_ulong(eq+1, 10, 1, UINT32_MAX, &ok, NULL);
+        if (!ok) {
+          log_warn(LD_DIR, "Bad element '%s' in max unmeasured bw param",
+                   escaped(max_unmeasured_param));
+          max_unmeasured_bw = DEFAULT_MAX_UNMEASURED_BW;
+        }
+      }
+    }
+  }
+
   /* Add the actual router entries. */
   {
     int *index; /* index[j] is the current index into votes[j]. */
@@ -1607,6 +1637,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
     int *named_flag; /* Index of the flag "Named" for votes[j] */
     int *unnamed_flag; /* Index of the flag "Unnamed" for votes[j] */
     int chosen_named_idx;
+    int n_authorities_measuring_bandwidth;
 
     strmap_t *name_to_id_map = strmap_new();
     char conflict[DIGEST_LEN];
@@ -1695,6 +1726,14 @@ networkstatus_compute_consensus(smartlist_t *votes,
       } SMARTLIST_FOREACH_END(v);
     }
 
+    /* We need to know how many votes measure bandwidth. */
+    n_authorities_measuring_bandwidth = 0;
+    SMARTLIST_FOREACH(votes, networkstatus_t *, v,
+       if (v->has_measured_bws) {
+         ++n_authorities_measuring_bandwidth;
+       }
+    );
+
     /* Now go through all the votes */
     flag_counts = tor_malloc(sizeof(int) * smartlist_len(flags));
     while (1) {
@@ -1764,8 +1803,8 @@ networkstatus_compute_consensus(smartlist_t *votes,
         }
 
         /* count bandwidths */
-        if (rs->status.has_measured_bw)
-          measured_bws[num_mbws++] = rs->status.measured_bw;
+        if (rs->has_measured_bw)
+          measured_bws[num_mbws++] = rs->measured_bw;
 
         if (rs->status.has_bandwidth)
           bandwidths[num_bandwidths++] = rs->status.bandwidth;
@@ -1858,10 +1897,19 @@ networkstatus_compute_consensus(smartlist_t *votes,
       /* Pick a bandwidth */
       if (consensus_method >= 6 && num_mbws > 2) {
         rs_out.has_bandwidth = 1;
+        rs_out.bw_is_unmeasured = 0;
         rs_out.bandwidth = median_uint32(measured_bws, num_mbws);
       } else if (consensus_method >= 5 && num_bandwidths > 0) {
         rs_out.has_bandwidth = 1;
+        rs_out.bw_is_unmeasured = 1;
         rs_out.bandwidth = median_uint32(bandwidths, num_bandwidths);
+        if (consensus_method >= MIN_METHOD_TO_CLIP_UNMEASURED_BW &&
+            n_authorities_measuring_bandwidth > 2) {
+          /* Cap non-measured bandwidths. */
+          if (rs_out.bandwidth > max_unmeasured_bw) {
+            rs_out.bandwidth = max_unmeasured_bw;
+          }
+        }
       }
 
       /* Fix bug 2203: Do not count BadExit nodes as Exits for bw weights */
@@ -1982,7 +2030,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
         /* Okay!! Now we can write the descriptor... */
         /*     First line goes into "buf". */
         routerstatus_format_entry(buf, sizeof(buf), &rs_out, NULL,
-                                  rs_format);
+                                  rs_format, NULL);
         smartlist_add(chunks, tor_strdup(buf));
       }
       /*     Now an m line, if applicable. */
@@ -2003,7 +2051,10 @@ networkstatus_compute_consensus(smartlist_t *votes,
       smartlist_add(chunks, tor_strdup("\n"));
       /*     Now the weight line. */
       if (rs_out.has_bandwidth) {
-        smartlist_add_asprintf(chunks, "w Bandwidth=%d\n", rs_out.bandwidth);
+        int unmeasured = rs_out.bw_is_unmeasured &&
+          consensus_method >= MIN_METHOD_TO_CLIP_UNMEASURED_BW;
+        smartlist_add_asprintf(chunks, "w Bandwidth=%d%s\n", rs_out.bandwidth,
+                               unmeasured?" Unmeasured=1":"");
       }
 
       /*     Now the exitpolicy summary line. */
@@ -2046,6 +2097,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
     // Parse params, extract BW_WEIGHT_SCALE if present
     // DO NOT use consensus_param_bw_weight_scale() in this code!
     // The consensus is not formed yet!
+    /* XXXX Extract this code into a common function */
     if (params) {
       if (strcmpstart(params, "bwweightscale=") == 0)
         bw_weight_param = params;
@@ -2116,7 +2168,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
                                        digest, digest_len,
                                        signing_key)) {
       log_warn(LD_BUG, "Couldn't sign consensus networkstatus.");
-      return NULL; /* This leaks, but it should never happen. */
+      goto done;
     }
     smartlist_add(chunks, tor_strdup(sigbuf));
 
@@ -2139,20 +2191,13 @@ networkstatus_compute_consensus(smartlist_t *votes,
                                          digest, digest_len,
                                          legacy_signing_key)) {
         log_warn(LD_BUG, "Couldn't sign consensus networkstatus.");
-        return NULL; /* This leaks, but it should never happen. */
+        goto done;
       }
       smartlist_add(chunks, tor_strdup(sigbuf));
     }
   }
 
   result = smartlist_join_strings(chunks, "", 0, NULL);
-
-  tor_free(client_versions);
-  tor_free(server_versions);
-  SMARTLIST_FOREACH(flags, char *, cp, tor_free(cp));
-  smartlist_free(flags);
-  SMARTLIST_FOREACH(chunks, char *, cp, tor_free(cp));
-  smartlist_free(chunks);
 
   {
     networkstatus_t *c;
@@ -2161,7 +2206,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
       log_err(LD_BUG, "Generated a networkstatus consensus we couldn't "
               "parse.");
       tor_free(result);
-      return NULL;
+      goto done;
     }
     // Verify balancing parameters
     if (consensus_method >= MIN_METHOD_FOR_BW_WEIGHTS && added_weights) {
@@ -2169,6 +2214,15 @@ networkstatus_compute_consensus(smartlist_t *votes,
     }
     networkstatus_vote_free(c);
   }
+
+ done:
+
+  tor_free(client_versions);
+  tor_free(server_versions);
+  SMARTLIST_FOREACH(flags, char *, cp, tor_free(cp));
+  smartlist_free(flags);
+  SMARTLIST_FOREACH(chunks, char *, cp, tor_free(cp));
+  smartlist_free(chunks);
 
   return result;
 }
@@ -3642,6 +3696,87 @@ dirvote_format_microdesc_vote_line(char *out_buf, size_t out_buf_len,
  out:
   tor_free(microdesc_consensus_methods);
   return ret;
+}
+
+/** Array of start and end of consensus methods used for supported
+    microdescriptor formats. */
+static const struct consensus_method_range_t {
+  int low;
+  int high;
+} microdesc_consensus_methods[] = {
+  {MIN_METHOD_FOR_MICRODESC, MIN_METHOD_FOR_A_LINES - 1},
+  {MIN_METHOD_FOR_A_LINES, MIN_METHOD_FOR_P6_LINES - 1},
+  {MIN_METHOD_FOR_P6_LINES, MIN_METHOD_FOR_NTOR_KEY - 1},
+  {MIN_METHOD_FOR_NTOR_KEY, MAX_SUPPORTED_CONSENSUS_METHOD},
+  {-1, -1}
+};
+
+/** Helper type used when generating the microdescriptor lines in a directory
+ * vote. */
+typedef struct microdesc_vote_line_t {
+  int low;
+  int high;
+  microdesc_t *md;
+  struct microdesc_vote_line_t *next;
+} microdesc_vote_line_t;
+
+/** Generate and return a linked list of all the lines that should appear to
+ * describe a router's microdescriptor versions in a directory vote.
+ * Add the generated microdescriptors to <b>microdescriptors_out</b>. */
+vote_microdesc_hash_t *
+dirvote_format_all_microdesc_vote_lines(const routerinfo_t *ri, time_t now,
+                                        smartlist_t *microdescriptors_out)
+{
+  const struct consensus_method_range_t *cmr;
+  microdesc_vote_line_t *entries = NULL, *ep;
+  vote_microdesc_hash_t *result = NULL;
+
+  /* Generate the microdescriptors. */
+  for (cmr = microdesc_consensus_methods;
+       cmr->low != -1 && cmr->high != -1;
+       cmr++) {
+    microdesc_t *md = dirvote_create_microdescriptor(ri, cmr->low);
+    if (md) {
+      microdesc_vote_line_t *e =
+        tor_malloc_zero(sizeof(microdesc_vote_line_t));
+      e->md = md;
+      e->low = cmr->low;
+      e->high = cmr->high;
+      e->next = entries;
+      entries = e;
+    }
+  }
+
+  /* Compress adjacent identical ones */
+  for (ep = entries; ep; ep = ep->next) {
+    while (ep->next &&
+           fast_memeq(ep->md->digest, ep->next->md->digest, DIGEST256_LEN) &&
+           ep->low == ep->next->high + 1) {
+      microdesc_vote_line_t *next = ep->next;
+      ep->low = next->low;
+      microdesc_free(next->md);
+      ep->next = next->next;
+      tor_free(next);
+    }
+  }
+
+  /* Format them into vote_microdesc_hash_t, and add to microdescriptors_out.*/
+  while ((ep = entries)) {
+    char buf[128];
+    vote_microdesc_hash_t *h;
+    dirvote_format_microdesc_vote_line(buf, sizeof(buf), ep->md,
+                                       ep->low, ep->high);
+    h = tor_malloc_zero(sizeof(vote_microdesc_hash_t));
+    h->microdesc_hash_line = tor_strdup(buf);
+    h->next = result;
+    result = h;
+    ep->md->last_listed = now;
+    smartlist_add(microdescriptors_out, ep->md);
+    entries = ep->next;
+    tor_free(ep);
+  }
+
+  return result;
 }
 
 /** If <b>vrs</b> has a hash made for the consensus method <b>method</b> with

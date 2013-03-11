@@ -650,6 +650,7 @@ router_initialize_tls_context(void)
 {
   unsigned int flags = 0;
   const or_options_t *options = get_options();
+  int lifetime = options->SSLKeyLifetime;
   if (public_server_mode(options))
     flags |= TOR_TLS_CTX_IS_PUBLIC_SERVER;
   if (options->TLSECGroup) {
@@ -658,12 +659,28 @@ router_initialize_tls_context(void)
     else if (!strcasecmp(options->TLSECGroup, "P224"))
       flags |= TOR_TLS_CTX_USE_ECDHE_P224;
   }
+  if (!lifetime) { /* we should guess a good ssl cert lifetime */
 
+    /* choose between 5 and 365 days, and round to the day */
+    lifetime = 5*24*3600 + crypto_rand_int(361*24*3600);
+    lifetime -= lifetime % (24*3600);
+
+    if (crypto_rand_int(2)) {
+      /* Half the time we expire at midnight, and half the time we expire
+       * one second before midnight. (Some CAs wobble their expiry times a
+       * bit in practice, perhaps to reduce collision attacks; see ticket
+       * 8443 for details about observed certs in the wild.) */
+      lifetime--;
+    }
+  }
+
+  /* It's ok to pass lifetime in as an unsigned int, since
+   * config_parse_interval() checked it. */
   return tor_tls_context_init(flags,
                               get_tlsclient_identity_key(),
-                              server_mode(get_options()) ?
+                              server_mode(options) ?
                               get_server_identity_key() : NULL,
-                              MAX_SSL_KEY_LIFETIME_ADVERTISED);
+                              (unsigned int)lifetime);
 }
 
 /** Initialize all OR private keys, and the TLS context, as necessary.
@@ -1117,14 +1134,11 @@ consider_testing_reachability(int test_or, int test_dir)
     if (test_or || test_dir) {
 #define SELF_EXCLUDED_WARN_INTERVAL 3600
       static ratelim_t warning_limit=RATELIM_INIT(SELF_EXCLUDED_WARN_INTERVAL);
-      char *msg;
-      if ((msg = rate_limit_log(&warning_limit, approx_time()))) {
-        log_warn(LD_CIRC, "Can't peform self-tests for this relay: we have "
+      log_fn_ratelim(&warning_limit, LOG_WARN, LD_CIRC,
+                 "Can't peform self-tests for this relay: we have "
                  "listed ourself in ExcludeNodes, and StrictNodes is set. "
                  "We cannot learn whether we are usable, and will not "
-                 "be able to advertise ourself.%s", msg);
-        tor_free(msg);
-      }
+                 "be able to advertise ourself.");
     }
     return;
   }
@@ -1195,7 +1209,8 @@ router_dirport_found_reachable(void)
 void
 router_perform_bandwidth_test(int num_circs, time_t now)
 {
-  int num_cells = (int)(get_options()->BandwidthRate * 10 / CELL_NETWORK_SIZE);
+  int num_cells = (int)(get_options()->BandwidthRate * 10 /
+                        CELL_MAX_NETWORK_SIZE);
   int max_cells = num_cells < CIRCWINDOW_START ?
                     num_cells : CIRCWINDOW_START;
   int cells_per_circuit = max_cells / num_circs;
@@ -1715,7 +1730,9 @@ static int router_guess_address_from_dir_headers(uint32_t *guess);
 int
 router_pick_published_address(const or_options_t *options, uint32_t *addr)
 {
-  if (resolve_my_address(LOG_INFO, options, addr, NULL) < 0) {
+  *addr = get_last_resolved_addr();
+  if (!*addr &&
+      resolve_my_address(LOG_INFO, options, addr, NULL, NULL) < 0) {
     log_info(LD_CONFIG, "Could not determine our address locally. "
              "Checking if directory headers provide any hints.");
     if (router_guess_address_from_dir_headers(addr) < 0) {
@@ -1945,9 +1962,13 @@ router_rebuild_descriptor(int force)
        anyway, since they don't have a DirPort, and always connect to the
        bridge authority anonymously.  But just in case they somehow think of
        sending them on an unencrypted connection, don't allow them to try. */
-    ri->cache_info.send_unencrypted = ei->cache_info.send_unencrypted = 0;
+    ri->cache_info.send_unencrypted = 0;
+    if (ei)
+      ei->cache_info.send_unencrypted = 0;
   } else {
-    ri->cache_info.send_unencrypted = ei->cache_info.send_unencrypted = 1;
+    ri->cache_info.send_unencrypted = 1;
+    if (ei)
+      ei->cache_info.send_unencrypted = 1;
   }
 
   router_get_router_hash(ri->cache_info.signed_descriptor_body,
@@ -2092,6 +2113,9 @@ check_descriptor_ipaddress_changed(time_t now)
 {
   uint32_t prev, cur;
   const or_options_t *options = get_options();
+  const char *method = NULL;
+  char *hostname = NULL;
+
   (void) now;
 
   if (!desc_routerinfo)
@@ -2099,18 +2123,29 @@ check_descriptor_ipaddress_changed(time_t now)
 
   /* XXXX ipv6 */
   prev = desc_routerinfo->addr;
-  if (resolve_my_address(LOG_INFO, options, &cur, NULL) < 0) {
+  if (resolve_my_address(LOG_INFO, options, &cur, &method, &hostname) < 0) {
     log_info(LD_CONFIG,"options->Address didn't resolve into an IP.");
     return;
   }
 
   if (prev != cur) {
+    char *source;
     tor_addr_t tmp_prev, tmp_cur;
+
     tor_addr_from_ipv4h(&tmp_prev, prev);
     tor_addr_from_ipv4h(&tmp_cur, cur);
-    log_addr_has_changed(LOG_NOTICE, &tmp_prev, &tmp_cur, "resolve");
+
+    tor_asprintf(&source, "METHOD=%s%s%s", method,
+                 hostname ? " HOSTNAME=" : "",
+                 hostname ? hostname : "");
+
+    log_addr_has_changed(LOG_NOTICE, &tmp_prev, &tmp_cur, source);
+    tor_free(source);
+
     ip_address_changed(0);
   }
+
+  tor_free(hostname);
 }
 
 /** The most recently guessed value of our IP address, based on directory
@@ -2144,7 +2179,9 @@ router_new_address_suggestion(const char *suggestion,
   }
 
   /* XXXX ipv6 */
-  if (resolve_my_address(LOG_INFO, options, &cur, NULL) >= 0) {
+  cur = get_last_resolved_addr();
+  if (cur ||
+      resolve_my_address(LOG_INFO, options, &cur, NULL, NULL) >= 0) {
     /* We're all set -- we already know our address. Great. */
     tor_addr_from_ipv4h(&last_guessed_ip, cur); /* store it in case we
                                                    need it later */
@@ -2399,6 +2436,7 @@ router_dump_router_to_string(char *s, size_t maxlen, routerinfo_t *router,
                             "ipv6-policy %s\n", p6);
       if (result<0) {
         log_warn(LD_BUG,"Descriptor printf of policy ran out of room");
+        tor_free(p6);
         return -1;
       }
       written += result;
@@ -2694,7 +2732,9 @@ extrainfo_dump_to_string(char **s_out, extrainfo_t *extrainfo,
   return result;
 }
 
-/** Return true iff <b>s</b> is a legally valid server nickname. */
+/** Return true iff <b>s</b> is a valid server nickname. (That is, a string
+ * containing between 1 and MAX_NICKNAME_LEN characters from
+ * LEGAL_NICKNAME_CHARACTERS.) */
 int
 is_legal_nickname(const char *s)
 {
@@ -2705,7 +2745,7 @@ is_legal_nickname(const char *s)
     strspn(s,LEGAL_NICKNAME_CHARACTERS) == len;
 }
 
-/** Return true iff <b>s</b> is a legally valid server nickname or
+/** Return true iff <b>s</b> is a valid server nickname or
  * hex-encoded identity-key digest. */
 int
 is_legal_nickname_or_hexdigest(const char *s)
@@ -2716,8 +2756,11 @@ is_legal_nickname_or_hexdigest(const char *s)
     return is_legal_hexdigest(s);
 }
 
-/** Return true iff <b>s</b> is a legally valid hex-encoded identity-key
- * digest. */
+/** Return true iff <b>s</b> is a valid hex-encoded identity-key
+ * digest. (That is, an optional $, followed by 40 hex characters,
+ * followed by either nothing, or = or ~ followed by a nickname, or
+ * a character other than =, ~, or a hex character.)
+ */
 int
 is_legal_hexdigest(const char *s)
 {

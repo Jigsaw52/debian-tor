@@ -1058,6 +1058,7 @@ connection_listener_new(const struct sockaddr *listensockaddr,
     if (bind(s, listensockaddr, (socklen_t)sizeof(struct sockaddr_un)) == -1) {
       log_warn(LD_NET,"Bind to %s failed: %s.", address,
                tor_socket_strerror(tor_socket_errno(s)));
+      tor_close_socket(s);
       goto err;
     }
 #ifdef HAVE_PWD_H
@@ -1066,9 +1067,12 @@ connection_listener_new(const struct sockaddr *listensockaddr,
       if (pw == NULL) {
         log_warn(LD_NET,"Unable to chown() %s socket: user %s not found.",
                  address, options->User);
+        tor_close_socket(s);
+        goto err;
       } else if (chown(address, pw->pw_uid, pw->pw_gid) < 0) {
         log_warn(LD_NET,"Unable to chown() %s socket: %s.",
                  address, strerror(errno));
+        tor_close_socket(s);
         goto err;
       }
     }
@@ -1441,12 +1445,9 @@ connection_connect(connection_t *conn, const char *address,
     /* We should never even try to connect anyplace if DisableNetwork is set.
      * Warn if we do, and refuse to make the connection. */
     static ratelim_t disablenet_violated = RATELIM_INIT(30*60);
-    char *m;
     *socket_error = SOCK_ERRNO(ENETUNREACH);
-    if ((m = rate_limit_log(&disablenet_violated, approx_time()))) {
-      log_warn(LD_BUG, "Tried to open a socket with DisableNetwork set.%s", m);
-      tor_free(m);
-    }
+    log_fn_ratelim(&disablenet_violated, LOG_WARN, LD_BUG,
+                   "Tried to open a socket with DisableNetwork set.");
     tor_fragile_assert();
     return -1;
   }
@@ -1707,6 +1708,7 @@ connection_read_https_proxy_response(connection_t *conn)
     tor_free(headers);
     return -1;
   }
+  tor_free(headers);
   if (!reason) reason = tor_strdup("[no reason given]");
 
   if (status_code == 200) {
@@ -2221,8 +2223,7 @@ connection_bucket_round_robin(int base, int priority,
 static ssize_t
 connection_bucket_read_limit(connection_t *conn, time_t now)
 {
-  int base = connection_speaks_cells(conn) ?
-               CELL_NETWORK_SIZE : RELAY_PAYLOAD_SIZE;
+  int base = RELAY_PAYLOAD_SIZE;
   int priority = conn->type != CONN_TYPE_DIR;
   int conn_bucket = -1;
   int global_bucket = global_read_bucket;
@@ -2231,6 +2232,7 @@ connection_bucket_read_limit(connection_t *conn, time_t now)
     or_connection_t *or_conn = TO_OR_CONN(conn);
     if (conn->state == OR_CONN_STATE_OPEN)
       conn_bucket = or_conn->read_bucket;
+    base = get_cell_network_size(or_conn->wide_circ_ids);
   }
 
   if (!connection_is_rate_limited(conn)) {
@@ -2250,8 +2252,7 @@ connection_bucket_read_limit(connection_t *conn, time_t now)
 ssize_t
 connection_bucket_write_limit(connection_t *conn, time_t now)
 {
-  int base = connection_speaks_cells(conn) ?
-               CELL_NETWORK_SIZE : RELAY_PAYLOAD_SIZE;
+  int base = RELAY_PAYLOAD_SIZE;
   int priority = conn->type != CONN_TYPE_DIR;
   int conn_bucket = (int)conn->outbuf_flushlen;
   int global_bucket = global_write_bucket;
@@ -2269,6 +2270,7 @@ connection_bucket_write_limit(connection_t *conn, time_t now)
       if (or_conn->write_bucket < conn_bucket)
         conn_bucket = or_conn->write_bucket >= 0 ?
                         or_conn->write_bucket : 0;
+    base = get_cell_network_size(or_conn->wide_circ_ids);
   }
 
   if (connection_counts_as_relayed_traffic(conn, now) &&

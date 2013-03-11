@@ -284,6 +284,15 @@ void update_approx_time(time_t now);
       }
     }
    </pre>
+
+   As a convenience wrapper for logging, you can replace the above with:
+   <pre>
+   if (possibly_very_frequent_event()) {
+     static ratelim_t warning_limit = RATELIM_INIT(300);
+     log_fn_ratelim(&warning_limit, LOG_WARN, LD_GENERAL,
+                    "The event occurred!");
+   }
+   </pre>
  */
 typedef struct ratelim_t {
   int rate;
@@ -484,6 +493,20 @@ tor_get_lines_from_handle(FILE *handle,
 int tor_terminate_process(process_handle_t *process_handle);
 void tor_process_handle_destroy(process_handle_t *process_handle,
                                 int also_terminate_process);
+
+/* ===== Insecure rng */
+typedef struct tor_weak_rng_t {
+  uint32_t state;
+} tor_weak_rng_t;
+
+#define TOR_WEAK_RNG_INIT {383745623}
+#define TOR_WEAK_RANDOM_MAX (INT_MAX)
+void tor_init_weak_random(tor_weak_rng_t *weak_rng, unsigned seed);
+int32_t tor_weak_random(tor_weak_rng_t *weak_rng);
+int32_t tor_weak_random_range(tor_weak_rng_t *rng, int32_t top);
+/** Randomly return true according to <b>rng</b> with probability 1 in
+ * <b>n</b> */
+#define tor_weak_random_one_in_n(rng, n) (0==tor_weak_random_range((rng),(n)))
 
 #ifdef UTIL_PRIVATE
 /* Prototypes for private functions only used by util.c (and unit tests) */

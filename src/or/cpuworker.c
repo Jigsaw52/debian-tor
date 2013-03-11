@@ -11,7 +11,6 @@
  *
  * Right now, we only use this for processing onionskins.
  **/
-
 #include "or.h"
 #include "buffers.h"
 #include "channel.h"
@@ -31,7 +30,7 @@
 #define MIN_CPUWORKERS 1
 
 /** The tag specifies which circuit this onionskin was from. */
-#define TAG_LEN 10
+#define TAG_LEN 12
 
 /** How many cpuworkers we have running right now. */
 static int num_cpuworkers=0;
@@ -72,7 +71,7 @@ tag_pack(uint8_t *tag, uint64_t chan_id, circid_t circ_id)
   /*XXXX RETHINK THIS WHOLE MESS !!!! !NM NM NM NM*/
   /*XXXX DOUBLEPLUSTHIS!!!! AS AS AS AS*/
   set_uint64(tag, chan_id);
-  set_uint16(tag+8, circ_id);
+  set_uint32(tag+8, circ_id);
 }
 
 /** Unpack <b>tag</b> into addr, port, and circ_id.
@@ -81,7 +80,7 @@ static void
 tag_unpack(const uint8_t *tag, uint64_t *chan_id, circid_t *circ_id)
 {
   *chan_id = get_uint64(tag);
-  *circ_id = get_uint16(tag+8);
+  *circ_id = get_uint32(tag+8);
 }
 
 /** Magic numbers to make sure our cpuworker_requests don't grow any
@@ -196,8 +195,10 @@ static uint64_t onionskins_usec_roundtrip[MAX_ONION_HANDSHAKE_TYPE+1];
  * time. (microseconds) */
 #define MAX_BELIEVABLE_ONIONSKIN_DELAY (2*1000*1000)
 
+static tor_weak_rng_t request_sample_rng = TOR_WEAK_RNG_INIT;
+
 /** Return true iff we'd like to measure a handshake of type
- * <b>onionskin_type</b>. */
+ * <b>onionskin_type</b>. Call only from the main thread. */
 static int
 should_time_request(uint16_t onionskin_type)
 {
@@ -210,7 +211,7 @@ should_time_request(uint16_t onionskin_type)
     return 1;
   /** Otherwise, measure with P=1/128.  We avoid doing this for every
    * handshake, since the measurement itself can take a little time. */
-  return tor_weak_random() < (TOR_RAND_MAX/128);
+  return tor_weak_random_one_in_n(&request_sample_rng, 128);
 }
 
 /** Return an estimate of how many microseconds we will need for a single
@@ -220,10 +221,10 @@ uint64_t
 estimated_usec_for_onionskins(uint32_t n_requests, uint16_t onionskin_type)
 {
   if (onionskin_type > MAX_ONION_HANDSHAKE_TYPE) /* should be impossible */
-    return 1000 * n_requests;
+    return 1000 * (uint64_t)n_requests;
   if (PREDICT_UNLIKELY(onionskins_n_processed[onionskin_type] < 100)) {
     /* Until we have 100 data points, just asssume everything takes 1 msec. */
-    return 1000 * n_requests;
+    return 1000 * (uint64_t)n_requests;
   } else {
     /* This can't overflow: we'll never have more than 500000 onionskins
      * measured in onionskin_usec_internal, and they won't take anything near
@@ -339,8 +340,8 @@ connection_cpu_process_inbuf(connection_t *conn)
     circ = NULL;
     log_debug(LD_OR,
               "Unpacking cpuworker reply, chan_id is " U64_FORMAT
-              ", circ_id is %d",
-              U64_PRINTF_ARG(chan_id), circ_id);
+              ", circ_id is %u",
+              U64_PRINTF_ARG(chan_id), (unsigned)circ_id);
     p_chan = channel_find_by_global_id(chan_id);
 
     if (p_chan)
@@ -560,6 +561,7 @@ static void
 spawn_enough_cpuworkers(void)
 {
   int num_cpuworkers_needed = get_num_cpus(get_options());
+  int reseed = 0;
 
   if (num_cpuworkers_needed < MIN_CPUWORKERS)
     num_cpuworkers_needed = MIN_CPUWORKERS;
@@ -572,7 +574,11 @@ spawn_enough_cpuworkers(void)
       return;
     }
     num_cpuworkers++;
+    reseed++;
   }
+
+  if (reseed)
+    crypto_seed_weak_rng(&request_sample_rng);
 }
 
 /** Take a pending task from the queue and assign it to 'cpuworker'. */

@@ -124,8 +124,10 @@ bench_onion_TAP(void)
 
   key = crypto_pk_new();
   key2 = crypto_pk_new();
-  crypto_pk_generate_key_with_bits(key, 1024);
-  crypto_pk_generate_key_with_bits(key2, 1024);
+  if (crypto_pk_generate_key_with_bits(key, 1024) < 0)
+    goto done;
+  if (crypto_pk_generate_key_with_bits(key2, 1024) < 0)
+    goto done;
 
   reset_perftime();
   start = perftime();
@@ -164,13 +166,16 @@ bench_onion_TAP(void)
     int s;
     dh = crypto_dh_dup(dh_out);
     s = onion_skin_TAP_client_handshake(dh, or, key_out, sizeof(key_out));
+    crypto_dh_free(dh);
     tor_assert(s == 0);
   }
   end = perftime();
   printf("Client-side, part 2: %f usec.\n",
          NANOCOUNT(start, end, iters)/1e3);
 
+ done:
   crypto_pk_free(key);
+  crypto_pk_free(key2);
 }
 
 #ifdef CURVE25519_ENABLED
@@ -203,6 +208,7 @@ bench_onion_ntor(void)
   end = perftime();
   printf("Client-side, part 1: %f usec.\n", NANOCOUNT(start, end, iters)/1e3);
 
+  state = NULL;
   onion_skin_ntor_create(nodeid, &keypair1.pubkey, &state, os);
   start = perftime();
   for (i = 0; i < iters; ++i) {
