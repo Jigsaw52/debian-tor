@@ -8,6 +8,8 @@ tor (0.2.5.0-alpha-dev-1) UNRELEASED; urgency=low
     the default user path makes it easier for users who want to run
     tor themselves.
   * Install a compatibility symlink in /usr/sbin.
+  * Change relation form from (< version) to (<< version) in the tor-geoip
+    package.
 
  -- Peter Palfrader <weasel@debian.org>  Wed, 10 Apr 2013 10:33:02 +0200
 

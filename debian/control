@@ -61,8 +61,8 @@ Package: tor-geoipdb
 Architecture: all
 Priority: extra
 Depends: tor (>= ${source:Version}), ${misc:Depends}
-Replaces: tor (< 0.2.4.8)
-Breaks: tor (< 0.2.4.8)
+Replaces: tor (<< 0.2.4.8)
+Breaks: tor (<< 0.2.4.8)
 Description: GeoIP database for Tor
  This package provides a GeoIP database for Tor, i.e. it maps IPv4 addresses
  to countries.
