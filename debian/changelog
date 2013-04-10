@@ -3,6 +3,11 @@ tor (0.2.5.0-alpha-dev-1) UNRELEASED; urgency=low
   * No longer change tor manpage to be in section 8.
   * No longer install contrib/tor-tsocks.conf into /etc/tor - it was
     dropped upstream.
+  * No longer move tor from usr/bin to /usr/sbin after make install.
+    We now install tor into the same place as upstream.  Having it in
+    the default user path makes it easier for users who want to run
+    tor themselves.
+  * Install a compatibility symlink in /usr/sbin.
 
  -- Peter Palfrader <weasel@debian.org>  Wed, 10 Apr 2013 10:33:02 +0200
 
