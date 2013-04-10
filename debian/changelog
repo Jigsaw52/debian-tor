@@ -1,6 +1,8 @@
 tor (0.2.5.0-alpha-dev-1) UNRELEASED; urgency=low
 
   * No longer change tor manpage to be in section 8.
+  * No longer install contrib/tor-tsocks.conf into /etc/tor - it was
+    dropped upstream.
 
  -- Peter Palfrader <weasel@debian.org>  Wed, 10 Apr 2013 10:33:02 +0200
 
