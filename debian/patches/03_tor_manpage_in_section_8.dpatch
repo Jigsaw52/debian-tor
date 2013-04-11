@@ -62,13 +62,12 @@ diff -urNad '--exclude=CVS' '--exclude=.svn' '--exclude=.git' '--exclude=.arch' 
 diff -urNad '--exclude=CVS' '--exclude=.svn' '--exclude=.git' '--exclude=.arch' '--exclude=.hg' '--exclude=_darcs' '--exclude=.bzr' tor~/doc/torify.1.txt tor/doc/torify.1.txt
 --- tor~/doc/torify.1.txt	2012-09-08 13:11:10.000000000 +0200
 +++ tor/doc/torify.1.txt	2012-09-08 13:11:19.317812190 +0200
-@@ -46,7 +46,7 @@
+@@ -46,6 +46,6 @@
  
  SEE ALSO
  --------
--**tor**(1), **tor-resolve**(1), **torsocks**(1), **tsocks**(1),
-+**tor**(8), **tor-resolve**(1), **torsocks**(1), **tsocks**(1),
- **tsocks.conf**(5).
+-**tor**(1), **tor-resolve**(1), **torsocks**(1)
++**tor**(8), **tor-resolve**(1), **torsocks**(1)
  
  AUTHORS
 diff -urNad '--exclude=CVS' '--exclude=.svn' '--exclude=.git' '--exclude=.arch' '--exclude=.hg' '--exclude=_darcs' '--exclude=.bzr' tor~/doc/asciidoc-helper.sh tor/doc/asciidoc-helper.sh
