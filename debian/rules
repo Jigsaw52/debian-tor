@@ -136,7 +136,6 @@ install: build
 	mv $(CURDIR)/debian/tor/usr/share/man/man1/tor.1 $(CURDIR)/debian/tor/usr/share/man/man8/tor.8
 
 	install -m 755 contrib/torify $(CURDIR)/debian/tor/usr/bin
-	install -m 644 contrib/tor-tsocks.conf $(CURDIR)/debian/tor/etc/tor
 	install -m 644 debian/tor-service-defaults-torrc $(CURDIR)/debian/tor/usr/share/tor
 
 	install -m 644 debian/tor.apparmor-profile $(CURDIR)/debian/tor/etc/apparmor.d/system_tor
