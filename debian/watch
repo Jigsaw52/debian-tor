@@ -1,2 +1,2 @@
-version=2
-http://tor.eff.org/dist/tor-(.*)\.tar\.gz
+version=3
+http://dist.torproject.org/tor-(.*)\.tar\.gz
