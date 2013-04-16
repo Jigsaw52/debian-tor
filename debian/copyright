@@ -8,13 +8,13 @@ Upstream Author: The Tor Project - https://www.torproject.org/
 Copyright (c) 2001 Matej Pfajfar
 Copyright (c) 2001-2004, Roger Dingledine
 Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson
-Copyright (c) 2007-2012, The Tor Project, Inc.
+Copyright (c) 2007-2013, The Tor Project, Inc.
 strlcat, strlcpy: Copyright (c) 1998 Todd C. Miller <Todd.Miller@courtesan.com>
 ht.h: Copyright (c) 2002, Christopher Clark, 2006 Nick Mathewson
 OpenBSD_malloc_Linux.c: phk@FreeBSD.ORG
 OpenBSD queue.h: Copyright (c) 1991, 1993 The Regents of the University of California.
 Curve25519: Copyright (c) 2008 Google Inc.
-Modifications for Debian: Copyright (c) 2004-2012 Peter Palfrader
+Modifications for Debian: Copyright (c) 2004-2013 Peter Palfrader
 
 Tor is distributed under this license:
 ===============================================================================

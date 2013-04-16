@@ -2,9 +2,9 @@ Source: tor
 Section: net
 Priority: optional
 Maintainer: Peter Palfrader <weasel@debian.org>
-Build-Depends: debhelper (>= 6), libssl-dev, dpatch, zlib1g-dev, libevent-dev (>= 1.1), binutils (>= 2.14.90.0.7), hardening-includes, asciidoc (>= 8.2), docbook-xml, docbook-xsl, xmlto, dh-apparmor
+Build-Depends: debhelper (>= 8), quilt, libssl-dev, zlib1g-dev, libevent-dev (>= 1.1), binutils (>= 2.14.90.0.7), hardening-includes, asciidoc (>= 8.2), docbook-xml, docbook-xsl, xmlto, dh-apparmor
 Build-Conflicts: libnacl-dev
-Standards-Version: 3.8.1
+Standards-Version: 3.9.4
 Homepage: https://www.torproject.org/
 Vcs-Git: https://git.torproject.org/debian/tor.git
 Vcs-Browser: https://gitweb.torproject.org/debian/tor.git
