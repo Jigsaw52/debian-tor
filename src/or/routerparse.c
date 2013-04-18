@@ -1494,7 +1494,7 @@ extrainfo_parse_entry_from_string(const char *s, const char *end,
   extrainfo = tor_malloc_zero(sizeof(extrainfo_t));
   extrainfo->cache_info.is_extrainfo = 1;
   if (cache_copy)
-    extrainfo->cache_info.signed_descriptor_body = tor_strndup(s, end-s);
+    extrainfo->cache_info.signed_descriptor_body = tor_memdup_nulterm(s, end-s);
   extrainfo->cache_info.signed_descriptor_len = end-s;
   memcpy(extrainfo->cache_info.signed_descriptor_digest, digest, DIGEST_LEN);
 
@@ -1953,7 +1953,7 @@ routerstatus_parse_entry_from_string(memarea_t *area,
       rs->version_supports_optimistic_data =
         tor_version_as_new_as(tok->args[0], "0.2.3.1-alpha");
       rs->version_supports_extend2_cells =
-        tor_version_as_new_as(tok->args[0], "0.2.4.7-alpha");
+        tor_version_as_new_as(tok->args[0], "0.2.4.8-alpha");
     }
     if (vote_rs) {
       vote_rs->version = tor_strdup(tok->args[0]);
@@ -1966,9 +1966,10 @@ routerstatus_parse_entry_from_string(memarea_t *area,
     for (i=0; i < tok->n_args; ++i) {
       if (!strcmpstart(tok->args[i], "Bandwidth=")) {
         int ok;
-        rs->bandwidth = (uint32_t)tor_parse_ulong(strchr(tok->args[i], '=')+1,
-                                                  10, 0, UINT32_MAX,
-                                                  &ok, NULL);
+        rs->bandwidth_kb =
+          (uint32_t)tor_parse_ulong(strchr(tok->args[i], '=')+1,
+                                    10, 0, UINT32_MAX,
+                                    &ok, NULL);
         if (!ok) {
           log_warn(LD_DIR, "Invalid Bandwidth %s", escaped(tok->args[i]));
           goto err;
@@ -1976,7 +1977,7 @@ routerstatus_parse_entry_from_string(memarea_t *area,
         rs->has_bandwidth = 1;
       } else if (!strcmpstart(tok->args[i], "Measured=") && vote_rs) {
         int ok;
-        vote_rs->measured_bw =
+        vote_rs->measured_bw_kb =
             (uint32_t)tor_parse_ulong(strchr(tok->args[i], '=')+1,
                                       10, 0, UINT32_MAX, &ok, NULL);
         if (!ok) {
@@ -2030,7 +2031,7 @@ routerstatus_parse_entry_from_string(memarea_t *area,
       }
     } else {
       log_info(LD_BUG, "Found an entry in networkstatus with no "
-               "microdescriptor digest. (Router %s=%s at %s:%d.)",
+               "microdescriptor digest. (Router %s ($%s) at %s:%d.)",
                rs->nickname, hex_str(rs->identity_digest, DIGEST_LEN),
                fmt_addr32(rs->addr), rs->or_port);
     }
@@ -2257,7 +2258,7 @@ networkstatus_v2_parse_from_string(const char *s)
 
 /** Verify the bandwidth weights of a network status document */
 int
-networkstatus_verify_bw_weights(networkstatus_t *ns)
+networkstatus_verify_bw_weights(networkstatus_t *ns, int consensus_method)
 {
   int64_t weight_scale;
   int64_t G=0, M=0, E=0, D=0, T=0;
@@ -2343,24 +2344,31 @@ networkstatus_verify_bw_weights(networkstatus_t *ns)
 
   // Then, gather G, M, E, D, T to determine case
   SMARTLIST_FOREACH_BEGIN(ns->routerstatus_list, routerstatus_t *, rs) {
+    int is_exit = 0;
+    if (consensus_method >= MIN_METHOD_TO_CUT_BADEXIT_WEIGHT) {
+      /* Bug #2203: Don't count bad exits as exits for balancing */
+      is_exit = rs->is_exit && !rs->is_bad_exit;
+    } else {
+      is_exit = rs->is_exit;
+    }
     if (rs->has_bandwidth) {
-      T += rs->bandwidth;
-      if (rs->is_exit && rs->is_possible_guard) {
-        D += rs->bandwidth;
-        Gtotal += Wgd*rs->bandwidth;
-        Mtotal += Wmd*rs->bandwidth;
-        Etotal += Wed*rs->bandwidth;
-      } else if (rs->is_exit) {
-        E += rs->bandwidth;
-        Mtotal += Wme*rs->bandwidth;
-        Etotal += Wee*rs->bandwidth;
+      T += rs->bandwidth_kb;
+      if (is_exit && rs->is_possible_guard) {
+        D += rs->bandwidth_kb;
+        Gtotal += Wgd*rs->bandwidth_kb;
+        Mtotal += Wmd*rs->bandwidth_kb;
+        Etotal += Wed*rs->bandwidth_kb;
+      } else if (is_exit) {
+        E += rs->bandwidth_kb;
+        Mtotal += Wme*rs->bandwidth_kb;
+        Etotal += Wee*rs->bandwidth_kb;
       } else if (rs->is_possible_guard) {
-        G += rs->bandwidth;
-        Gtotal += Wgg*rs->bandwidth;
-        Mtotal += Wmg*rs->bandwidth;
+        G += rs->bandwidth_kb;
+        Gtotal += Wgg*rs->bandwidth_kb;
+        Mtotal += Wmg*rs->bandwidth_kb;
       } else {
-        M += rs->bandwidth;
-        Mtotal += Wmm*rs->bandwidth;
+        M += rs->bandwidth_kb;
+        Mtotal += Wmm*rs->bandwidth_kb;
       }
     } else {
       log_warn(LD_BUG, "Missing consensus bandwidth for router %s",
@@ -3913,8 +3921,15 @@ tokenize_string(memarea_t *area,
   tor_assert(area);
 
   s = &start;
-  if (!end)
+  if (!end) {
     end = start+strlen(start);
+  } else {
+    /* it's only meaningful to check for nuls if we got an end-of-string ptr */
+    if (memchr(start, '\0', end-start)) {
+      log_warn(LD_DIR, "parse error: internal NUL character.");
+      return -1;
+    }
+  }
   for (i = 0; i < NIL_; ++i)
     counts[i] = 0;
 
@@ -4248,7 +4263,7 @@ microdescs_parse_from_string(const char *s, const char *eos,
 
       md->bodylen = start_of_next_microdesc - cp;
       if (copy_body)
-        md->body = tor_strndup(cp, md->bodylen);
+        md->body = tor_memdup_nulterm(cp, md->bodylen);
       else
         md->body = (char*)cp;
       md->off = cp - start;

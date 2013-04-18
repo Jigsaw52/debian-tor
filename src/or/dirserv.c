@@ -66,6 +66,13 @@ static cached_dir_t *the_directory = NULL;
 /** For authoritative directories: the current (v1) network status. */
 static cached_dir_t the_runningrouters;
 
+/** Total number of routers with measured bandwidth; this is set by
+ * dirserv_count_measured_bws() before the loop in
+ * dirserv_generate_networkstatus_vote_obj() and checked by
+ * dirserv_get_credible_bandwidth() and
+ * dirserv_compute_performance_thresholds() */
+static int routers_with_measured_bw = 0;
+
 static void directory_remove_invalid(void);
 static cached_dir_t *dirserv_regenerate_directory(void);
 static char *format_versions_list(config_line_t *ln);
@@ -85,9 +92,8 @@ static const signed_descriptor_t *get_signed_descriptor_by_fp(
                                                         time_t publish_cutoff);
 static was_router_added_t dirserv_add_extrainfo(extrainfo_t *ei,
                                                 const char **msg);
-
-/************** Measured Bandwidth parsing code ******/
-#define MAX_MEASUREMENT_AGE (3*24*60*60) /* 3 days */
+static uint32_t dirserv_get_bandwidth_for_router_kb(const routerinfo_t *ri);
+static uint32_t dirserv_get_credible_bandwidth_kb(const routerinfo_t *ri);
 
 /************** Fingerprint handling code ************/
 
@@ -1770,17 +1776,13 @@ static double guard_wfu = 0.0;
  * many seconds. */
 static long guard_tk = 0;
 /** Any router with a bandwidth at least this high is "Fast" */
-static uint32_t fast_bandwidth = 0;
+static uint32_t fast_bandwidth_kb = 0;
 /** If exits can be guards, then all guards must have a bandwidth this
  * high. */
-static uint32_t guard_bandwidth_including_exits = 0;
+static uint32_t guard_bandwidth_including_exits_kb = 0;
 /** If exits can't be guards, then all guards must have a bandwidth this
  * high. */
-static uint32_t guard_bandwidth_excluding_exits = 0;
-/** Total bandwidth of all the routers we're considering. */
-static uint64_t total_bandwidth = 0;
-/** Total bandwidth of all the exit routers we're considering. */
-static uint64_t total_exit_bandwidth = 0;
+static uint32_t guard_bandwidth_excluding_exits_kb = 0;
 
 /** Helper: estimate the uptime of a router given its stated uptime and the
  * amount of time since it last stated its stated uptime. */
@@ -1824,8 +1826,8 @@ dirserv_thinks_router_is_unreliable(time_t now,
     }
   }
   if (need_capacity) {
-    uint32_t bw = router_get_advertised_bandwidth(router);
-    if (bw < fast_bandwidth)
+    uint32_t bw_kb = dirserv_get_credible_bandwidth_kb(router);
+    if (bw_kb < fast_bandwidth_kb)
       return 1;
   }
   return 0;
@@ -1873,18 +1875,32 @@ dirserv_thinks_router_is_hs_dir(const routerinfo_t *router,
 
 /** Don't consider routers with less bandwidth than this when computing
  * thresholds. */
-#define ABSOLUTE_MIN_BW_VALUE_TO_CONSIDER 4096
+#define ABSOLUTE_MIN_BW_VALUE_TO_CONSIDER_KB 4
 
 /** Helper for dirserv_compute_performance_thresholds(): Decide whether to
- * include a router in our calculations, and return true iff we should. */
+ * include a router in our calculations, and return true iff we should; the
+ * require_mbw parameter is passed in by
+ * dirserv_compute_performance_thresholds() and controls whether we ever
+ * count routers with only advertised bandwidths */
 static int
 router_counts_toward_thresholds(const node_t *node, time_t now,
-                                const digestmap_t *omit_as_sybil)
+                                const digestmap_t *omit_as_sybil,
+                                int require_mbw)
 {
+  /* Have measured bw? */
+  int have_mbw =
+    dirserv_has_measured_bw(node->ri->cache_info.identity_digest);
+  uint64_t min_bw_kb = ABSOLUTE_MIN_BW_VALUE_TO_CONSIDER_KB;
+  const or_options_t *options = get_options();
+
+  if (options->TestingTorNetwork) {
+    min_bw_kb = (int64_t)options->TestingMinExitFlagThreshold / 1000;
+  }
+
   return node->ri && router_is_active(node->ri, node, now) &&
     !digestmap_get(omit_as_sybil, node->ri->cache_info.identity_digest) &&
-    (router_get_advertised_bandwidth(node->ri) >=
-       ABSOLUTE_MIN_BW_VALUE_TO_CONSIDER);
+    (dirserv_get_credible_bandwidth_kb(node->ri) >= min_bw_kb) &&
+    (have_mbw || !require_mbw);
 }
 
 /** Look through the routerlist, the Mean Time Between Failure history, and
@@ -1892,7 +1908,6 @@ router_counts_toward_thresholds(const node_t *node, time_t now,
  * the Stable, Fast, and Guard flags.  Update the fields stable_uptime,
  * stable_mtbf, enough_mtbf_info, guard_wfu, guard_tk, fast_bandwidth,
  * guard_bandwidh_including_exits, guard_bandwidth_excluding_exits,
- * total_bandwidth, and total_exit_bandwidth.
  *
  * Also, set the is_exit flag of each router appropriately. */
 static void
@@ -1900,22 +1915,25 @@ dirserv_compute_performance_thresholds(routerlist_t *rl,
                                        digestmap_t *omit_as_sybil)
 {
   int n_active, n_active_nonexit, n_familiar;
-  uint32_t *uptimes, *bandwidths, *bandwidths_excluding_exits;
+  uint32_t *uptimes, *bandwidths_kb, *bandwidths_excluding_exits_kb;
   long *tks;
   double *mtbfs, *wfus;
   time_t now = time(NULL);
   const or_options_t *options = get_options();
 
+  /* Require mbw? */
+  int require_mbw =
+    (routers_with_measured_bw >
+     options->MinMeasuredBWsForAuthToIgnoreAdvertised) ? 1 : 0;
+
   /* initialize these all here, in case there are no routers */
   stable_uptime = 0;
   stable_mtbf = 0;
-  fast_bandwidth = 0;
-  guard_bandwidth_including_exits = 0;
-  guard_bandwidth_excluding_exits = 0;
+  fast_bandwidth_kb = 0;
+  guard_bandwidth_including_exits_kb = 0;
+  guard_bandwidth_excluding_exits_kb = 0;
   guard_tk = 0;
   guard_wfu = 0;
-  total_bandwidth = 0;
-  total_exit_bandwidth = 0;
 
   /* Initialize arrays that will hold values for each router.  We'll
    * sort them and use that to compute thresholds. */
@@ -1923,9 +1941,9 @@ dirserv_compute_performance_thresholds(routerlist_t *rl,
   /* Uptime for every active router. */
   uptimes = tor_malloc(sizeof(uint32_t)*smartlist_len(rl->routers));
   /* Bandwidth for every active router. */
-  bandwidths = tor_malloc(sizeof(uint32_t)*smartlist_len(rl->routers));
+  bandwidths_kb = tor_malloc(sizeof(uint32_t)*smartlist_len(rl->routers));
   /* Bandwidth for every active non-exit router. */
-  bandwidths_excluding_exits =
+  bandwidths_excluding_exits_kb =
     tor_malloc(sizeof(uint32_t)*smartlist_len(rl->routers));
   /* Weighted mean time between failure for each active router. */
   mtbfs = tor_malloc(sizeof(double)*smartlist_len(rl->routers));
@@ -1938,21 +1956,19 @@ dirserv_compute_performance_thresholds(routerlist_t *rl,
 
   /* Now, fill in the arrays. */
   SMARTLIST_FOREACH_BEGIN(nodelist_get_list(), node_t *, node) {
-    if (router_counts_toward_thresholds(node, now, omit_as_sybil)) {
+    if (router_counts_toward_thresholds(node, now, omit_as_sybil,
+                                        require_mbw)) {
       routerinfo_t *ri = node->ri;
       const char *id = ri->cache_info.identity_digest;
-      uint32_t bw;
+      uint32_t bw_kb;
       node->is_exit = (!router_exit_policy_rejects_all(ri) &&
                        exit_policy_is_general_exit(ri->exit_policy));
       uptimes[n_active] = (uint32_t)real_uptime(ri, now);
       mtbfs[n_active] = rep_hist_get_stability(id, now);
       tks  [n_active] = rep_hist_get_weighted_time_known(id, now);
-      bandwidths[n_active] = bw = router_get_advertised_bandwidth(ri);
-      total_bandwidth += bw;
-      if (node->is_exit && !node->is_bad_exit) {
-        total_exit_bandwidth += bw;
-      } else {
-        bandwidths_excluding_exits[n_active_nonexit] = bw;
+      bandwidths_kb[n_active] = bw_kb = dirserv_get_credible_bandwidth_kb(ri);
+      if (!node->is_exit || node->is_bad_exit) {
+        bandwidths_excluding_exits_kb[n_active_nonexit] = bw_kb;
         ++n_active_nonexit;
       }
       ++n_active;
@@ -1966,11 +1982,11 @@ dirserv_compute_performance_thresholds(routerlist_t *rl,
     /* The median mtbf is stable, if we have enough mtbf info */
     stable_mtbf = median_double(mtbfs, n_active);
     /* The 12.5th percentile bandwidth is fast. */
-    fast_bandwidth = find_nth_uint32(bandwidths, n_active, n_active/8);
+    fast_bandwidth_kb = find_nth_uint32(bandwidths_kb, n_active, n_active/8);
     /* (Now bandwidths is sorted.) */
-    if (fast_bandwidth < ROUTER_REQUIRED_MIN_BANDWIDTH/2)
-      fast_bandwidth = bandwidths[n_active/4];
-    guard_bandwidth_including_exits = bandwidths[(n_active-1)/2];
+    if (fast_bandwidth_kb < ROUTER_REQUIRED_MIN_BANDWIDTH/(2 * 1000))
+      fast_bandwidth_kb = bandwidths_kb[n_active/4];
+    guard_bandwidth_including_exits_kb = bandwidths_kb[(n_active-1)/2];
     guard_tk = find_nth_long(tks, n_active, n_active/8);
   }
 
@@ -1979,31 +1995,38 @@ dirserv_compute_performance_thresholds(routerlist_t *rl,
 
   {
     /* We can vote on a parameter for the minimum and maximum. */
-#define ABSOLUTE_MIN_VALUE_FOR_FAST_FLAG 4096
-    int32_t min_fast, max_fast;
+#define ABSOLUTE_MIN_VALUE_FOR_FAST_FLAG 4
+    int32_t min_fast_kb, max_fast_kb, min_fast, max_fast;
     min_fast = networkstatus_get_param(NULL, "FastFlagMinThreshold",
       ABSOLUTE_MIN_VALUE_FOR_FAST_FLAG,
       ABSOLUTE_MIN_VALUE_FOR_FAST_FLAG,
       INT32_MAX);
+    if (options->TestingTorNetwork) {
+      min_fast = (int32_t)options->TestingMinFastFlagThreshold;
+    }
     max_fast = networkstatus_get_param(NULL, "FastFlagMaxThreshold",
                                        INT32_MAX, min_fast, INT32_MAX);
-    if (fast_bandwidth < (uint32_t)min_fast)
-      fast_bandwidth = min_fast;
-    if (fast_bandwidth > (uint32_t)max_fast)
-      fast_bandwidth = max_fast;
+    min_fast_kb = min_fast / 1000;
+    max_fast_kb = max_fast / 1000;
+
+    if (fast_bandwidth_kb < (uint32_t)min_fast_kb)
+      fast_bandwidth_kb = min_fast_kb;
+    if (fast_bandwidth_kb > (uint32_t)max_fast_kb)
+      fast_bandwidth_kb = max_fast_kb;
   }
   /* Protect sufficiently fast nodes from being pushed out of the set
    * of Fast nodes. */
   if (options->AuthDirFastGuarantee &&
-      fast_bandwidth > options->AuthDirFastGuarantee)
-    fast_bandwidth = (uint32_t)options->AuthDirFastGuarantee;
+      fast_bandwidth_kb > options->AuthDirFastGuarantee/1000)
+    fast_bandwidth_kb = (uint32_t)options->AuthDirFastGuarantee/1000;
 
   /* Now that we have a time-known that 7/8 routers are known longer than,
    * fill wfus with the wfu of every such "familiar" router. */
   n_familiar = 0;
 
   SMARTLIST_FOREACH_BEGIN(nodelist_get_list(), node_t *, node) {
-      if (router_counts_toward_thresholds(node, now, omit_as_sybil)) {
+      if (router_counts_toward_thresholds(node, now,
+                                          omit_as_sybil, require_mbw)) {
         routerinfo_t *ri = node->ri;
         const char *id = ri->cache_info.identity_digest;
         long tk = rep_hist_get_weighted_time_known(id, now);
@@ -2020,30 +2043,228 @@ dirserv_compute_performance_thresholds(routerlist_t *rl,
   enough_mtbf_info = rep_hist_have_measured_enough_stability();
 
   if (n_active_nonexit) {
-    guard_bandwidth_excluding_exits =
-      median_uint32(bandwidths_excluding_exits, n_active_nonexit);
+    guard_bandwidth_excluding_exits_kb =
+      median_uint32(bandwidths_excluding_exits_kb, n_active_nonexit);
   }
 
   log_info(LD_DIRSERV,
       "Cutoffs: For Stable, %lu sec uptime, %lu sec MTBF. "
-      "For Fast: %lu bytes/sec. "
+      "For Fast: %lu kilobytes/sec. "
       "For Guard: WFU %.03f%%, time-known %lu sec, "
-      "and bandwidth %lu or %lu bytes/sec. We%s have enough stability data.",
+      "and bandwidth %lu or %lu kilobytes/sec. "
+      "We%s have enough stability data.",
       (unsigned long)stable_uptime,
       (unsigned long)stable_mtbf,
-      (unsigned long)fast_bandwidth,
+      (unsigned long)fast_bandwidth_kb,
       guard_wfu*100,
       (unsigned long)guard_tk,
-      (unsigned long)guard_bandwidth_including_exits,
-      (unsigned long)guard_bandwidth_excluding_exits,
+      (unsigned long)guard_bandwidth_including_exits_kb,
+      (unsigned long)guard_bandwidth_excluding_exits_kb,
       enough_mtbf_info ? "" : " don't ");
 
   tor_free(uptimes);
   tor_free(mtbfs);
-  tor_free(bandwidths);
-  tor_free(bandwidths_excluding_exits);
+  tor_free(bandwidths_kb);
+  tor_free(bandwidths_excluding_exits_kb);
   tor_free(tks);
   tor_free(wfus);
+}
+
+/** Measured bandwidth cache entry */
+typedef struct mbw_cache_entry_s {
+  long mbw_kb;
+  time_t as_of;
+} mbw_cache_entry_t;
+
+/** Measured bandwidth cache - keys are identity_digests, values are
+ * mbw_cache_entry_t *. */
+static digestmap_t *mbw_cache = NULL;
+
+/** Store a measured bandwidth cache entry when reading the measured
+ * bandwidths file. */
+void
+dirserv_cache_measured_bw(const measured_bw_line_t *parsed_line,
+                          time_t as_of)
+{
+  mbw_cache_entry_t *e = NULL;
+
+  tor_assert(parsed_line);
+
+  /* Allocate a cache if we need */
+  if (!mbw_cache) mbw_cache = digestmap_new();
+
+  /* Check if we have an existing entry */
+  e = digestmap_get(mbw_cache, parsed_line->node_id);
+  /* If we do, we can re-use it */
+  if (e) {
+    /* Check that we really are newer, and update */
+    if (as_of > e->as_of) {
+      e->mbw_kb = parsed_line->bw_kb;
+      e->as_of = as_of;
+    }
+  } else {
+    /* We'll have to insert a new entry */
+    e = tor_malloc(sizeof(*e));
+    e->mbw_kb = parsed_line->bw_kb;
+    e->as_of = as_of;
+    digestmap_set(mbw_cache, parsed_line->node_id, e);
+  }
+}
+
+/** Clear and free the measured bandwidth cache */
+void
+dirserv_clear_measured_bw_cache(void)
+{
+  if (mbw_cache) {
+    /* Free the map and all entries */
+    digestmap_free(mbw_cache, tor_free_);
+    mbw_cache = NULL;
+  }
+}
+
+/** Scan the measured bandwidth cache and remove expired entries */
+void
+dirserv_expire_measured_bw_cache(time_t now)
+{
+
+  if (mbw_cache) {
+    /* Iterate through the cache and check each entry */
+    DIGESTMAP_FOREACH_MODIFY(mbw_cache, k, mbw_cache_entry_t *, e) {
+      if (now > e->as_of + MAX_MEASUREMENT_AGE) {
+        tor_free(e);
+        MAP_DEL_CURRENT(k);
+      }
+    } DIGESTMAP_FOREACH_END;
+
+    /* Check if we cleared the whole thing and free if so */
+    if (digestmap_size(mbw_cache) == 0) {
+      digestmap_free(mbw_cache, tor_free_);
+      mbw_cache = 0;
+    }
+  }
+}
+
+/** Get the current size of the measured bandwidth cache */
+int
+dirserv_get_measured_bw_cache_size(void)
+{
+  if (mbw_cache) return digestmap_size(mbw_cache);
+  else return 0;
+}
+
+/** Query the cache by identity digest, return value indicates whether
+ * we found it. The bw_out and as_of_out pointers receive the cached
+ * bandwidth value and the time it was cached if not NULL. */
+int
+dirserv_query_measured_bw_cache_kb(const char *node_id, long *bw_kb_out,
+                                   time_t *as_of_out)
+{
+  mbw_cache_entry_t *v = NULL;
+  int rv = 0;
+
+  if (mbw_cache && node_id) {
+    v = digestmap_get(mbw_cache, node_id);
+    if (v) {
+      /* Found something */
+      rv = 1;
+      if (bw_kb_out) *bw_kb_out = v->mbw_kb;
+      if (as_of_out) *as_of_out = v->as_of;
+    }
+  }
+
+  return rv;
+}
+
+/** Predicate wrapper for dirserv_query_measured_bw_cache() */
+int
+dirserv_has_measured_bw(const char *node_id)
+{
+  return dirserv_query_measured_bw_cache_kb(node_id, NULL, NULL);
+}
+
+/** Get the best estimate of a router's bandwidth for dirauth purposes,
+ * preferring measured to advertised values if available. */
+
+static uint32_t
+dirserv_get_bandwidth_for_router_kb(const routerinfo_t *ri)
+{
+  uint32_t bw_kb = 0;
+  /*
+   * Yeah, measured bandwidths in measured_bw_line_t are (implicitly
+   * signed) longs and the ones router_get_advertised_bandwidth() returns
+   * are uint32_t.
+   */
+  long mbw_kb = 0;
+
+  if (ri) {
+    /*
+   * * First try to see if we have a measured bandwidth; don't bother with
+     * as_of_out here, on the theory that a stale measured bandwidth is still
+     * better to trust than an advertised one.
+     */
+    if (dirserv_query_measured_bw_cache_kb(ri->cache_info.identity_digest,
+                                        &mbw_kb, NULL)) {
+      /* Got one! */
+      bw_kb = (uint32_t)mbw_kb;
+    } else {
+      /* If not, fall back to advertised */
+      bw_kb = router_get_advertised_bandwidth(ri) / 1000;
+    }
+  }
+
+  return bw_kb;
+}
+
+/** Look through the routerlist, and using the measured bandwidth cache count
+ * how many measured bandwidths we know.  This is used to decide whether we
+ * ever trust advertised bandwidths for purposes of assigning flags. */
+static void
+dirserv_count_measured_bws(routerlist_t *rl)
+{
+  /* Initialize this first */
+  routers_with_measured_bw = 0;
+
+  tor_assert(rl);
+  tor_assert(rl->routers);
+
+  /* Iterate over the routerlist and count measured bandwidths */
+  SMARTLIST_FOREACH_BEGIN(rl->routers, routerinfo_t *, ri) {
+    /* Check if we know a measured bandwidth for this one */
+    if (dirserv_has_measured_bw(ri->cache_info.identity_digest)) {
+      ++routers_with_measured_bw;
+    }
+  } SMARTLIST_FOREACH_END(ri);
+}
+
+/** Return the bandwidth we believe for assigning flags; prefer measured
+ * over advertised, and if we have above a threshold quantity of measured
+ * bandwidths, we don't want to ever give flags to unmeasured routers, so
+ * return 0. */
+static uint32_t
+dirserv_get_credible_bandwidth_kb(const routerinfo_t *ri)
+{
+  int threshold;
+  uint32_t bw_kb = 0;
+  long mbw_kb;
+
+  tor_assert(ri);
+  /* Check if we have a measured bandwidth, and check the threshold if not */
+  if (!(dirserv_query_measured_bw_cache_kb(ri->cache_info.identity_digest,
+                                       &mbw_kb, NULL))) {
+    threshold = get_options()->MinMeasuredBWsForAuthToIgnoreAdvertised;
+    if (routers_with_measured_bw > threshold) {
+      /* Return zero for unmeasured bandwidth if we are above threshold */
+      bw_kb = 0;
+    } else {
+      /* Return an advertised bandwidth otherwise */
+      bw_kb = router_get_advertised_bandwidth_capped(ri) / 1000;
+    }
+  } else {
+    /* We have the measured bandwidth in mbw */
+    bw_kb = (uint32_t)mbw_kb;
+  }
+
+  return bw_kb;
 }
 
 /** Give a statement of our current performance thresholds for inclusion
@@ -2060,11 +2281,11 @@ dirserv_get_flag_thresholds_line(void)
       "enough-mtbf=%d",
       (unsigned long)stable_uptime,
       (unsigned long)stable_mtbf,
-      (unsigned long)fast_bandwidth,
+      (unsigned long)fast_bandwidth_kb*1000,
       guard_wfu*100,
       (unsigned long)guard_tk,
-      (unsigned long)guard_bandwidth_including_exits,
-      (unsigned long)guard_bandwidth_excluding_exits,
+      (unsigned long)guard_bandwidth_including_exits_kb*1000,
+      (unsigned long)guard_bandwidth_excluding_exits_kb*1000,
       enough_mtbf_info ? 1 : 0);
 
   return result;
@@ -2198,7 +2419,7 @@ routerstatus_format_entry(char *buf, size_t buf_len,
 
   if (format != NS_V2) {
     const routerinfo_t* desc = router_get_by_id_digest(rs->identity_digest);
-    uint32_t bw;
+    uint32_t bw_kb;
 
     if (format != NS_CONTROL_PORT) {
       /* Blow up more or less nicely if we didn't get anything or not the
@@ -2216,9 +2437,10 @@ routerstatus_format_entry(char *buf, size_t buf_len,
         return -1;
       }
 
-      /* This assert can fire for the control port, because
+      /* This assert could fire for the control port, because
        * it can request NS documents before all descriptors
-       * have been fetched. */
+       * have been fetched. Therefore, we only do this test when
+       * format != NS_CONTROL_PORT. */
       if (tor_memneq(desc->cache_info.signed_descriptor_digest,
             rs->descriptor_digest,
             DIGEST_LEN)) {
@@ -2242,13 +2464,13 @@ routerstatus_format_entry(char *buf, size_t buf_len,
     }
 
     if (format == NS_CONTROL_PORT && rs->has_bandwidth) {
-      bw = rs->bandwidth;
+      bw_kb = rs->bandwidth_kb;
     } else {
       tor_assert(desc);
-      bw = router_get_advertised_bandwidth_capped(desc) / 1000;
+      bw_kb = router_get_advertised_bandwidth_capped(desc) / 1000;
     }
     r = tor_snprintf(cp, buf_len - (cp-buf),
-                     "w Bandwidth=%d\n", bw);
+                     "w Bandwidth=%d\n", bw_kb);
 
     if (r<0) {
       log_warn(LD_BUG, "Not enough space in buffer.");
@@ -2258,7 +2480,7 @@ routerstatus_format_entry(char *buf, size_t buf_len,
     if (format == NS_V3_VOTE && vrs && vrs->has_measured_bw) {
       *--cp = '\0'; /* Kill "\n" */
       r = tor_snprintf(cp, buf_len - (cp-buf),
-                       " Measured=%d\n", vrs->measured_bw);
+                       " Measured=%d\n", vrs->measured_bw_kb);
       if (r<0) {
         log_warn(LD_BUG, "Not enough space in buffer for weight line.");
         return -1;
@@ -2292,7 +2514,7 @@ compare_routerinfo_by_ip_and_bw_(const void **a, const void **b)
 {
   routerinfo_t *first = *(routerinfo_t **)a, *second = *(routerinfo_t **)b;
   int first_is_auth, second_is_auth;
-  uint32_t bw_first, bw_second;
+  uint32_t bw_kb_first, bw_kb_second;
   const node_t *node_first, *node_second;
   int first_is_running, second_is_running;
 
@@ -2327,12 +2549,12 @@ compare_routerinfo_by_ip_and_bw_(const void **a, const void **b)
   else if (!first_is_running && second_is_running)
     return 1;
 
-  bw_first = router_get_advertised_bandwidth(first);
-  bw_second = router_get_advertised_bandwidth(second);
+  bw_kb_first = dirserv_get_bandwidth_for_router_kb(first);
+  bw_kb_second = dirserv_get_bandwidth_for_router_kb(second);
 
-  if (bw_first > bw_second)
+  if (bw_kb_first > bw_kb_second)
      return -1;
-  else if (bw_first < bw_second)
+  else if (bw_kb_first < bw_kb_second)
     return 1;
 
   /* They're equal! Compare by identity digest, so there's a
@@ -2468,7 +2690,7 @@ set_routerstatus_from_routerinfo(routerstatus_t *rs,
                                  int listbaddirs, int vote_on_hsdirs)
 {
   const or_options_t *options = get_options();
-  uint32_t routerbw = router_get_advertised_bandwidth(ri);
+  uint32_t routerbw_kb = dirserv_get_credible_bandwidth_kb(ri);
 
   memset(rs, 0, sizeof(routerstatus_t));
 
@@ -2495,9 +2717,9 @@ set_routerstatus_from_routerinfo(routerstatus_t *rs,
 
   if (node->is_fast &&
       ((options->AuthDirGuardBWGuarantee &&
-        routerbw >= options->AuthDirGuardBWGuarantee) ||
-       routerbw >= MIN(guard_bandwidth_including_exits,
-                       guard_bandwidth_excluding_exits)) &&
+        routerbw_kb >= options->AuthDirGuardBWGuarantee/1000) ||
+       routerbw_kb >= MIN(guard_bandwidth_including_exits_kb,
+                       guard_bandwidth_excluding_exits_kb)) &&
       is_router_version_good_for_possible_guard(ri->platform)) {
     long tk = rep_hist_get_weighted_time_known(
                                       node->identity, now);
@@ -2592,7 +2814,7 @@ measured_bw_line_parse(measured_bw_line_t *out, const char *orig_line)
       }
       cp+=strlen("bw=");
 
-      out->bw = tor_parse_long(cp, 0, 0, LONG_MAX, &parse_ok, &endptr);
+      out->bw_kb = tor_parse_long(cp, 0, 0, LONG_MAX, &parse_ok, &endptr);
       if (!parse_ok || (*endptr && !TOR_ISSPACE(*endptr))) {
         log_warn(LD_DIRSERV, "Invalid bandwidth in bandwidth file line: %s",
                  escaped(orig_line));
@@ -2650,7 +2872,7 @@ measured_bw_line_apply(measured_bw_line_t *parsed_line,
 
   if (rs) {
     rs->has_measured_bw = 1;
-    rs->measured_bw = (uint32_t)parsed_line->bw;
+    rs->measured_bw_kb = (uint32_t)parsed_line->bw_kb;
   } else {
     log_info(LD_DIRSERV, "Node ID %s not found in routerstatus list",
              parsed_line->node_hex);
@@ -2670,8 +2892,9 @@ dirserv_read_measured_bandwidths(const char *from_file,
   char line[256];
   FILE *fp = tor_fopen_cloexec(from_file, "r");
   int applied_lines = 0;
-  time_t file_time;
+  time_t file_time, now;
   int ok;
+
   if (fp == NULL) {
     log_warn(LD_CONFIG, "Can't open bandwidth file at configured location: %s",
              from_file);
@@ -2695,7 +2918,8 @@ dirserv_read_measured_bandwidths(const char *from_file,
     return -1;
   }
 
-  if ((time(NULL) - file_time) > MAX_MEASUREMENT_AGE) {
+  now = time(NULL);
+  if ((now - file_time) > MAX_MEASUREMENT_AGE) {
     log_warn(LD_DIRSERV, "Bandwidth measurement file stale. Age: %u",
              (unsigned)(time(NULL) - file_time));
     fclose(fp);
@@ -2709,11 +2933,16 @@ dirserv_read_measured_bandwidths(const char *from_file,
     measured_bw_line_t parsed_line;
     if (fgets(line, sizeof(line), fp) && strlen(line)) {
       if (measured_bw_line_parse(&parsed_line, line) != -1) {
+        /* Also cache the line for dirserv_get_bandwidth_for_router() */
+        dirserv_cache_measured_bw(&parsed_line, file_time);
         if (measured_bw_line_apply(&parsed_line, routerstatuses) > 0)
           applied_lines++;
       }
     }
   }
+
+  /* Now would be a nice time to clean the cache, too */
+  dirserv_expire_measured_bw_cache(now);
 
   fclose(fp);
   log_info(LD_DIRSERV,
@@ -2778,6 +3007,22 @@ dirserv_generate_networkstatus_vote_obj(crypto_pk_t *private_key,
   if (!contact)
     contact = "(none)";
 
+  /*
+   * Do this so dirserv_compute_performance_thresholds() and
+   * set_routerstatus_from_routerinfo() see up-to-date bandwidth info.
+   */
+  if (options->V3BandwidthsFile) {
+    dirserv_read_measured_bandwidths(options->V3BandwidthsFile, NULL);
+  } else {
+    /*
+     * No bandwidths file; clear the measured bandwidth cache in case we had
+     * one last time around.
+     */
+    if (dirserv_get_measured_bw_cache_size() > 0) {
+      dirserv_clear_measured_bw_cache();
+    }
+  }
+
   /* precompute this part, since we need it to decide what "stable"
    * means. */
   SMARTLIST_FOREACH(rl->routers, routerinfo_t *, ri, {
@@ -2793,6 +3038,10 @@ dirserv_generate_networkstatus_vote_obj(crypto_pk_t *private_key,
     (void) ignore;
     rep_hist_make_router_pessimal(sybil_id, now);
   } DIGESTMAP_FOREACH_END;
+
+  /* Count how many have measured bandwidths so we know how to assign flags;
+   * this must come before dirserv_compute_performance_thresholds() */
+  dirserv_count_measured_bws(rl);
 
   dirserv_compute_performance_thresholds(rl, omit_as_sybil);
 
@@ -2838,9 +3087,18 @@ dirserv_generate_networkstatus_vote_obj(crypto_pk_t *private_key,
   smartlist_free(routers);
   digestmap_free(omit_as_sybil, NULL);
 
+  /* This pass through applies the measured bw lines to the routerstatuses */
   if (options->V3BandwidthsFile) {
     dirserv_read_measured_bandwidths(options->V3BandwidthsFile,
                                      routerstatuses);
+  } else {
+    /*
+     * No bandwidths file; clear the measured bandwidth cache in case we had
+     * one last time around.
+     */
+    if (dirserv_get_measured_bw_cache_size() > 0) {
+      dirserv_clear_measured_bw_cache();
+    }
   }
 
   v3_out = tor_malloc_zero(sizeof(networkstatus_t));
@@ -3908,5 +4166,7 @@ dirserv_free_all(void)
   cached_v2_networkstatus = NULL;
   strmap_free(cached_consensuses, free_cached_dir_);
   cached_consensuses = NULL;
+
+  dirserv_clear_measured_bw_cache();
 }
 
