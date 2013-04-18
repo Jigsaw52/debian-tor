@@ -1,5 +1,6 @@
-tor (0.2.4.11-alpha-2) UNRELEASED; urgency=low
+tor (0.2.4.12-alpha-1) UNRELEASED; urgency=low
 
+  * New upstream version.
   * Forward port 03_tor_manpage_in_section_8.dpatch: torify.1 no longer
     references tsocks.
   * No longer install contrib/tor-tsocks.conf - it was dropped upstream.
