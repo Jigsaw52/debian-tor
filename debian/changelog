@@ -1,3 +1,17 @@
+tor (0.2.4.12-alpha-2) UNRELEASED; urgency=low
+
+  * No longer change tor manpage to be in section 8.
+  * No longer move tor from usr/bin to /usr/sbin after make install.
+    We now install tor into the same place as upstream.  Having it in
+    the default user path makes it easier for users who want to run
+    tor themselves.
+  * Install a compatibility symlink in /usr/sbin.
+  * Change relation form from (< version) to (<< version) in the tor-geoip
+    package.
+  * Update debian/watch file.
+
+ -- Peter Palfrader <weasel@debian.org>  Wed, 10 Apr 2013 10:33:02 +0200
+
 tor (0.2.4.12-alpha-1) experimental; urgency=low
 
   * New upstream version.

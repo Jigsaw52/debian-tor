@@ -1,7 +1,1 @@
 etc/apparmor.d/abstractions
-etc/tor
-var/lib/tor
-var/log/tor
-usr/bin
-usr/sbin
-usr/share/tor

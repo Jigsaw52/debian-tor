@@ -1,61 +1,7 @@
 #!/usr/bin/make -f
 # -*- makefile -*-
-# Sample debian/rules that uses debhelper.
-# GNU copyright 1997 to 1999 by Joey Hess.
 
-# Uncomment this to turn on verbose mode.
-#export DH_VERBOSE=1
-
-export PACKAGE=tor
-include /usr/share/dpatch/dpatch.make
-
-# enable hardning options
-include /usr/share/hardening-includes/hardening.make
-CFLAGS += $(HARDENING_CFLAGS)
-LDFLAGS += $(HARDENING_LDFLAGS)
-
-# These are used for cross-compiling and for saving the configure script
-# from having to guess our platform (since we know it already)
-#
-# See /usr/share/doc/autotools-dev/README.Debian.gz which suggests
-# this way of passing --build and --host.  Also see the thread on
-# debian-devel './configure in debian/rules' from February/March 2006,
-# starting with <43FF212C.5020800@xs4all.nl> by Pjotr Kourzanov.
-export DEB_HOST_GNU_TYPE   ?= $(shell dpkg-architecture -qDEB_HOST_GNU_TYPE)
-export DEB_BUILD_GNU_TYPE  ?= $(shell dpkg-architecture -qDEB_BUILD_GNU_TYPE)
-ifeq ($(DEB_BUILD_GNU_TYPE), $(DEB_HOST_GNU_TYPE))
-  confflags += --build $(DEB_HOST_GNU_TYPE)
-else
-  confflags += --build $(DEB_BUILD_GNU_TYPE) --host $(DEB_HOST_GNU_TYPE)
-endif
-
-CFLAGS ?= -Wall -g
-
-# Do not optimize the build with "noopt"
-ifneq (,$(findstring noopt,$(DEB_BUILD_OPTIONS)))
-	CFLAGS += -O0
-else
-	CFLAGS += -O2
-endif
-
-# Do not strip the binary with "nostrip"
-#ifeq (,$(findstring nostrip,$(DEB_BUILD_OPTIONS)))
-#	INSTALL_PROGRAM += -s
-#endif
-
-# Prevent the unit tests from being run with "nocheck"
-ifneq (,$(findstring nocheck,$(DEB_BUILD_OPTIONS)))
-	RUN_TEST = no
-endif
-ifneq (,$(findstring notest,$(DEB_BUILD_OPTIONS)))
-	RUN_TEST = no
-endif
-
-# Support passing of parallel=<n> in build options
-ifneq (,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
-	NUMJOBS = $(patsubst parallel=%,%,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
-	MAKEFLAGS += -j$(NUMJOBS)
-endif
+DH_VERBOSE ?= 1
 
 # allow building against libdmalloc4 - it better be installed
 ifneq (,$(findstring with-dmalloc,$(DEB_BUILD_OPTIONS)))
@@ -66,13 +12,16 @@ ifneq (,$(findstring enable-openbsd-malloc,$(DEB_BUILD_OPTIONS)))
 	confflags += --enable-openbsd-malloc
 endif
 
-export LDFLAGS
-export CFLAGS
+%:
+	dh \
+		$@ \
+		--with quilt \
+		--builddirectory=build \
+		--parallel
 
-configure: patch-stamp
-config.status: configure
-	dh_testdir
-	./configure \
+override_dh_auto_configure:
+	! [ -e debian/micro-revision.i ] || cp debian/micro-revision.i src/or/micro-revision.i
+	dh_auto_configure -- \
 		$(confflags) \
 		--prefix=/usr \
 		--mandir=\$${prefix}/share/man \
@@ -81,102 +30,32 @@ config.status: configure
 		--sysconfdir=/etc \
 		--disable-silent-rules
 
-
-build: build-stamp
-
-
-build-stamp:  config.status $(MANPAGE_INS)
-	dh_testdir
-	! [ -e debian/micro-revision.i ] || cp debian/micro-revision.i src/or/micro-revision.i
-
-	$(MAKE)
-	@echo
-	@echo
-	# Running unit tests
-	@if [ "$(RUN_TEST)" != "no" ]; then \
-		make check; \
-	else \
-		echo; echo; echo "Skipping unittests"; echo; \
-	fi
-	@echo
-	touch build-stamp
-
-clean: unpatch
-	dh_testdir
-	dh_testroot
-	rm -f build-stamp
-	rm -f src/common/common_sha1.i src/or/or_sha1.i
-	rm -f src/or/micro-revision.i
-
-	[ ! -f Makefile ] || $(MAKE) distclean
+override_dh_clean:
 	! [ -e debian/micro-revision.i ] || rm -f src/or/micro-revision.i
 
-	# Normally the .deb wouldn't ship with a ../.git
+	# Normally the .deb wouldn't ship with a ../.git, but if we do, include the revision number
 	if [ -d .git ] && which git >/dev/null; then \
 		echo "\"`git rev-parse --short=16 HEAD`\"" > "debian/micro-revision.i" ; \
 	fi
 
 	# these get autobuilt from the .txt files, some of which we also patch
-	rm -f doc/*.in
+	rm -vf doc/*.in
 
 	dh_clean
 
-install: build
-	dh_testdir
-	dh_testroot
-	dh_clean -k
-	dh_installdirs
-	dh_lintian
+override_dh_install:
+	dh_install --fail-missing
 
-	$(MAKE) install DESTDIR=$(CURDIR)/debian/tor
-	# move tor to where it belongs
-	mv $(CURDIR)/debian/tor/etc/tor/torrc.sample $(CURDIR)/debian/tor/etc/tor/torrc
-	mv $(CURDIR)/debian/tor/usr/bin/tor $(CURDIR)/debian/tor/usr/sbin/tor
-	install -d $(CURDIR)/debian/tor/usr/share/man/man8
-	mv $(CURDIR)/debian/tor/usr/share/man/man1/tor.1 $(CURDIR)/debian/tor/usr/share/man/man8/tor.8
+	mv debian/tor/etc/tor/torrc.sample debian/tor/etc/tor/torrc
 
-	install -m 755 contrib/torify $(CURDIR)/debian/tor/usr/bin
-	install -m 644 debian/tor-service-defaults-torrc $(CURDIR)/debian/tor/usr/share/tor
-
-	install -m 644 debian/tor.apparmor-profile $(CURDIR)/debian/tor/etc/apparmor.d/system_tor
-	install -m 644 debian/tor.apparmor-profile.abstraction $(CURDIR)/debian/tor/etc/apparmor.d/abstractions/tor
+	cp debian/tor.apparmor-profile             debian/tor/etc/apparmor.d/system_tor
+	cp debian/tor.apparmor-profile.abstraction debian/tor/etc/apparmor.d/abstractions/tor
 	dh_apparmor --profile-name=system_tor -ptor
 
-	# tor-geoip
-	mv $(CURDIR)/debian/tor/usr/share/tor/geoip $(CURDIR)/debian/tor-geoipdb/usr/share/tor
-	mv $(CURDIR)/debian/tor/usr/share/tor/geoip6 $(CURDIR)/debian/tor-geoipdb/usr/share/tor
-	rmdir $(CURDIR)/debian/tor/usr/share/tor || true
-
-# Must not depend on anything. This is to be called by
-# binary-arch/binary-indep
-# in another 'make' thread.
-binary-common:
-	dh_testdir
-	dh_testroot
-	dh_link
-	dh_installchangelogs ChangeLog
+override_dh_installdocs:
+	dh_installdocs -ptor-dbg --link-doc=tor
 	dh_installdocs
-	dh_installexamples
-	dh_installlogrotate
-	dh_installinit --error-handler=tor_error_init
-	dh_installcron
-	dh_installman
+override_dh_strip:
 	dh_strip --dbg-package=tor-dbg
-	dh_compress
-	dh_fixperms
-	dh_installdeb
-	dh_shlibdeps
-	dh_gencontrol
-	dh_md5sums
-	dh_builddeb
-
-# Build architecture independant packages using the common target.
-binary-indep: install
-	$(MAKE) -f debian/rules DH_OPTIONS=-i binary-common
-
-# Build architecture dependant packages using the common target.
-binary-arch: install
-	$(MAKE) -f debian/rules DH_OPTIONS=-s binary-common
-
-binary: binary-indep binary-arch
-.PHONY: build clean binary-common binary-indep binary-arch binary install
+override_dh_installinit:
+	dh_installinit --error-handler=tor_error_init

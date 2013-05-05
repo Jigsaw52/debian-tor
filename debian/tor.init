@@ -20,8 +20,8 @@
 # Define LSB log_* functions.
 . /lib/lsb/init-functions
 
-PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
-DAEMON=/usr/sbin/tor
+PATH=/sbin:/bin:/usr/sbin:/usr/bin
+DAEMON=/usr/bin/tor
 NAME=tor
 DESC="tor daemon"
 TORPIDDIR=/var/run/tor
