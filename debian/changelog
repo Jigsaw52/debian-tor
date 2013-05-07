@@ -10,6 +10,7 @@ tor (0.2.4.12-alpha-2) UNRELEASED; urgency=low
     package.
   * Update debian/watch file.
   * Clean up old /etc/tor/tor-tsocks.conf conffile (closes: #705785).
+    This requires debhelper >= 8.1.0~, adapt build-dependency accordingly.
 
  -- Peter Palfrader <weasel@debian.org>  Wed, 10 Apr 2013 10:33:02 +0200
 
