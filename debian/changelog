@@ -1,4 +1,4 @@
-tor (0.2.4.12-alpha-2) UNRELEASED; urgency=low
+tor (0.2.4.12-alpha-2) experimental; urgency=low
 
   * No longer change tor manpage to be in section 8.
   * No longer move tor from usr/bin to /usr/sbin after make install.
@@ -12,7 +12,7 @@ tor (0.2.4.12-alpha-2) UNRELEASED; urgency=low
   * Clean up old /etc/tor/tor-tsocks.conf conffile (closes: #705785).
     This requires debhelper >= 8.1.0~, adapt build-dependency accordingly.
 
- -- Peter Palfrader <weasel@debian.org>  Wed, 10 Apr 2013 10:33:02 +0200
+ -- Peter Palfrader <weasel@debian.org>  Wed, 08 May 2013 18:03:36 +0200
 
 tor (0.2.4.12-alpha-1) experimental; urgency=low
 
