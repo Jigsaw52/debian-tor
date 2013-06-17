@@ -1769,9 +1769,10 @@ connection_ap_get_begincell_flags(entry_connection_t *ap_conn)
   }
 
   if (flags == BEGIN_FLAG_IPV4_NOT_OK) {
-    log_warn(LD_BUG, "Hey; I'm about to ask a node for a connection that I "
+    log_warn(LD_EDGE, "I'm about to ask a node for a connection that I "
              "am telling it to fulfil with neither IPv4 nor IPv6. That's "
-             "probably not going to work.");
+             "not going to work. Did you perhaps ask for an IPv6 address "
+             "on an IPv4Only port, or vice versa?");
   }
 
   return flags;
@@ -2651,12 +2652,13 @@ connection_exit_connect(edge_connection_t *edge_conn)
 
   conn->state = EXIT_CONN_STATE_OPEN;
   if (connection_get_outbuf_len(conn)) {
-    /* in case there are any queued data cells */
-    log_warn(LD_BUG,"newly connected conn had data waiting!");
-//    connection_start_writing(conn);
+    /* in case there are any queued data cells, from e.g. optimistic data */
+    IF_HAS_NO_BUFFEREVENT(conn)
+      connection_watch_events(conn, READ_EVENT|WRITE_EVENT);
+  } else {
+    IF_HAS_NO_BUFFEREVENT(conn)
+      connection_watch_events(conn, READ_EVENT);
   }
-  IF_HAS_NO_BUFFEREVENT(conn)
-    connection_watch_events(conn, READ_EVENT);
 
   /* also, deliver a 'connected' cell back through the circuit. */
   if (connection_edge_is_rendezvous_stream(edge_conn)) {
