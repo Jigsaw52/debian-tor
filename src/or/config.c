@@ -314,7 +314,7 @@ static config_var_t option_vars_[] = {
   OBSOLETE("NoPublish"),
   VAR("NodeFamily",              LINELIST, NodeFamilies,         NULL),
   V(NumCPUs,                     UINT,     "0"),
-  V(NumDirectoryGuards,          UINT,     "3"),
+  V(NumDirectoryGuards,          UINT,     "0"),
   V(NumEntryGuards,              UINT,     "3"),
   V(ORListenAddress,             LINELIST, NULL),
   VPORT(ORPort,                      LINELIST, NULL),
@@ -3714,6 +3714,7 @@ options_init_from_torrc(int argc, char **argv)
   }
 
   if (command == CMD_HASH_PASSWORD) {
+    cf_defaults = tor_strdup("");
     cf = tor_strdup("");
   } else {
     cf_defaults = load_torrc_from_disk(argc, argv, 1);
