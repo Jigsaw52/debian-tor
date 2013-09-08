@@ -168,9 +168,7 @@ case "$1" in
 	;;
   stop)
 	log_action_begin_msg "Stopping $DESC"
-	TORPID=/home/weasel/pidfile
 	pid=`cat $TORPID 2>/dev/null` || true
-	DAEMON=/bin/sleep
 
 	if test ! -f $TORPID -o -z "$pid"; then
 		log_action_end_msg 0 "not running - there is no $TORPID"
