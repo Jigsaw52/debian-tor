@@ -85,6 +85,7 @@ wait_for_deaddaemon () {
 				if [ $cnt -gt $WAITFORDAEMON ]
 				then
 					log_action_end_msg 1 "still running"
+					exit 1
 				fi
 				sleep 1
 				[ "`expr $cnt % 3`" != 2 ] || log_action_cont_msg ""
@@ -161,12 +162,15 @@ case "$1" in
 			log_action_end_msg 0
 		else
 			log_action_end_msg 1
+			exit 1
 		fi
 	fi
 	;;
   stop)
 	log_action_begin_msg "Stopping $DESC"
+	TORPID=/home/weasel/pidfile
 	pid=`cat $TORPID 2>/dev/null` || true
+	DAEMON=/bin/sleep
 
 	if test ! -f $TORPID -o -z "$pid"; then
 		log_action_end_msg 0 "not running - there is no $TORPID"
@@ -177,8 +181,10 @@ case "$1" in
 		wait_for_deaddaemon $pid
 	elif kill -0 $pid 2>/dev/null; then
 		log_action_end_msg 1 "Is $pid not $NAME?  Is $DAEMON a different binary now?"
+		exit 1
 	else
 		log_action_end_msg 1 "$DAEMON died: process $pid not running; or permission denied"
+		exit 1
 	fi
 	;;
   reload|force-reload)
@@ -189,7 +195,7 @@ case "$1" in
 
 	if test ! -f $TORPID -o -z "$pid"; then
 		log_action_end_msg 1 "not running - there is no $TORPID"
-		exit 0
+		exit 1
 	fi
 
 	if start-stop-daemon --stop --signal 1 --quiet --pidfile $TORPID --exec $DAEMON
@@ -197,8 +203,10 @@ case "$1" in
 		log_action_end_msg 0
 	elif kill -0 $pid 2>/dev/null; then
 		log_action_end_msg 1 "Is $pid not $NAME?  Is $DAEMON a different binary now?"
+		exit 1
 	else
 		log_action_end_msg 1 "$DAEMON died: process $pid not running; or permission denied"
+		exit 1
 	fi
 	;;
   restart)
