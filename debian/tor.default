@@ -34,8 +34,9 @@ RUN_DAEMON="yes"
 # ARGS="$ARGS "
 
 #
-# Uncomment the ulimit call below if you want tor to produce coredumps on
-# segfaults and assert errors.
+# Uncomment the ulimit call below, and set "DisableDebuggerAttachment 0"
+# in /etc/tor/torrc, if you want tor to produce coredumps on segfaults
+# and assert errors.
 #
 # Keeping coredumps around is some sort of security issue since they
 # may leak session keys, sensitive client data and more, should such
