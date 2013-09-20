@@ -662,18 +662,6 @@ router_get_networkstatus_v3_hashes(const char *s, digests_t *digests)
                                 ' ');
 }
 
-/** Set <b>digest</b> to the SHA-1 digest of the hash of the network-status
- * string in <b>s</b>.  Return 0 on success, -1 on failure. */
-int
-router_get_networkstatus_v3_hash(const char *s, char *digest,
-                                 digest_algorithm_t alg)
-{
-  return router_get_hash_impl(s, strlen(s), digest,
-                              "network-status-version",
-                              "\ndirectory-signature",
-                              ' ', alg);
-}
-
 /** Set <b>digest</b> to the SHA-1 digest of the hash of the <b>s_len</b>-byte
  * extrainfo string at <b>s</b>.  Return 0 on success, -1 on failure. */
 int
@@ -681,6 +669,61 @@ router_get_extrainfo_hash(const char *s, size_t s_len, char *digest)
 {
   return router_get_hash_impl(s, s_len, digest, "extra-info",
                               "\nrouter-signature",'\n', DIGEST_SHA1);
+}
+
+/** Helper: used to generate signatures for routers, directories and
+ * network-status objects.  Given a <b>digest_len</b>-byte digest in
+ * <b>digest</b> and a secret <b>private_key</b>, generate an PKCS1-padded
+ * signature, BASE64-encode it, surround it with -----BEGIN/END----- pairs,
+ * and return the new signature on success or NULL on failure.
+ */
+char *
+router_get_dirobj_signature(const char *digest,
+                            size_t digest_len,
+                            crypto_pk_t *private_key)
+{
+  char *signature;
+  size_t i, keysize;
+  int siglen;
+  char *buf = NULL;
+  size_t buf_len;
+  /* overestimate of BEGIN/END lines total len. */
+#define BEGIN_END_OVERHEAD_LEN 64
+
+  keysize = crypto_pk_keysize(private_key);
+  signature = tor_malloc(keysize);
+  siglen = crypto_pk_private_sign(private_key, signature, keysize,
+                                  digest, digest_len);
+  if (siglen < 0) {
+    log_warn(LD_BUG,"Couldn't sign digest.");
+    goto err;
+  }
+
+  /* The *2 here is a ridiculous overestimate of base-64 overhead. */
+  buf_len = (siglen * 2) + BEGIN_END_OVERHEAD_LEN;
+  buf = tor_malloc(buf_len);
+
+  if (strlcpy(buf, "-----BEGIN SIGNATURE-----\n", buf_len) >= buf_len)
+    goto truncated;
+
+  i = strlen(buf);
+  if (base64_encode(buf+i, buf_len-i, signature, siglen) < 0) {
+    log_warn(LD_BUG,"couldn't base64-encode signature");
+    goto err;
+  }
+
+  if (strlcat(buf, "-----END SIGNATURE-----\n", buf_len) >= buf_len)
+    goto truncated;
+
+  tor_free(signature);
+  return buf;
+
+ truncated:
+  log_warn(LD_BUG,"tried to exceed string length.");
+ err:
+  tor_free(signature);
+  tor_free(buf);
+  return NULL;
 }
 
 /** Helper: used to generate signatures for routers, directories and
@@ -694,38 +737,21 @@ int
 router_append_dirobj_signature(char *buf, size_t buf_len, const char *digest,
                                size_t digest_len, crypto_pk_t *private_key)
 {
-  char *signature;
-  size_t i, keysize;
-  int siglen;
-
-  keysize = crypto_pk_keysize(private_key);
-  signature = tor_malloc(keysize);
-  siglen = crypto_pk_private_sign(private_key, signature, keysize,
-                                  digest, digest_len);
-  if (siglen < 0) {
-    log_warn(LD_BUG,"Couldn't sign digest.");
-    goto err;
+  size_t sig_len, s_len;
+  char *sig = router_get_dirobj_signature(digest, digest_len, private_key);
+  if (!sig) {
+    log_warn(LD_BUG, "No signature generated");
+    return -1;
   }
-  if (strlcat(buf, "-----BEGIN SIGNATURE-----\n", buf_len) >= buf_len)
-    goto truncated;
-
-  i = strlen(buf);
-  if (base64_encode(buf+i, buf_len-i, signature, siglen) < 0) {
-    log_warn(LD_BUG,"couldn't base64-encode signature");
-    goto err;
+  sig_len = strlen(sig);
+  s_len = strlen(buf);
+  if (sig_len + s_len + 1 > buf_len) {
+    log_warn(LD_BUG, "Not enough room for signature");
+    tor_free(sig);
+    return -1;
   }
-
-  if (strlcat(buf, "-----END SIGNATURE-----\n", buf_len) >= buf_len)
-    goto truncated;
-
-  tor_free(signature);
+  memcpy(buf+s_len, sig, sig_len+1);
   return 0;
-
- truncated:
-  log_warn(LD_BUG,"tried to exceed string length.");
- err:
-  tor_free(signature);
-  return -1;
 }
 
 /** Return VS_RECOMMENDED if <b>myversion</b> is contained in
@@ -1494,7 +1520,7 @@ extrainfo_parse_entry_from_string(const char *s, const char *end,
   extrainfo = tor_malloc_zero(sizeof(extrainfo_t));
   extrainfo->cache_info.is_extrainfo = 1;
   if (cache_copy)
-    extrainfo->cache_info.signed_descriptor_body = tor_strndup(s, end-s);
+    extrainfo->cache_info.signed_descriptor_body = tor_memdup_nulterm(s,end-s);
   extrainfo->cache_info.signed_descriptor_len = end-s;
   memcpy(extrainfo->cache_info.signed_descriptor_digest, digest, DIGEST_LEN);
 
@@ -1953,7 +1979,7 @@ routerstatus_parse_entry_from_string(memarea_t *area,
       rs->version_supports_optimistic_data =
         tor_version_as_new_as(tok->args[0], "0.2.3.1-alpha");
       rs->version_supports_extend2_cells =
-        tor_version_as_new_as(tok->args[0], "0.2.4.7-alpha");
+        tor_version_as_new_as(tok->args[0], "0.2.4.8-alpha");
     }
     if (vote_rs) {
       vote_rs->version = tor_strdup(tok->args[0]);
@@ -1966,9 +1992,10 @@ routerstatus_parse_entry_from_string(memarea_t *area,
     for (i=0; i < tok->n_args; ++i) {
       if (!strcmpstart(tok->args[i], "Bandwidth=")) {
         int ok;
-        rs->bandwidth = (uint32_t)tor_parse_ulong(strchr(tok->args[i], '=')+1,
-                                                  10, 0, UINT32_MAX,
-                                                  &ok, NULL);
+        rs->bandwidth_kb =
+          (uint32_t)tor_parse_ulong(strchr(tok->args[i], '=')+1,
+                                    10, 0, UINT32_MAX,
+                                    &ok, NULL);
         if (!ok) {
           log_warn(LD_DIR, "Invalid Bandwidth %s", escaped(tok->args[i]));
           goto err;
@@ -1976,7 +2003,7 @@ routerstatus_parse_entry_from_string(memarea_t *area,
         rs->has_bandwidth = 1;
       } else if (!strcmpstart(tok->args[i], "Measured=") && vote_rs) {
         int ok;
-        vote_rs->measured_bw =
+        vote_rs->measured_bw_kb =
             (uint32_t)tor_parse_ulong(strchr(tok->args[i], '=')+1,
                                       10, 0, UINT32_MAX, &ok, NULL);
         if (!ok) {
@@ -2030,7 +2057,7 @@ routerstatus_parse_entry_from_string(memarea_t *area,
       }
     } else {
       log_info(LD_BUG, "Found an entry in networkstatus with no "
-               "microdescriptor digest. (Router %s=%s at %s:%d.)",
+               "microdescriptor digest. (Router %s ($%s) at %s:%d.)",
                rs->nickname, hex_str(rs->identity_digest, DIGEST_LEN),
                fmt_addr32(rs->addr), rs->or_port);
     }
@@ -2257,7 +2284,7 @@ networkstatus_v2_parse_from_string(const char *s)
 
 /** Verify the bandwidth weights of a network status document */
 int
-networkstatus_verify_bw_weights(networkstatus_t *ns)
+networkstatus_verify_bw_weights(networkstatus_t *ns, int consensus_method)
 {
   int64_t weight_scale;
   int64_t G=0, M=0, E=0, D=0, T=0;
@@ -2343,24 +2370,31 @@ networkstatus_verify_bw_weights(networkstatus_t *ns)
 
   // Then, gather G, M, E, D, T to determine case
   SMARTLIST_FOREACH_BEGIN(ns->routerstatus_list, routerstatus_t *, rs) {
+    int is_exit = 0;
+    if (consensus_method >= MIN_METHOD_TO_CUT_BADEXIT_WEIGHT) {
+      /* Bug #2203: Don't count bad exits as exits for balancing */
+      is_exit = rs->is_exit && !rs->is_bad_exit;
+    } else {
+      is_exit = rs->is_exit;
+    }
     if (rs->has_bandwidth) {
-      T += rs->bandwidth;
-      if (rs->is_exit && rs->is_possible_guard) {
-        D += rs->bandwidth;
-        Gtotal += Wgd*rs->bandwidth;
-        Mtotal += Wmd*rs->bandwidth;
-        Etotal += Wed*rs->bandwidth;
-      } else if (rs->is_exit) {
-        E += rs->bandwidth;
-        Mtotal += Wme*rs->bandwidth;
-        Etotal += Wee*rs->bandwidth;
+      T += rs->bandwidth_kb;
+      if (is_exit && rs->is_possible_guard) {
+        D += rs->bandwidth_kb;
+        Gtotal += Wgd*rs->bandwidth_kb;
+        Mtotal += Wmd*rs->bandwidth_kb;
+        Etotal += Wed*rs->bandwidth_kb;
+      } else if (is_exit) {
+        E += rs->bandwidth_kb;
+        Mtotal += Wme*rs->bandwidth_kb;
+        Etotal += Wee*rs->bandwidth_kb;
       } else if (rs->is_possible_guard) {
-        G += rs->bandwidth;
-        Gtotal += Wgg*rs->bandwidth;
-        Mtotal += Wmg*rs->bandwidth;
+        G += rs->bandwidth_kb;
+        Gtotal += Wgg*rs->bandwidth_kb;
+        Mtotal += Wmg*rs->bandwidth_kb;
       } else {
-        M += rs->bandwidth;
-        Mtotal += Wmm*rs->bandwidth;
+        M += rs->bandwidth_kb;
+        Mtotal += Wmm*rs->bandwidth_kb;
       }
     } else {
       log_warn(LD_BUG, "Missing consensus bandwidth for router %s",
@@ -3913,8 +3947,15 @@ tokenize_string(memarea_t *area,
   tor_assert(area);
 
   s = &start;
-  if (!end)
+  if (!end) {
     end = start+strlen(start);
+  } else {
+    /* it's only meaningful to check for nuls if we got an end-of-string ptr */
+    if (memchr(start, '\0', end-start)) {
+      log_warn(LD_DIR, "parse error: internal NUL character.");
+      return -1;
+    }
+  }
   for (i = 0; i < NIL_; ++i)
     counts[i] = 0;
 
@@ -4248,7 +4289,7 @@ microdescs_parse_from_string(const char *s, const char *eos,
 
       md->bodylen = start_of_next_microdesc - cp;
       if (copy_body)
-        md->body = tor_strndup(cp, md->bodylen);
+        md->body = tor_memdup_nulterm(cp, md->bodylen);
       else
         md->body = (char*)cp;
       md->off = cp - start;

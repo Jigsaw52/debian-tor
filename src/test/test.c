@@ -44,6 +44,7 @@ double fabs(double x);
 
 #include "or.h"
 #include "buffers.h"
+#include "circuitlist.h"
 #include "circuitstats.h"
 #include "config.h"
 #include "connection_edge.h"
@@ -53,6 +54,7 @@ double fabs(double x);
 #include "torgzip.h"
 #include "mempool.h"
 #include "memarea.h"
+#include "onion.h"
 #include "onion_tap.h"
 #include "policies.h"
 #include "rephist.h"
@@ -88,7 +90,13 @@ setup_directory(void)
 {
   static int is_setup = 0;
   int r;
+  char rnd[256], rnd32[256];
   if (is_setup) return;
+
+/* Due to base32 limitation needs to be a multiple of 5. */
+#define RAND_PATH_BYTES 5
+  crypto_rand(rnd, RAND_PATH_BYTES);
+  base32_encode(rnd32, sizeof(rnd32), rnd, RAND_PATH_BYTES);
 
 #ifdef _WIN32
   {
@@ -98,11 +106,12 @@ setup_directory(void)
     if (!GetTempPathA(sizeof(buf),buf))
       tmp = "c:\\windows\\temp";
     tor_snprintf(temp_dir, sizeof(temp_dir),
-                 "%s\\tor_test_%d", tmp, (int)getpid());
+                 "%s\\tor_test_%d_%s", tmp, (int)getpid(), rnd32);
     r = mkdir(temp_dir);
   }
 #else
-  tor_snprintf(temp_dir, sizeof(temp_dir), "/tmp/tor_test_%d", (int) getpid());
+  tor_snprintf(temp_dir, sizeof(temp_dir), "/tmp/tor_test_%d_%s",
+               (int) getpid(), rnd32);
   r = mkdir(temp_dir, 0700);
 #endif
   if (r) {
@@ -356,7 +365,7 @@ test_socks_5_unsupported_commands(void *ptr)
   test_eq(5, socks->socks_version);
   test_eq(2, socks->replylen);
   test_eq(5, socks->reply[0]);
-  test_eq(0, socks->reply[1]);
+  test_eq(2, socks->reply[1]);
   ADD_DATA(buf, "\x05\x03\x00\x01\x02\x02\x02\x01\x01\x01");
   test_eq(fetch_from_buf_socks(buf, socks, get_options()->TestSocks,
                                get_options()->SafeSocks), -1);
@@ -461,7 +470,7 @@ test_socks_5_no_authenticate(void *ptr)
                                     get_options()->SafeSocks));
   test_eq(5, socks->socks_version);
   test_eq(2, socks->replylen);
-  test_eq(5, socks->reply[0]);
+  test_eq(1, socks->reply[0]);
   test_eq(0, socks->reply[1]);
 
   test_eq(2, socks->usernamelen);
@@ -500,7 +509,7 @@ test_socks_5_authenticate(void *ptr)
                                    get_options()->SafeSocks));
   test_eq(5, socks->socks_version);
   test_eq(2, socks->replylen);
-  test_eq(5, socks->reply[0]);
+  test_eq(1, socks->reply[0]);
   test_eq(0, socks->reply[1]);
 
   test_eq(2, socks->usernamelen);
@@ -540,7 +549,7 @@ test_socks_5_authenticate_with_data(void *ptr)
                                    get_options()->SafeSocks) == 1);
   test_eq(5, socks->socks_version);
   test_eq(2, socks->replylen);
-  test_eq(5, socks->reply[0]);
+  test_eq(1, socks->reply[0]);
   test_eq(0, socks->reply[1]);
 
   test_streq("2.2.2.2", socks->address);
@@ -806,6 +815,18 @@ test_buffers(void)
   buf_free(buf);
   buf = NULL;
 
+  /* Try adding a string too long for any freelist. */
+  {
+    char *cp = tor_malloc_zero(65536);
+    buf = buf_new();
+    write_to_buf(cp, 65536, buf);
+    tor_free(cp);
+
+    tt_int_op(buf_datalen(buf), ==, 65536);
+    buf_free(buf);
+    buf = NULL;
+  }
+
  done:
   if (buf)
     buf_free(buf);
@@ -913,6 +934,49 @@ test_ntor_handshake(void *arg)
   dimap_free(s_keymap, NULL);
 }
 #endif
+
+/** Run unit tests for the onion queues. */
+static void
+test_onion_queues(void)
+{
+  uint8_t buf1[TAP_ONIONSKIN_CHALLENGE_LEN] = {0};
+  uint8_t buf2[NTOR_ONIONSKIN_LEN] = {0};
+
+  or_circuit_t *circ1 = or_circuit_new(0, NULL);
+  or_circuit_t *circ2 = or_circuit_new(0, NULL);
+
+  create_cell_t *onionskin = NULL;
+  create_cell_t *create1 = tor_malloc_zero(sizeof(create_cell_t));
+  create_cell_t *create2 = tor_malloc_zero(sizeof(create_cell_t));
+
+  create_cell_init(create1, CELL_CREATE, ONION_HANDSHAKE_TYPE_TAP,
+                   TAP_ONIONSKIN_CHALLENGE_LEN, buf1);
+  create_cell_init(create2, CELL_CREATE, ONION_HANDSHAKE_TYPE_NTOR,
+                   NTOR_ONIONSKIN_LEN, buf2);
+
+  test_eq(0, onion_num_pending(ONION_HANDSHAKE_TYPE_TAP));
+  test_eq(0, onion_pending_add(circ1, create1));
+  test_eq(1, onion_num_pending(ONION_HANDSHAKE_TYPE_TAP));
+
+  test_eq(0, onion_num_pending(ONION_HANDSHAKE_TYPE_NTOR));
+  test_eq(0, onion_pending_add(circ2, create2));
+  test_eq(1, onion_num_pending(ONION_HANDSHAKE_TYPE_NTOR));
+
+  test_eq_ptr(circ2, onion_next_task(&onionskin));
+  test_eq(1, onion_num_pending(ONION_HANDSHAKE_TYPE_TAP));
+  test_eq(0, onion_num_pending(ONION_HANDSHAKE_TYPE_NTOR));
+
+  clear_pending_onions();
+  test_eq(0, onion_num_pending(ONION_HANDSHAKE_TYPE_TAP));
+  test_eq(0, onion_num_pending(ONION_HANDSHAKE_TYPE_NTOR));
+
+ done:
+  ;
+//  circuit_free(circ1);
+//  circuit_free(circ2);
+  /* and free create1 and create2 */
+  /* XXX leaks everything here */
+}
 
 static void
 test_circuit_timeout(void)
@@ -1979,11 +2043,6 @@ const struct testcase_setup_t legacy_setup = {
 
 #define ENT(name)                                                       \
   { #name, legacy_test_helper, 0, &legacy_setup, test_ ## name }
-#define SUBENT(group, name)                                             \
-  { #group "_" #name, legacy_test_helper, 0, &legacy_setup,             \
-      test_ ## group ## _ ## name }
-#define DISABLED(name)                                                  \
-  { #name, legacy_test_helper, TT_SKIP, &legacy_setup, test_ ## name }
 #define FORK(name)                                                      \
   { #name, legacy_test_helper, TT_FORK, &legacy_setup, test_ ## name }
 
@@ -1991,6 +2050,7 @@ static struct testcase_t test_array[] = {
   ENT(buffers),
   { "buffer_copy", test_buffer_copy, 0, NULL, NULL },
   ENT(onion_handshake),
+  ENT(onion_queues),
 #ifdef CURVE25519_ENABLED
   { "ntor_handshake", test_ntor_handshake, 0, NULL, NULL },
 #endif
@@ -2099,6 +2159,7 @@ main(int c, const char **v)
     return 1;
   }
   crypto_set_tls_dh_prime(NULL);
+  crypto_seed_rng(1);
   rep_hist_init();
   network_init();
   setup_directory();
@@ -2110,8 +2171,6 @@ main(int c, const char **v)
     tor_free(errmsg);
     return 1;
   }
-
-  crypto_seed_rng(1);
 
   atexit(remove_directory);
 

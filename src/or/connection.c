@@ -918,8 +918,11 @@ make_socket_reuseable(tor_socket_t sock)
    * right after somebody else has let it go. But REUSEADDR on win32
    * means you can bind to the port _even when somebody else
    * already has it bound_. So, don't do that on Win32. */
-  setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (void*) &one,
-             (socklen_t)sizeof(one));
+  if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (void*) &one,
+             (socklen_t)sizeof(one)) == -1) {
+    log_warn(LD_NET, "Error setting SO_REUSEADDR flag: %s",
+             tor_socket_strerror(errno));
+  }
 #endif
 }
 
@@ -1102,7 +1105,10 @@ connection_listener_new(const struct sockaddr *listensockaddr,
       tor_assert(0);
   }
 
-  set_socket_nonblocking(s);
+  if (set_socket_nonblocking(s) == -1) {
+    tor_close_socket(s);
+    goto err;
+  }
 
   lis_conn = listener_connection_new(type, listensockaddr->sa_family);
   conn = TO_CONN(lis_conn);
@@ -1139,6 +1145,7 @@ connection_listener_new(const struct sockaddr *listensockaddr,
   lis_conn->use_cached_ipv4_answers = port_cfg->use_cached_ipv4_answers;
   lis_conn->use_cached_ipv6_answers = port_cfg->use_cached_ipv6_answers;
   lis_conn->prefer_ipv6_virtaddr = port_cfg->prefer_ipv6_virtaddr;
+  lis_conn->socks_prefer_no_auth = port_cfg->socks_prefer_no_auth;
 
   if (connection_add(conn) < 0) { /* no space, forget it */
     log_warn(LD_NET,"connection_add for listener failed. Giving up.");
@@ -1265,7 +1272,10 @@ connection_handle_listener_read(connection_t *conn, int new_type)
             (int)news,(int)conn->s);
 
   make_socket_reuseable(news);
-  set_socket_nonblocking(news);
+  if (set_socket_nonblocking(news) == -1) {
+    tor_close_socket(news);
+    return 0;
+  }
 
   if (options->ConstrainedSockets)
     set_constrained_socket_buffers(news, (int)options->ConstrainedSockSize);
@@ -1315,6 +1325,11 @@ connection_handle_listener_read(connection_t *conn, int new_type)
     tor_addr_copy(&newconn->addr, &addr);
     newconn->port = port;
     newconn->address = tor_dup_addr(&addr);
+
+    if (new_type == CONN_TYPE_AP) {
+      TO_ENTRY_CONN(newconn)->socks_request->socks_prefer_no_auth =
+        TO_LISTENER_CONN(conn)->socks_prefer_no_auth;
+    }
 
   } else if (conn->socket_family == AF_UNIX) {
     /* For now only control ports can be Unix domain sockets
@@ -1494,7 +1509,11 @@ connection_connect(connection_t *conn, const char *address,
     }
   }
 
-  set_socket_nonblocking(s);
+  if (set_socket_nonblocking(s) == -1) {
+    *socket_error = tor_socket_errno(s);
+    tor_close_socket(s);
+    return -1;
+  }
 
   if (options->ConstrainedSockets)
     set_constrained_socket_buffers(s, (int)options->ConstrainedSockSize);
@@ -2054,6 +2073,8 @@ retry_all_listeners(smartlist_t *replaced_conns,
   const or_options_t *options = get_options();
   int retval = 0;
   const uint16_t old_or_port = router_get_advertised_or_port(options);
+  const uint16_t old_or_port_ipv6 =
+    router_get_advertised_or_port_by_af(options,AF_INET6);
   const uint16_t old_dir_port = router_get_advertised_dir_port(options, 0);
 
   SMARTLIST_FOREACH_BEGIN(get_connection_array(), connection_t *, conn) {
@@ -2082,8 +2103,9 @@ retry_all_listeners(smartlist_t *replaced_conns,
 
   smartlist_free(listeners);
 
-  /* XXXprop186 should take all advertised ports into account */
   if (old_or_port != router_get_advertised_or_port(options) ||
+      old_or_port_ipv6 != router_get_advertised_or_port_by_af(options,
+                                                              AF_INET6) ||
       old_dir_port != router_get_advertised_dir_port(options, 0)) {
     /* Our chosen ORPort or DirPort is not what it used to be: the
      * descriptor we had (if any) should be regenerated.  (We won't
@@ -2935,7 +2957,20 @@ connection_read_to_buf(connection_t *conn, ssize_t *max_to_read,
       case TOR_TLS_WANTWRITE:
         connection_start_writing(conn);
         return 0;
-      case TOR_TLS_WANTREAD: /* we're already reading */
+      case TOR_TLS_WANTREAD:
+        if (conn->in_connection_handle_write) {
+          /* We've been invoked from connection_handle_write, because we're
+           * waiting for a TLS renegotiation, the renegotiation started, and
+           * SSL_read returned WANTWRITE.  But now SSL_read is saying WANTREAD
+           * again.  Stop waiting for write events now, or else we'll
+           * busy-loop until data arrives for us to read. */
+          connection_stop_writing(conn);
+          if (!connection_is_reading(conn))
+            connection_start_reading(conn);
+        }
+        /* we're already reading, one hopes */
+        result = 0;
+        break;
       case TOR_TLS_DONE: /* no data read, so nothing to process */
         result = 0;
         break; /* so we call bucket_decrement below */
@@ -3426,6 +3461,10 @@ connection_handle_write_impl(connection_t *conn, int force)
     if (result < 0) {
       if (CONN_IS_EDGE(conn))
         connection_edge_end_errno(TO_EDGE_CONN(conn));
+      if (conn->type == CONN_TYPE_AP) {
+        /* writing failed; we couldn't send a SOCKS reply if we wanted to */
+        TO_ENTRY_CONN(conn)->socks_request->has_finished = 1;
+      }
 
       connection_close_immediate(conn); /* Don't flush; connection is dead. */
       connection_mark_for_close(conn);
@@ -3490,7 +3529,9 @@ connection_handle_write(connection_t *conn, int force)
 {
     int res;
     tor_gettimeofday_cache_clear();
+    conn->in_connection_handle_write = 1;
     res = connection_handle_write_impl(conn, force);
+    conn->in_connection_handle_write = 0;
     return res;
 }
 

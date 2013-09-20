@@ -137,8 +137,13 @@ tor_open_cloexec(const char *path, int flags, unsigned mode)
 
   fd = open(path, flags, mode);
 #ifdef FD_CLOEXEC
-  if (fd >= 0)
-        fcntl(fd, F_SETFD, FD_CLOEXEC);
+  if (fd >= 0) {
+    if (fcntl(fd, F_SETFD, FD_CLOEXEC) == -1) {
+      log_warn(LD_FS,"Couldn't set FD_CLOEXEC: %s", strerror(errno));
+      close(fd);
+      return -1;
+    }
+  }
 #endif
   return fd;
 }
@@ -150,8 +155,13 @@ tor_fopen_cloexec(const char *path, const char *mode)
 {
   FILE *result = fopen(path, mode);
 #ifdef FD_CLOEXEC
-  if (result != NULL)
-    fcntl(fileno(result), F_SETFD, FD_CLOEXEC);
+  if (result != NULL) {
+    if (fcntl(fileno(result), F_SETFD, FD_CLOEXEC) == -1) {
+      log_warn(LD_FS,"Couldn't set FD_CLOEXEC: %s", strerror(errno));
+      fclose(result);
+      return NULL;
+    }
+  }
 #endif
   return result;
 }
@@ -860,6 +870,9 @@ tor_lockfile_unlock(tor_lockfile_t *lockfile)
 /** @{ */
 /** Some old versions of Unix didn't define constants for these values,
  * and instead expect you to say 0, 1, or 2. */
+#ifndef SEEK_SET
+#define SEEK_SET 0
+#endif
 #ifndef SEEK_CUR
 #define SEEK_CUR 1
 #endif
@@ -887,6 +900,18 @@ tor_fd_seekend(int fd)
   return _lseek(fd, 0, SEEK_END) < 0 ? -1 : 0;
 #else
   return lseek(fd, 0, SEEK_END) < 0 ? -1 : 0;
+#endif
+}
+
+/** Move <b>fd</b> to position <b>pos</b> in the file. Return -1 on error, 0
+ * on success. */
+int
+tor_fd_setpos(int fd, off_t pos)
+{
+#ifdef _WIN32
+  return _lseek(fd, pos, SEEK_SET) < 0 ? -1 : 0;
+#else
+  return lseek(fd, pos, SEEK_SET) < 0 ? -1 : 0;
 #endif
 }
 
@@ -1024,7 +1049,15 @@ tor_open_socket(int domain, int type, int protocol)
     return s;
 
 #if defined(FD_CLOEXEC)
-  fcntl(s, F_SETFD, FD_CLOEXEC);
+  if (fcntl(s, F_SETFD, FD_CLOEXEC) == -1) {
+    log_warn(LD_FS,"Couldn't set FD_CLOEXEC: %s", strerror(errno));
+#if defined(_WIN32)
+    closesocket(s);
+#else
+    close(s);
+#endif
+    return -1;
+  }
 #endif
 
   goto socket_ok; /* So that socket_ok will not be unused. */
@@ -1059,7 +1092,11 @@ tor_accept_socket(tor_socket_t sockfd, struct sockaddr *addr, socklen_t *len)
     return s;
 
 #if defined(FD_CLOEXEC)
-  fcntl(s, F_SETFD, FD_CLOEXEC);
+  if (fcntl(s, F_SETFD, FD_CLOEXEC) == -1) {
+    log_warn(LD_NET, "Couldn't set FD_CLOEXEC: %s", strerror(errno));
+    close(s);
+    return TOR_INVALID_SOCKET;
+  }
 #endif
 
   goto socket_ok; /* So that socket_ok will not be unused. */
@@ -1083,17 +1120,31 @@ get_n_open_sockets(void)
   return n;
 }
 
-/** Turn <b>socket</b> into a nonblocking socket.
+/** Turn <b>socket</b> into a nonblocking socket. Return 0 on success, -1
+ * on failure.
  */
-void
+int
 set_socket_nonblocking(tor_socket_t socket)
 {
 #if defined(_WIN32)
   unsigned long nonblocking = 1;
   ioctlsocket(socket, FIONBIO, (unsigned long*) &nonblocking);
 #else
-  fcntl(socket, F_SETFL, O_NONBLOCK);
+  int flags;
+
+  flags = fcntl(socket, F_GETFL, 0);
+  if (flags == -1) {
+    log_warn(LD_NET, "Couldn't get file status flags: %s", strerror(errno));
+    return -1;
+  }
+  flags |= O_NONBLOCK;
+  if (fcntl(socket, F_SETFL, flags) == -1) {
+    log_warn(LD_NET, "Couldn't set file status flags: %s", strerror(errno));
+    return -1;
+  }
 #endif
+
+  return 0;
 }
 
 /**
@@ -1136,10 +1187,22 @@ tor_socketpair(int family, int type, int protocol, tor_socket_t fd[2])
     return -errno;
 
 #if defined(FD_CLOEXEC)
-  if (SOCKET_OK(fd[0]))
-    fcntl(fd[0], F_SETFD, FD_CLOEXEC);
-  if (SOCKET_OK(fd[1]))
-    fcntl(fd[1], F_SETFD, FD_CLOEXEC);
+  if (SOCKET_OK(fd[0])) {
+    r = fcntl(fd[0], F_SETFD, FD_CLOEXEC);
+    if (r == -1) {
+      close(fd[0]);
+      close(fd[1]);
+      return -errno;
+    }
+  }
+  if (SOCKET_OK(fd[1])) {
+    r = fcntl(fd[1], F_SETFD, FD_CLOEXEC);
+    if (r == -1) {
+      close(fd[0]);
+      close(fd[1]);
+      return -errno;
+    }
+  }
 #endif
   goto sockets_ok; /* So that sockets_ok will not be unused. */
 
@@ -1162,9 +1225,9 @@ tor_socketpair(int family, int type, int protocol, tor_socket_t fd[2])
      * for now, and really, when localhost is down sometimes, we
      * have other problems too.
      */
-    tor_socket_t listener = -1;
-    tor_socket_t connector = -1;
-    tor_socket_t acceptor = -1;
+    tor_socket_t listener = TOR_INVALID_SOCKET;
+    tor_socket_t connector = TOR_INVALID_SOCKET;
+    tor_socket_t acceptor = TOR_INVALID_SOCKET;
     struct sockaddr_in listen_addr;
     struct sockaddr_in connect_addr;
     int size;
@@ -1218,7 +1281,6 @@ tor_socketpair(int family, int type, int protocol, tor_socket_t fd[2])
       goto tidy_up_and_fail;
     if (size != sizeof(listen_addr))
       goto abort_tidy_up_and_fail;
-    tor_close_socket(listener);
     /* Now check we are talking to ourself by matching port and host on the
        two sockets.  */
     if (getsockname(connector, (struct sockaddr *) &connect_addr, &size) == -1)
@@ -1229,6 +1291,7 @@ tor_socketpair(int family, int type, int protocol, tor_socket_t fd[2])
         || listen_addr.sin_port != connect_addr.sin_port) {
       goto abort_tidy_up_and_fail;
     }
+    tor_close_socket(listener);
     fd[0] = connector;
     fd[1] = acceptor;
 
@@ -1243,11 +1306,11 @@ tor_socketpair(int family, int type, int protocol, tor_socket_t fd[2])
   tidy_up_and_fail:
     if (saved_errno < 0)
       saved_errno = errno;
-    if (listener != -1)
+    if (SOCKET_OK(listener))
       tor_close_socket(listener);
-    if (connector != -1)
+    if (SOCKET_OK(connector))
       tor_close_socket(connector);
-    if (acceptor != -1)
+    if (SOCKET_OK(acceptor))
       tor_close_socket(acceptor);
     return -saved_errno;
 #endif
@@ -2265,8 +2328,33 @@ compute_num_cpus_impl(void)
     return (int)info.dwNumberOfProcessors;
   else
     return -1;
-#elif defined(HAVE_SYSCONF) && defined(_SC_NPROCESSORS_CONF)
-  long cpus = sysconf(_SC_NPROCESSORS_CONF);
+#elif defined(HAVE_SYSCONF)
+#ifdef _SC_NPROCESSORS_CONF
+  long cpus_conf = sysconf(_SC_NPROCESSORS_CONF);
+#else
+  long cpus_conf = -1;
+#endif
+#ifdef _SC_NPROCESSORS_ONLN
+  long cpus_onln = sysconf(_SC_NPROCESSORS_ONLN);
+#else
+  long cpus_onln = -1;
+#endif
+  long cpus = -1;
+
+  if (cpus_conf > 0 && cpus_onln < 0) {
+    cpus = cpus_conf;
+  } else if (cpus_onln > 0 && cpus_conf < 0) {
+    cpus = cpus_onln;
+  } else if (cpus_onln > 0 && cpus_conf > 0) {
+    if (cpus_onln < cpus_conf) {
+      log_notice(LD_GENERAL, "I think we have %ld CPUS, but only %ld of them "
+                 "are available. Telling Tor to only use %ld. You can over"
+                 "ride this with the NumCPUs option",
+                 cpus_conf, cpus_onln, cpus_onln);
+    }
+    cpus = cpus_onln;
+  }
+
   if (cpus >= 1 && cpus < INT_MAX)
     return (int)cpus;
   else

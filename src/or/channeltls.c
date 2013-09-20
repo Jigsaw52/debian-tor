@@ -546,7 +546,7 @@ channel_tls_matches_extend_info_method(channel_t *chan,
 }
 
 /**
- * Check if we match a target address
+ * Check if we match a target address; return true iff we do.
  *
  * This implements the matches_target method for channel_tls t_; the upper
  * layer wants to know if this channel matches a target address when extending
@@ -563,8 +563,7 @@ channel_tls_matches_target_method(channel_t *chan,
   tor_assert(target);
   tor_assert(tlschan->conn);
 
-  return tor_addr_compare(&(tlschan->conn->real_addr),
-                          target, CMP_EXACT);
+  return tor_addr_eq(&(tlschan->conn->real_addr), target);
 }
 
 /**
@@ -1208,7 +1207,7 @@ channel_tls_process_versions_cell(var_cell_t *cell, channel_tls_t *chan)
 
   tor_assert(chan->conn->handshake_state);
   end = cell->payload + cell->payload_len;
-  for (cp = cell->payload; cp+1 < end; ++cp) {
+  for (cp = cell->payload; cp+1 < end; cp += 2) {
     uint16_t v = ntohs(get_uint16(cp));
     if (is_or_protocol_version_known(v) && v > highest_supported_version)
       highest_supported_version = v;
@@ -1263,8 +1262,8 @@ channel_tls_process_versions_cell(var_cell_t *cell, channel_tls_t *chan)
     const int send_versions = !started_here;
     /* If we want to authenticate, send a CERTS cell */
     const int send_certs = !started_here || public_server_mode(get_options());
-    /* If we're a relay that got a connection, ask for authentication. */
-    const int send_chall = !started_here && public_server_mode(get_options());
+    /* If we're a host that got a connection, ask for authentication. */
+    const int send_chall = !started_here;
     /* If our certs cell will authenticate us, we can send a netinfo cell
      * right now. */
     const int send_netinfo = !started_here;
@@ -1474,6 +1473,16 @@ channel_tls_process_netinfo_cell(cell_t *cell, channel_tls_t *chan)
 
   /* XXX maybe act on my_apparent_addr, if the source is sufficiently
    * trustworthy. */
+
+  if (! chan->conn->handshake_state->sent_netinfo) {
+    /* If we were prepared to authenticate, but we never got an AUTH_CHALLENGE
+     * cell, then we would not previously have sent a NETINFO cell. Do so
+     * now. */
+    if (connection_or_send_netinfo(chan->conn) < 0) {
+      connection_or_close_for_error(chan->conn, 0);
+      return;
+    }
+  }
 
   if (connection_or_set_state_open(chan->conn) < 0) {
     log_fn(LOG_PROTOCOL_WARN, LD_OR,

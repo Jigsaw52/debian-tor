@@ -1,4 +1,4 @@
-/* Copyright (c) 2001 Matej Pfajfar.
+ /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
  * Copyright (c) 2007-2013, The Tor Project, Inc. */
@@ -255,6 +255,7 @@ static config_var_t option_vars_[] = {
 #endif
   OBSOLETE("GiveGuardFlagTo_CVE_2011_2768_VulnerableRelays"),
   OBSOLETE("Group"),
+  V(GuardLifetime,               INTERVAL, "0 minutes"),
   V(HardwareAccel,               BOOL,     "0"),
   V(HeartbeatPeriod,             INTERVAL, "6 hours"),
   V(AccelName,                   STRING,   NULL),
@@ -298,8 +299,10 @@ static config_var_t option_vars_[] = {
   V(MaxAdvertisedBandwidth,      MEMUNIT,  "1 GB"),
   V(MaxCircuitDirtiness,         INTERVAL, "10 minutes"),
   V(MaxClientCircuitsPending,    UINT,     "32"),
+  V(MaxMemInCellQueues,          MEMUNIT,  "8 GB"),
   OBSOLETE("MaxOnionsPending"),
   V(MaxOnionQueueDelay,          MSEC_INTERVAL, "1750 msec"),
+  V(MinMeasuredBWsForAuthToIgnoreAdvertised, INT, "500"),
   OBSOLETE("MonthlyAccountingStart"),
   V(MyFamily,                    STRING,   NULL),
   V(NewCircuitPeriod,            INTERVAL, "30 seconds"),
@@ -311,7 +314,7 @@ static config_var_t option_vars_[] = {
   OBSOLETE("NoPublish"),
   VAR("NodeFamily",              LINELIST, NodeFamilies,         NULL),
   V(NumCPUs,                     UINT,     "0"),
-  V(NumDirectoryGuards,          UINT,     "3"),
+  V(NumDirectoryGuards,          UINT,     "0"),
   V(NumEntryGuards,              UINT,     "3"),
   V(ORListenAddress,             LINELIST, NULL),
   VPORT(ORPort,                      LINELIST, NULL),
@@ -339,6 +342,8 @@ static config_var_t option_vars_[] = {
   V(PerConnBWRate,               MEMUNIT,  "0"),
   V(PidFile,                     STRING,   NULL),
   V(TestingTorNetwork,           BOOL,     "0"),
+  V(TestingMinExitFlagThreshold, MEMUNIT,  "0"),
+  V(TestingMinFastFlagThreshold, MEMUNIT,  "0"),
   V(OptimisticData,              AUTOBOOL, "auto"),
   V(PortForwarding,              BOOL,     "0"),
   V(PortForwardingHelper,        FILENAME, "tor-fw-helper"),
@@ -616,12 +621,13 @@ set_options(or_options_t *new_val, char **msg)
             tor_free(line);
           }
         } else {
-          smartlist_add(elements, (char*)options_format.vars[i].name);
+          smartlist_add(elements, tor_strdup(options_format.vars[i].name));
           smartlist_add(elements, NULL);
         }
       }
     }
     control_event_conf_changed(elements);
+    SMARTLIST_FOREACH(elements, char *, cp, tor_free(cp));
     smartlist_free(elements);
   }
 
@@ -1502,7 +1508,7 @@ options_act(const or_options_t *old_options)
                "preferred or excluded node lists. "
                "Abandoning previous circuits.");
       circuit_mark_all_unused_circs();
-      circuit_expire_all_dirty_circs();
+      circuit_mark_all_dirty_circs_as_unusable();
       revise_trackexithosts = 1;
     }
 
@@ -2260,6 +2266,10 @@ compute_publishserverdescriptor(or_options_t *options)
  * will generate too many circuits and potentially overload the network. */
 #define MIN_MAX_CIRCUIT_DIRTINESS 10
 
+/** Highest allowable value for MaxCircuitDirtiness: prevents time_t
+ * overflows. */
+#define MAX_MAX_CIRCUIT_DIRTINESS (30*24*60*60)
+
 /** Lowest allowable value for CircuitStreamTimeout; if this is too low, Tor
  * will generate too many circuits and potentially overload the network. */
 #define MIN_CIRCUIT_STREAM_TIMEOUT 10
@@ -2481,7 +2491,7 @@ options_validate(or_options_t *old_options, or_options_t *options,
       log_warn(LD_CONFIG, "PathsNeededToBuildCircuits is too low. Increasing "
                "to 0.25");
       options->PathsNeededToBuildCircuits = 0.25;
-    } else if (options->PathsNeededToBuildCircuits < 0.95) {
+    } else if (options->PathsNeededToBuildCircuits > 0.95) {
       log_warn(LD_CONFIG, "PathsNeededToBuildCircuits is too high. Decreasing "
                "to 0.95");
       options->PathsNeededToBuildCircuits = 0.95;
@@ -2601,11 +2611,18 @@ options_validate(or_options_t *old_options, or_options_t *options,
   if (options->UseBridges && options->EntryNodes)
     REJECT("You cannot set both UseBridges and EntryNodes.");
 
-  if (options->EntryNodes && !options->UseEntryGuards)
-    log_warn(LD_CONFIG, "EntryNodes is set, but UseEntryGuards is disabled. "
-             "EntryNodes will be ignored.");
+  if (options->EntryNodes && !options->UseEntryGuards) {
+    REJECT("If EntryNodes is set, UseEntryGuards must be enabled.");
+  }
+
+  if (options->MaxMemInCellQueues < (500 << 20)) {
+    log_warn(LD_CONFIG, "MaxMemInCellQueues must be at least 500 MB for now. "
+             "Ideally, have it as large as you can afford.");
+    options->MaxMemInCellQueues = (500 << 20);
+  }
 
   options->AllowInvalid_ = 0;
+
   if (options->AllowInvalidNodes) {
     SMARTLIST_FOREACH_BEGIN(options->AllowInvalidNodes, const char *, cp) {
         if (!strcasecmp(cp, "entry"))
@@ -2721,15 +2738,19 @@ options_validate(or_options_t *old_options, or_options_t *options,
              "http://freehaven.net/anonbib/#hs-attack06 for details.");
   }
 
-  if (!(options->LearnCircuitBuildTimeout) &&
-        options->CircuitBuildTimeout < RECOMMENDED_MIN_CIRCUIT_BUILD_TIMEOUT) {
+  if (!options->LearnCircuitBuildTimeout && options->CircuitBuildTimeout &&
+      options->CircuitBuildTimeout < RECOMMENDED_MIN_CIRCUIT_BUILD_TIMEOUT) {
     log_warn(LD_CONFIG,
-        "CircuitBuildTimeout is shorter (%d seconds) than recommended "
-        "(%d seconds), and LearnCircuitBuildTimeout is disabled.  "
+        "CircuitBuildTimeout is shorter (%d seconds) than the recommended "
+        "minimum (%d seconds), and LearnCircuitBuildTimeout is disabled.  "
         "If tor isn't working, raise this value or enable "
         "LearnCircuitBuildTimeout.",
         options->CircuitBuildTimeout,
         RECOMMENDED_MIN_CIRCUIT_BUILD_TIMEOUT );
+  } else if (!options->LearnCircuitBuildTimeout &&
+             !options->CircuitBuildTimeout) {
+    log_notice(LD_CONFIG, "You disabled LearnCircuitBuildTimeout, but didn't "
+               "a CircuitBuildTimeout. I'll pick a plausible default.");
   }
 
   if (options->PathBiasNoticeRate > 1.0) {
@@ -2767,6 +2788,12 @@ options_validate(or_options_t *old_options, or_options_t *options,
     log_warn(LD_CONFIG, "MaxCircuitDirtiness option is too short; "
              "raising to %d seconds.", MIN_MAX_CIRCUIT_DIRTINESS);
     options->MaxCircuitDirtiness = MIN_MAX_CIRCUIT_DIRTINESS;
+  }
+
+  if (options->MaxCircuitDirtiness > MAX_MAX_CIRCUIT_DIRTINESS) {
+    log_warn(LD_CONFIG, "MaxCircuitDirtiness option is too high; "
+             "setting to %d days.", MAX_MAX_CIRCUIT_DIRTINESS/86400);
+    options->MaxCircuitDirtiness = MAX_MAX_CIRCUIT_DIRTINESS;
   }
 
   if (options->CircuitStreamTimeout &&
@@ -3697,6 +3724,7 @@ options_init_from_torrc(int argc, char **argv)
   }
 
   if (command == CMD_HASH_PASSWORD) {
+    cf_defaults = tor_strdup("");
     cf = tor_strdup("");
   } else {
     cf_defaults = load_torrc_from_disk(argc, argv, 1);
@@ -3766,6 +3794,10 @@ options_init_from_string(const char *cf_defaults, const char *cf,
     }
     if (i==0)
       newdefaultoptions = config_dup(&options_format, newoptions);
+  }
+
+  if (newdefaultoptions == NULL) {
+    newdefaultoptions = config_dup(&options_format, global_default_options);
   }
 
   /* Go through command-line variables too */
@@ -5001,6 +5033,7 @@ parse_port_config(smartlist_t *out,
     int port;
     int sessiongroup = SESSION_GROUP_UNSET;
     unsigned isolation = ISO_DEFAULT;
+    int prefer_no_auth = 0;
 
     char *addrport;
     uint16_t ptmp=0;
@@ -5168,6 +5201,9 @@ parse_port_config(smartlist_t *out,
         } else if (!strcasecmp(elt, "PreferIPv6Automap")) {
           prefer_ipv6_automap = ! no;
           continue;
+        } else if (!strcasecmp(elt, "PreferSOCKSNoAuth")) {
+          prefer_no_auth = ! no;
+          continue;
         }
 
         if (!strcasecmpend(elt, "s"))
@@ -5227,6 +5263,9 @@ parse_port_config(smartlist_t *out,
       cfg->use_cached_ipv4_answers = use_cached_ipv4;
       cfg->use_cached_ipv6_answers = use_cached_ipv6;
       cfg->prefer_ipv6_virtaddr = prefer_ipv6_automap;
+      cfg->socks_prefer_no_auth = prefer_no_auth;
+      if (! (isolation & ISO_SOCKSAUTH))
+        cfg->socks_prefer_no_auth = 1;
 
       smartlist_add(out, cfg);
     }
@@ -5480,6 +5519,13 @@ check_server_ports(const smartlist_t *ports,
              "listening on one.");
     r = -1;
   }
+  if (n_orport_listeners && !n_orport_advertised) {
+    log_warn(LD_CONFIG, "We are listening on an ORPort, but not advertising "
+             "any ORPorts. This will keep us from building a %s "
+             "descriptor, and make us impossible to use.",
+             options->BridgeRelay ? "bridge" : "router");
+    r = -1;
+  }
   if (n_dirport_advertised && !n_dirport_listeners) {
     log_warn(LD_CONFIG, "We are advertising a DirPort, but not actually "
              "listening on one.");
@@ -5561,7 +5607,8 @@ get_first_listener_addrport_string(int listener_type)
          to iterate all listener connections and find out in which
          port it ended up listening: */
       if (cfg->port == CFG_AUTO_PORT) {
-        port = router_get_active_listener_port_by_type(listener_type);
+        port = router_get_active_listener_port_by_type_af(listener_type,
+                                                  tor_addr_family(&cfg->addr));
         if (!port)
           return NULL;
       } else {

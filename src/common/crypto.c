@@ -113,8 +113,8 @@ crypto_get_rsa_padding_overhead(int padding)
 {
   switch (padding)
     {
-    case RSA_PKCS1_OAEP_PADDING: return 42;
-    case RSA_PKCS1_PADDING: return 11;
+    case RSA_PKCS1_OAEP_PADDING: return PKCS1_OAEP_PADDING_OVERHEAD;
+    case RSA_PKCS1_PADDING: return PKCS1_PADDING_OVERHEAD;
     default: tor_assert(0); return -1;
     }
 }
@@ -1294,23 +1294,6 @@ crypto_pk_get_fingerprint(crypto_pk_t *pk, char *fp_out, int add_space)
   return 0;
 }
 
-/** Return true iff <b>s</b> is in the correct format for a fingerprint.
- */
-int
-crypto_pk_check_fingerprint_syntax(const char *s)
-{
-  int i;
-  for (i = 0; i < FINGERPRINT_LEN; ++i) {
-    if ((i%5) == 4) {
-      if (!TOR_ISSPACE(s[i])) return 0;
-    } else {
-      if (!TOR_ISXDIGIT(s[i])) return 0;
-    }
-  }
-  if (s[FINGERPRINT_LEN]) return 0;
-  return 1;
-}
-
 /* symmetric crypto */
 
 /** Return a pointer to the key set for the cipher in <b>env</b>.
@@ -1629,6 +1612,29 @@ crypto_digest_assign(crypto_digest_t *into,
   tor_assert(into);
   tor_assert(from);
   memcpy(into,from,sizeof(crypto_digest_t));
+}
+
+/** Given a list of strings in <b>lst</b>, set the <b>len_out</b>-byte digest
+ * at <b>digest_out</b> to the hash of the concatenation of those strings,
+ * plus the optional string <b>append</b>, computed with the algorithm
+ * <b>alg</b>.
+ * <b>out_len</b> must be \<= DIGEST256_LEN. */
+void
+crypto_digest_smartlist(char *digest_out, size_t len_out,
+                        const smartlist_t *lst, const char *append,
+                        digest_algorithm_t alg)
+{
+  crypto_digest_t *d;
+  if (alg == DIGEST_SHA1)
+    d = crypto_digest_new();
+  else
+    d = crypto_digest256_new(alg);
+  SMARTLIST_FOREACH(lst, const char *, cp,
+                    crypto_digest_add_bytes(d, cp, strlen(cp)));
+  if (append)
+    crypto_digest_add_bytes(d, append, strlen(append));
+  crypto_digest_get_digest(d, digest_out, len_out);
+  crypto_digest_free(d);
 }
 
 /** Compute the HMAC-SHA-1 of the <b>msg_len</b> bytes in <b>msg</b>, using
@@ -3000,6 +3006,12 @@ memwipe(void *mem, uint8_t byte, size_t sz)
 }
 
 #ifdef TOR_IS_MULTITHREADED
+
+#ifndef OPENSSL_THREADS
+#error OpenSSL has been built without thread support. Tor requires an \
+ OpenSSL library with thread support enabled.
+#endif
+
 /** Helper: OpenSSL uses this callback to manipulate mutexes. */
 static void
 openssl_locking_cb_(int mode, int n, const char *file, int line)

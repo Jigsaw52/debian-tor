@@ -411,6 +411,7 @@ tor_lockfile_t *tor_lockfile_lock(const char *filename, int blocking,
 void tor_lockfile_unlock(tor_lockfile_t *lockfile);
 
 off_t tor_fd_getpos(int fd);
+int tor_fd_setpos(int fd, off_t pos);
 int tor_fd_seekend(int fd);
 
 #ifdef _WIN32
@@ -518,7 +519,7 @@ int tor_inet_aton(const char *cp, struct in_addr *addr) ATTR_NONNULL((1,2));
 const char *tor_inet_ntop(int af, const void *src, char *dst, size_t len);
 int tor_inet_pton(int af, const char *src, void *dst);
 int tor_lookup_hostname(const char *name, uint32_t *addr) ATTR_NONNULL((1,2));
-void set_socket_nonblocking(tor_socket_t socket);
+int set_socket_nonblocking(tor_socket_t socket);
 int tor_socketpair(int family, int type, int protocol, tor_socket_t fd[2]);
 int network_init(void);
 

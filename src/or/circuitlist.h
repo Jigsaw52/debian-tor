@@ -46,7 +46,7 @@ or_circuit_t *circuit_get_intro_point(const char *digest);
 origin_circuit_t *circuit_find_to_cannibalize(uint8_t purpose,
                                               extend_info_t *info, int flags);
 void circuit_mark_all_unused_circs(void);
-void circuit_expire_all_dirty_circs(void);
+void circuit_mark_all_dirty_circs_as_unusable(void);
 void circuit_mark_for_close_(circuit_t *circ, int reason,
                              int line, const char *file);
 int circuit_get_cpath_len(origin_circuit_t *circ);
@@ -61,6 +61,7 @@ int circuit_count_pending_on_channel(channel_t *chan);
 void assert_cpath_layer_ok(const crypt_path_t *cp);
 void assert_circuit_ok(const circuit_t *c);
 void circuit_free_all(void);
+void circuits_handle_oom(size_t current_allocation);
 
 #endif
 

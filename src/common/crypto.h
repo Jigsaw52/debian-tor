@@ -183,7 +183,6 @@ crypto_pk_t *crypto_pk_asn1_decode(const char *str, size_t len);
 int crypto_pk_get_digest(crypto_pk_t *pk, char *digest_out);
 int crypto_pk_get_all_digests(crypto_pk_t *pk, digests_t *digests_out);
 int crypto_pk_get_fingerprint(crypto_pk_t *pk, char *fp_out,int add_space);
-int crypto_pk_check_fingerprint_syntax(const char *s);
 
 /* symmetric crypto */
 const char *crypto_cipher_get_key(crypto_cipher_t *env);
@@ -206,6 +205,10 @@ int crypto_digest(char *digest, const char *m, size_t len);
 int crypto_digest256(char *digest, const char *m, size_t len,
                      digest_algorithm_t algorithm);
 int crypto_digest_all(digests_t *ds_out, const char *m, size_t len);
+struct smartlist_t;
+void crypto_digest_smartlist(char *digest_out, size_t len_out,
+                             const struct smartlist_t *lst, const char *append,
+                             digest_algorithm_t alg);
 const char *crypto_digest_algorithm_get_name(digest_algorithm_t alg);
 int crypto_digest_algorithm_parse_name(const char *name);
 crypto_digest_t *crypto_digest_new(void);

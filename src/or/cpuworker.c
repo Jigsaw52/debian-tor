@@ -19,9 +19,11 @@
 #include "circuitlist.h"
 #include "config.h"
 #include "connection.h"
+#include "connection_or.h"
 #include "cpuworker.h"
 #include "main.h"
 #include "onion.h"
+#include "rephist.h"
 #include "router.h"
 
 /** The maximum number of cpuworker processes we will keep around. */
@@ -535,12 +537,15 @@ spawn_cpuworker(void)
 
   conn = connection_new(CONN_TYPE_CPUWORKER, AF_UNIX);
 
-  set_socket_nonblocking(fd);
-
   /* set up conn so it's got all the data we need to remember */
   conn->s = fd;
   conn->address = tor_strdup("localhost");
   tor_addr_make_unspec(&conn->addr);
+
+  if (set_socket_nonblocking(fd) == -1) {
+    connection_free(conn); /* this closes fd */
+    return -1;
+  }
 
   if (connection_add(conn) < 0) { /* no space, forget it */
     log_warn(LD_NET,"connection_add for cpuworker failed. Giving up.");
@@ -679,6 +684,9 @@ assign_onionskin_to_cpuworker(connection_t *cpuworker,
       tor_free(onionskin);
       return -1;
     }
+
+    if (connection_or_digest_is_known_relay(circ->p_chan->identity_digest))
+      rep_hist_note_circuit_handshake_completed(onionskin->handshake_type);
 
     should_time = should_time_request(onionskin->handshake_type);
     memset(&req, 0, sizeof(req));

@@ -34,6 +34,9 @@
 /** Lowest consensus method that generates microdescriptors */
 #define MIN_METHOD_FOR_MICRODESC 8
 
+/** Lowest consensus method that doesn't count bad exits as exits for weight */
+#define MIN_METHOD_TO_CUT_BADEXIT_WEIGHT 11
+
 /** Lowest consensus method that ensures a majority of authorities voted
   * for a param. */
 #define MIN_METHOD_FOR_MAJORITY_PARAMS 12
@@ -58,7 +61,7 @@
 
 /** Default bandwidth to clip unmeasured bandwidths to using method >=
  * MIN_METHOD_TO_CLIP_UNMEASURED_BW */
-#define DEFAULT_MAX_UNMEASURED_BW 20
+#define DEFAULT_MAX_UNMEASURED_BW_KB 20
 
 void dirvote_free_all(void);
 

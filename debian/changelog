@@ -1,8 +1,45 @@
-tor (0.2.5.0-alpha-dev-1) UNRELEASED; urgency=low
+tor (0.2.4.17-rc-2) UNRELEASED; urgency=low
+
+  * Re-add a few 'exit 1' statements on errors that got lost while
+    updating the init script to fancy LSB style output (closes: #722153).
+  * Mention the DisableDebuggerAttachment setting next to the ulimit -c
+    line in /etc/default/tor (closes: #723801).
+
+ -- Peter Palfrader <weasel@debian.org>  Sun, 08 Sep 2013 16:49:04 +0200
+
+tor (0.2.4.17-rc-1) experimental; urgency=low
+
+  * New upstream version.
+
+ -- Peter Palfrader <weasel@debian.org>  Thu, 05 Sep 2013 15:00:08 +0200
+
+tor (0.2.4.16-rc-1) experimental; urgency=low
+
+  * New upstream version.
+
+ -- Peter Palfrader <weasel@debian.org>  Sun, 11 Aug 2013 00:31:17 +0200
+
+tor (0.2.4.15-rc-1) experimental; urgency=low
+
+  * New upstream version.
+
+ -- Peter Palfrader <weasel@debian.org>  Wed, 03 Jul 2013 20:58:53 +0200
+
+tor (0.2.4.14-alpha-1) experimental; urgency=low
+
+  * New upstream version.
+
+ -- Peter Palfrader <weasel@debian.org>  Tue, 18 Jun 2013 22:21:36 +0200
+
+tor (0.2.4.13-alpha-1) experimental; urgency=low
+
+  * New upstream version.
+
+ -- Peter Palfrader <weasel@debian.org>  Mon, 17 Jun 2013 12:18:16 +0200
+
+tor (0.2.4.12-alpha-2) experimental; urgency=low
 
   * No longer change tor manpage to be in section 8.
-  * No longer install contrib/tor-tsocks.conf into /etc/tor - it was
-    dropped upstream.
   * No longer move tor from usr/bin to /usr/sbin after make install.
     We now install tor into the same place as upstream.  Having it in
     the default user path makes it easier for users who want to run
@@ -11,8 +48,20 @@ tor (0.2.5.0-alpha-dev-1) UNRELEASED; urgency=low
   * Change relation form from (< version) to (<< version) in the tor-geoip
     package.
   * Update debian/watch file.
+  * Clean up old /etc/tor/tor-tsocks.conf conffile (closes: #705785).
+    This requires debhelper >= 8.1.0~, adapt build-dependency accordingly.
 
- -- Peter Palfrader <weasel@debian.org>  Wed, 10 Apr 2013 10:33:02 +0200
+ -- Peter Palfrader <weasel@debian.org>  Wed, 08 May 2013 18:03:36 +0200
+
+tor (0.2.4.12-alpha-1) experimental; urgency=low
+
+  * New upstream version.
+  * Forward port 03_tor_manpage_in_section_8.dpatch: torify.1 no longer
+    references tsocks.
+  * No longer install contrib/tor-tsocks.conf - it was dropped upstream.
+  * Update year in debian/copyright.
+
+ -- Peter Palfrader <weasel@debian.org>  Thu, 18 Apr 2013 16:04:29 +0200
 
 tor (0.2.4.11-alpha-1) experimental; urgency=low
 

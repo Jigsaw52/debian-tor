@@ -651,7 +651,9 @@ connection_ap_expire_beginning(void)
       }
       continue;
     }
-    if (circ->purpose != CIRCUIT_PURPOSE_C_GENERAL) {
+    if (circ->purpose != CIRCUIT_PURPOSE_C_GENERAL &&
+        circ->purpose != CIRCUIT_PURPOSE_C_MEASURE_TIMEOUT &&
+        circ->purpose != CIRCUIT_PURPOSE_PATH_BIAS_TESTING) {
       log_warn(LD_BUG, "circuit->purpose == CIRCUIT_PURPOSE_C_GENERAL failed. "
                "The purpose on the circuit was %s; it was in state %s, "
                "path_state %s.",
@@ -674,12 +676,10 @@ connection_ap_expire_beginning(void)
     /* un-mark it as ending, since we're going to reuse it */
     conn->edge_has_sent_end = 0;
     conn->end_reason = 0;
-    /* kludge to make us not try this circuit again, yet to allow
-     * current streams on it to survive if they can: make it
-     * unattractive to use for new streams */
-    /* XXXX024 this is a kludgy way to do this. */
-    tor_assert(circ->timestamp_dirty);
-    circ->timestamp_dirty -= options->MaxCircuitDirtiness;
+    /* make us not try this circuit again, but allow
+     * current streams on it to survive if they can */
+    mark_circuit_unusable_for_new_conns(TO_ORIGIN_CIRCUIT(circ));
+
     /* give our stream another 'cutoff' seconds to try */
     conn->base_.timestamp_lastread += cutoff;
     if (entry_conn->num_socks_retries < 250) /* avoid overflow */
@@ -1769,9 +1769,10 @@ connection_ap_get_begincell_flags(entry_connection_t *ap_conn)
   }
 
   if (flags == BEGIN_FLAG_IPV4_NOT_OK) {
-    log_warn(LD_BUG, "Hey; I'm about to ask a node for a connection that I "
+    log_warn(LD_EDGE, "I'm about to ask a node for a connection that I "
              "am telling it to fulfil with neither IPv4 nor IPv6. That's "
-             "probably not going to work.");
+             "not going to work. Did you perhaps ask for an IPv6 address "
+             "on an IPv4Only port, or vice versa?");
   }
 
   return flags;
@@ -1806,9 +1807,7 @@ connection_ap_handshake_send_begin(entry_connection_t *ap_conn)
     connection_mark_unattached_ap(ap_conn, END_STREAM_REASON_INTERNAL);
 
     /* Mark this circuit "unusable for new streams". */
-    /* XXXX024 this is a kludgy way to do this. */
-    tor_assert(circ->base_.timestamp_dirty);
-    circ->base_.timestamp_dirty -= get_options()->MaxCircuitDirtiness;
+    mark_circuit_unusable_for_new_conns(circ);
     return -1;
   }
 
@@ -1899,9 +1898,7 @@ connection_ap_handshake_send_resolve(entry_connection_t *ap_conn)
     connection_mark_unattached_ap(ap_conn, END_STREAM_REASON_INTERNAL);
 
     /* Mark this circuit "unusable for new streams". */
-    /* XXXX024 this is a kludgy way to do this. */
-    tor_assert(circ->base_.timestamp_dirty);
-    circ->base_.timestamp_dirty -= get_options()->MaxCircuitDirtiness;
+    mark_circuit_unusable_for_new_conns(circ);
     return -1;
   }
 
@@ -1945,13 +1942,14 @@ connection_ap_handshake_send_resolve(entry_connection_t *ap_conn)
                            string_addr, payload_len) < 0)
     return -1; /* circuit is closed, don't continue */
 
-  tor_free(base_conn->address); /* Maybe already set by dnsserv. */
-  base_conn->address = tor_strdup("(Tor_internal)");
+  if (!base_conn->address) {
+    /* This might be unnecessary. XXXX */
+    base_conn->address = tor_dup_addr(&base_conn->addr);
+  }
   base_conn->state = AP_CONN_STATE_RESOLVE_WAIT;
   log_info(LD_APP,"Address sent for resolve, ap socket "TOR_SOCKET_T_FORMAT
            ", n_circ_id %u",
            base_conn->s, (unsigned)circ->base_.n_circ_id);
-  control_event_stream_status(ap_conn, STREAM_EVENT_NEW, 0);
   control_event_stream_status(ap_conn, STREAM_EVENT_SENT_RESOLVE, 0);
   return 0;
 }
@@ -2043,25 +2041,21 @@ tell_controller_about_resolved_result(entry_connection_t *conn,
                                       int ttl,
                                       time_t expires)
 {
-
-  if (ttl >= 0 && (answer_type == RESOLVED_TYPE_IPV4 ||
-                   answer_type == RESOLVED_TYPE_HOSTNAME)) {
-    return; /* we already told the controller. */
-  } else if (answer_type == RESOLVED_TYPE_IPV4 && answer_len >= 4) {
+  expires = time(NULL) + ttl;
+  if (answer_type == RESOLVED_TYPE_IPV4 && answer_len >= 4) {
     char *cp = tor_dup_ip(ntohl(get_uint32(answer)));
     control_event_address_mapped(conn->socks_request->address,
-                                 cp, expires, NULL);
+                                 cp, expires, NULL, 0);
     tor_free(cp);
   } else if (answer_type == RESOLVED_TYPE_HOSTNAME && answer_len < 256) {
     char *cp = tor_strndup(answer, answer_len);
     control_event_address_mapped(conn->socks_request->address,
-                                 cp, expires, NULL);
+                                 cp, expires, NULL, 0);
     tor_free(cp);
   } else {
     control_event_address_mapped(conn->socks_request->address,
-                                 "<error>",
-                                 time(NULL)+ttl,
-                                 "error=yes");
+                                 "<error>", time(NULL)+ttl,
+                                 "error=yes", 0);
   }
 }
 
@@ -2119,8 +2113,9 @@ connection_ap_handshake_socks_resolved(entry_connection_t *conn,
       conn->socks_request->has_finished = 1;
       return;
     } else {
-      /* This must be a request from the controller. We already sent
-       * a mapaddress if there's a ttl. */
+      /* This must be a request from the controller. Since answers to those
+       * requests are not cached, they do not generate an ADDRMAP event on
+       * their own. */
       tell_controller_about_resolved_result(conn, answer_type, answer_len,
                                             (char*)answer, ttl, expires);
       conn->socks_request->has_finished = 1;
@@ -2201,9 +2196,11 @@ connection_ap_handshake_socks_reply(entry_connection_t *conn, char *reply,
 
   tor_assert(conn->socks_request); /* make sure it's an AP stream */
 
-  control_event_stream_status(conn,
-     status==SOCKS5_SUCCEEDED ? STREAM_EVENT_SUCCEEDED : STREAM_EVENT_FAILED,
-                              endreason);
+  if (!SOCKS_COMMAND_IS_RESOLVE(conn->socks_request->command)) {
+    control_event_stream_status(conn, status==SOCKS5_SUCCEEDED ?
+                                STREAM_EVENT_SUCCEEDED : STREAM_EVENT_FAILED,
+                                endreason);
+  }
 
   /* Flag this stream's circuit as having completed a stream successfully
    * (for path bias) */
@@ -2655,12 +2652,13 @@ connection_exit_connect(edge_connection_t *edge_conn)
 
   conn->state = EXIT_CONN_STATE_OPEN;
   if (connection_get_outbuf_len(conn)) {
-    /* in case there are any queued data cells */
-    log_warn(LD_BUG,"newly connected conn had data waiting!");
-//    connection_start_writing(conn);
+    /* in case there are any queued data cells, from e.g. optimistic data */
+    IF_HAS_NO_BUFFEREVENT(conn)
+      connection_watch_events(conn, READ_EVENT|WRITE_EVENT);
+  } else {
+    IF_HAS_NO_BUFFEREVENT(conn)
+      connection_watch_events(conn, READ_EVENT);
   }
-  IF_HAS_NO_BUFFEREVENT(conn)
-    connection_watch_events(conn, READ_EVENT);
 
   /* also, deliver a 'connected' cell back through the circuit. */
   if (connection_edge_is_rendezvous_stream(edge_conn)) {

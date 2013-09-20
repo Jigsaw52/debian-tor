@@ -29,28 +29,6 @@
 
 /** Maximum allowable length of a version line in a networkstatus. */
 #define MAX_V_LINE_LEN 128
-/** Length of "r Authority BadDirectory BadExit Exit Fast Guard HSDir Named
- * Running Stable Unnamed V2Dir Valid\n". */
-#define MAX_FLAG_LINE_LEN 96
-/** Length of "w" line for weighting.  Currently at most
- * "w Bandwidth=<uint32t> Measured=<uint32t>\n" */
-#define MAX_WEIGHT_LINE_LEN (12+10+10+10+1)
-/** Maximum length of an exit policy summary line. */
-#define MAX_POLICY_LINE_LEN (3+MAX_EXITPOLICY_SUMMARY_LEN)
-/** Amount of space to allocate for each entry: r, s, and v lines. */
-#define RS_ENTRY_LEN                                                    \
-  ( /* first line */                                                    \
-   MAX_NICKNAME_LEN+BASE64_DIGEST_LEN*2+ISO_TIME_LEN+INET_NTOA_BUF_LEN+ \
-   5*2 /* ports */ + 10 /* punctuation */ +                             \
-   /* second line */                                                    \
-   MAX_FLAG_LINE_LEN +                                                  \
-   /* weight line */                                                    \
-   MAX_WEIGHT_LINE_LEN +                                                \
-   /* p line. */                                                        \
-   MAX_POLICY_LINE_LEN +                                                \
-   /* v line. */                                                        \
-   MAX_V_LINE_LEN                                                       \
-   )
 
 int connection_dirserv_flushed_some(dir_connection_t *conn);
 
@@ -76,7 +54,6 @@ int directory_fetches_from_authorities(const or_options_t *options);
 int directory_fetches_dir_info_early(const or_options_t *options);
 int directory_fetches_dir_info_later(const or_options_t *options);
 int directory_caches_v2_dir_info(const or_options_t *options);
-#define directory_caches_v1_dir_info(o) directory_caches_v2_dir_info(o)
 int directory_caches_unknown_auth_certs(const or_options_t *options);
 int directory_caches_dir_info(const or_options_t *options);
 int directory_permits_begindir_requests(const or_options_t *options);
@@ -129,7 +106,7 @@ size_t dirserv_estimate_data_size(smartlist_t *fps, int is_serverdescs,
                                   int compressed);
 size_t dirserv_estimate_microdesc_size(const smartlist_t *fps, int compressed);
 
-int routerstatus_format_entry(char *buf, size_t buf_len,
+char *routerstatus_format_entry(
                               const routerstatus_t *rs, const char *platform,
                               routerstatus_format_type_t format,
                               const vote_routerstatus_t *vrs);
@@ -138,10 +115,24 @@ void cached_dir_decref(cached_dir_t *d);
 cached_dir_t *new_cached_dir(char *s, time_t published);
 
 #ifdef DIRSERV_PRIVATE
+
+/* Put the MAX_MEASUREMENT_AGE #define here so unit tests can see it */
+#define MAX_MEASUREMENT_AGE (3*24*60*60) /* 3 days */
+
 int measured_bw_line_parse(measured_bw_line_t *out, const char *line);
 
 int measured_bw_line_apply(measured_bw_line_t *parsed_line,
                            smartlist_t *routerstatuses);
+
+void dirserv_cache_measured_bw(const measured_bw_line_t *parsed_line,
+                               time_t as_of);
+void dirserv_clear_measured_bw_cache(void);
+void dirserv_expire_measured_bw_cache(time_t now);
+int dirserv_get_measured_bw_cache_size(void);
+int dirserv_query_measured_bw_cache_kb(const char *node_id, long *bw_out,
+                                       time_t *as_of_out);
+int dirserv_has_measured_bw(const char *node_id);
+cached_dir_t *generate_v2_networkstatus_opinion(void);
 #endif
 
 int dirserv_read_measured_bandwidths(const char *from_file,

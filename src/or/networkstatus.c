@@ -1233,7 +1233,7 @@ update_consensus_networkstatus_downloads(time_t now)
     }
 
     if (time_to_download_next_consensus[i] > now)
-      return; /* Wait until the current consensus is older. */
+      continue; /* Wait until the current consensus is older. */
 
     resource = networkstatus_get_flavor_name(i);
 
@@ -1430,18 +1430,6 @@ consensus_is_waiting_for_certs(void)
 {
   return consensus_waiting_for_certs[usable_consensus_flavor()].consensus
     ? 1 : 0;
-}
-
-/** Return the network status with a given identity digest. */
-networkstatus_v2_t *
-networkstatus_v2_get_by_digest(const char *digest)
-{
-  SMARTLIST_FOREACH(networkstatus_v2_list, networkstatus_v2_t *, ns,
-    {
-      if (tor_memeq(ns->identity_digest, digest, DIGEST_LEN))
-        return ns;
-    });
-  return NULL;
 }
 
 /** Return the most recent consensus that we have downloaded, or NULL if we
@@ -1890,11 +1878,12 @@ networkstatus_note_certs_arrived(void)
     if (!waiting->consensus)
       continue;
     if (networkstatus_check_consensus_signature(waiting->consensus, 0)>=0) {
+      char *waiting_body = waiting->body;
       if (!networkstatus_set_current_consensus(
-                                 waiting->body,
+                                 waiting_body,
                                  networkstatus_get_flavor_name(i),
                                  NSSET_WAS_WAITING_FOR_CERTS)) {
-        tor_free(waiting->body);
+        tor_free(waiting_body);
       }
     }
   }
@@ -2127,9 +2116,7 @@ signed_descs_update_status_from_consensus_networkstatus(smartlist_t *descs)
 char *
 networkstatus_getinfo_helper_single(const routerstatus_t *rs)
 {
-  char buf[RS_ENTRY_LEN+1];
-  routerstatus_format_entry(buf, sizeof(buf), rs, NULL, NS_CONTROL_PORT, NULL);
-  return tor_strdup(buf);
+  return routerstatus_format_entry(rs, NULL, NS_CONTROL_PORT, NULL);
 }
 
 /** Alloc and return a string describing routerstatuses for the most

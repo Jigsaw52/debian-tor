@@ -3,7 +3,7 @@ dnl Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson
 dnl Copyright (c) 2007-2013, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
-AC_INIT([tor],[0.2.4.11-alpha])
+AC_INIT([tor],[0.2.4.17-rc])
 AC_CONFIG_SRCDIR([src/or/main.c])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE
@@ -663,37 +663,45 @@ if test x$enable_curve25519 != xno; then
       [AC_LANG_PROGRAM([dnl
         #include <stdint.h>
         typedef unsigned uint128_t __attribute__((mode(TI)));
+	int func(uint64_t a, uint64_t b) {
+  	     uint128_t c = ((uint128_t)a) * b;
+             int ok = ((uint64_t)(c>>96)) == 522859 &&
+	           (((uint64_t)(c>>64))&0xffffffffL) == 3604448702L &&
+                   (((uint64_t)(c>>32))&0xffffffffL) == 2351960064L &&
+                   (((uint64_t)(c))&0xffffffffL) == 0;
+             return ok;
+        }
 	], [dnl
-          uint64_t a = ((uint64_t)2000000000) * 1000000000;
-	  uint64_t b = ((uint64_t)1234567890) << 24;
-	  uint128_t c = ((uint128_t)a) * b;
-	  return ((uint64_t)(c>>96)) == 522859 &&
-	         ((uint64_t)(c>>64))&0xffffffffL == 3604448702L &&
-                 ((uint64_t)(c>>32))&0xffffffffL == 2351960064L &&
-                 ((uint64_t)(c))&0xffffffffL == 0;
+	  int ok = func( ((uint64_t)2000000000) * 1000000000,
+	  	         ((uint64_t)1234567890) << 24);
+          return !ok;
         ])],
 	[tor_cv_can_use_curve25519_donna_c64=yes],
         [tor_cv_can_use_curve25519_donna_c64=no],
 	[AC_COMPILE_IFELSE(
           [AC_LANG_PROGRAM([dnl
-            #include <stdint.h>
-            typedef unsigned uint128_t __attribute__((mode(TI)));
-            ], [dnl
-              uint64_t a = ((uint64_t)2000000000) * 1000000000;
-	      uint64_t b = ((uint64_t)1234567890) << 24;
-	      uint128_t c = ((uint128_t)a) * b;
-	      return ((uint64_t)(c>>96)) == 522859 &&
-	             ((uint64_t)(c>>64))&0xffffffffL == 3604448702L &&
-                     ((uint64_t)(c>>32))&0xffffffffL == 2351960064L &&
-                     ((uint64_t)(c))&0xffffffffL == 0;
-            ])],
+        #include <stdint.h>
+        typedef unsigned uint128_t __attribute__((mode(TI)));
+	int func(uint64_t a, uint64_t b) {
+  	     uint128_t c = ((uint128_t)a) * b;
+             int ok = ((uint64_t)(c>>96)) == 522859 &&
+	           (((uint64_t)(c>>64))&0xffffffffL) == 3604448702L &&
+                   (((uint64_t)(c>>32))&0xffffffffL) == 2351960064L &&
+                   (((uint64_t)(c))&0xffffffffL) == 0;
+             return ok;
+        }
+	], [dnl
+	  int ok = func( ((uint64_t)2000000000) * 1000000000,
+	  	         ((uint64_t)1234567890) << 24);
+          return !ok;
+        ])],
             [tor_cv_can_use_curve25519_donna_c64=cross],
 	    [tor_cv_can_use_curve25519_donna_c64=no])])])
 
   AC_CHECK_HEADERS([crypto_scalarmult_curve25519.h \
                     nacl/crypto_scalarmult_curve25519.h])
 
-  AC_CACHE_CHECK([whether we can use curve25519 from nacl],
+  AC_CACHE_CHECK([for nacl compiled with a fast curve25519 implementation],
     tor_cv_can_use_curve25519_nacl,
     [tor_saved_LIBS="$LIBS"
      LIBS="$LIBS -lnacl"
@@ -705,7 +713,7 @@ if test x$enable_curve25519 != xno; then
 	 #include <nacl/crypto_scalarmult_curve25519.h>
 	 #endif
          #ifdef crypto_scalarmult_curve25519_ref_BYTES
-	 #error Hey, this is the reference implementation!
+	 #error Hey, this is the reference implementation! That's not fast.
 	 #endif
        ], [
 	 unsigned char *a, *b, *c; crypto_scalarmult_curve25519(a,b,c);
@@ -972,6 +980,10 @@ AX_CHECK_SIGN([time_t],
 #endif
 ])
 
+if test "$ax_cv_decl_time_t_signed" = no; then
+  AC_MSG_WARN([You have an unsigned time_t; some things will probably break. Please tell the Tor developers about your interesting platform.])
+fi
+
 AX_CHECK_SIGN([size_t],
        [ tor_cv_size_t_signed=yes ],
        [ tor_cv_size_t_signed=no ], [
@@ -980,7 +992,7 @@ AX_CHECK_SIGN([size_t],
 #endif
 ])
 
-if test "$tor_cv_size_t_signed" = yes; then
+if test "$ax_cv_decl_size_t_signed" = yes; then
   AC_MSG_ERROR([You have a signed size_t; that's grossly nonconformant.])
 fi
 

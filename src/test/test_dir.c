@@ -12,6 +12,7 @@
 #define ROUTERLIST_PRIVATE
 #define HIBERNATE_PRIVATE
 #include "or.h"
+#include "config.h"
 #include "directory.h"
 #include "dirserv.h"
 #include "dirvote.h"
@@ -73,22 +74,24 @@ test_dir_nicknames(void)
 static void
 test_dir_formats(void)
 {
-  char buf[8192], buf2[8192];
+  char *buf = NULL;
+  char buf2[8192];
   char platform[256];
   char fingerprint[FINGERPRINT_LEN+1];
-  char *pk1_str = NULL, *pk2_str = NULL, *pk3_str = NULL, *cp;
-  size_t pk1_str_len, pk2_str_len, pk3_str_len;
+  char *pk1_str = NULL, *pk2_str = NULL, *cp;
+  size_t pk1_str_len, pk2_str_len;
   routerinfo_t *r1=NULL, *r2=NULL;
-  crypto_pk_t *pk1 = NULL, *pk2 = NULL, *pk3 = NULL;
-  routerinfo_t *rp1 = NULL;
+  crypto_pk_t *pk1 = NULL, *pk2 = NULL;
+  routerinfo_t *rp1 = NULL, *rp2 = NULL;
   addr_policy_t *ex1, *ex2;
   routerlist_t *dir1 = NULL, *dir2 = NULL;
+  or_options_t *options = get_options_mutable();
+  const addr_policy_t *p;
 
   pk1 = pk_generate(0);
   pk2 = pk_generate(1);
-  pk3 = pk_generate(2);
 
-  test_assert(pk1 && pk2 && pk3);
+  test_assert(pk1 && pk2);
 
   hibernate_set_state_for_testing_(HIBERNATE_STATE_LIVE);
 
@@ -128,22 +131,27 @@ test_dir_formats(void)
   r2->or_port = 9005;
   r2->dir_port = 0;
   r2->onion_pkey = crypto_pk_dup_key(pk2);
+  r2->onion_curve25519_pkey = tor_malloc_zero(sizeof(curve25519_public_key_t));
+  curve25519_public_from_base64(r2->onion_curve25519_pkey,
+                                "skyinAnvardNostarsNomoonNowindormistsorsnow");
   r2->identity_pkey = crypto_pk_dup_key(pk1);
   r2->bandwidthrate = r2->bandwidthburst = r2->bandwidthcapacity = 3000;
   r2->exit_policy = smartlist_new();
-  smartlist_add(r2->exit_policy, ex2);
   smartlist_add(r2->exit_policy, ex1);
+  smartlist_add(r2->exit_policy, ex2);
   r2->nickname = tor_strdup("Fred");
 
   test_assert(!crypto_pk_write_public_key_to_string(pk1, &pk1_str,
                                                     &pk1_str_len));
   test_assert(!crypto_pk_write_public_key_to_string(pk2 , &pk2_str,
                                                     &pk2_str_len));
-  test_assert(!crypto_pk_write_public_key_to_string(pk3 , &pk3_str,
-                                                    &pk3_str_len));
 
-  memset(buf, 0, 2048);
-  test_assert(router_dump_router_to_string(buf, 2048, r1, pk2)>0);
+  /* XXXX025 router_dump_to_string should really take this from ri.*/
+  options->ContactInfo = tor_strdup("Magri White "
+                                    "<magri@elsewhere.example.com>");
+  buf = router_dump_router_to_string(r1, pk2);
+  tor_free(options->ContactInfo);
+  test_assert(buf);
 
   strlcpy(buf2, "router Magri 18.244.0.1 9000 0 9003\n"
           "or-address [1:2:3:4::]:9999\n"
@@ -165,13 +173,17 @@ test_dir_formats(void)
   strlcat(buf2, "signing-key\n", sizeof(buf2));
   strlcat(buf2, pk2_str, sizeof(buf2));
   strlcat(buf2, "hidden-service-dir\n", sizeof(buf2));
+  strlcat(buf2, "contact Magri White <magri@elsewhere.example.com>\n",
+          sizeof(buf2));
   strlcat(buf2, "reject *:*\nrouter-signature\n", sizeof(buf2));
   buf[strlen(buf2)] = '\0'; /* Don't compare the sig; it's never the same
                              * twice */
 
   test_streq(buf, buf2);
+  tor_free(buf);
 
-  test_assert(router_dump_router_to_string(buf, 2048, r1, pk2)>0);
+  buf = router_dump_router_to_string(r1, pk2);
+  test_assert(buf);
   cp = buf;
   rp1 = router_parse_entry_from_string((const char*)cp,NULL,1,0,NULL);
   test_assert(rp1);
@@ -185,35 +197,67 @@ test_dir_formats(void)
   test_assert(crypto_pk_cmp_keys(rp1->identity_pkey, pk2) == 0);
   //test_assert(rp1->exit_policy == NULL);
 
-#if 0
-  /* XXX Once we have exit policies, test this again. XXX */
-  strlcpy(buf2, "router tor.tor.tor 9005 0 0 3000\n", sizeof(buf2));
+  strlcpy(buf2,
+          "router Fred 1.1.1.1 9005 0 0\n"
+          "platform Tor "VERSION" on ", sizeof(buf2));
+  strlcat(buf2, get_uname(), sizeof(buf2));
+  strlcat(buf2, "\n"
+          "protocols Link 1 2 Circuit 1\n"
+          "published 1970-01-01 00:00:05\n"
+          "fingerprint ", sizeof(buf2));
+  test_assert(!crypto_pk_get_fingerprint(pk1, fingerprint, 1));
+  strlcat(buf2, fingerprint, sizeof(buf2));
+  strlcat(buf2, "\nuptime 0\n"
+          "bandwidth 3000 3000 3000\n", sizeof(buf2));
+  strlcat(buf2, "onion-key\n", sizeof(buf2));
   strlcat(buf2, pk2_str, sizeof(buf2));
   strlcat(buf2, "signing-key\n", sizeof(buf2));
   strlcat(buf2, pk1_str, sizeof(buf2));
-  strlcat(buf2, "accept *:80\nreject 18.*:24\n\n", sizeof(buf2));
-  test_assert(router_dump_router_to_string(buf, 2048, &r2, pk2)>0);
-  test_streq(buf, buf2);
+  strlcat(buf2, "hidden-service-dir\n", sizeof(buf2));
+  strlcat(buf2, "ntor-onion-key "
+          "skyinAnvardNostarsNomoonNowindormistsorsnow=\n", sizeof(buf2));
+  strlcat(buf2, "accept *:80\nreject 18.0.0.0/8:24\n", sizeof(buf2));
+  strlcat(buf2, "router-signature\n", sizeof(buf2));
 
+  buf = router_dump_router_to_string(r2, pk1);
+  buf[strlen(buf2)] = '\0'; /* Don't compare the sig; it's never the same
+                             * twice */
+  test_streq(buf, buf2);
+  tor_free(buf);
+
+  buf = router_dump_router_to_string(r2, pk1);
   cp = buf;
-  rp2 = router_parse_entry_from_string(&cp,1);
+  rp2 = router_parse_entry_from_string((const char*)cp,NULL,1,0,NULL);
   test_assert(rp2);
-  test_streq(rp2->address, r2.address);
-  test_eq(rp2->or_port, r2.or_port);
-  test_eq(rp2->dir_port, r2.dir_port);
-  test_eq(rp2->bandwidth, r2.bandwidth);
+  test_streq(rp2->address, r2->address);
+  test_eq(rp2->or_port, r2->or_port);
+  test_eq(rp2->dir_port, r2->dir_port);
+  test_eq(rp2->bandwidthrate, r2->bandwidthrate);
+  test_eq(rp2->bandwidthburst, r2->bandwidthburst);
+  test_eq(rp2->bandwidthcapacity, r2->bandwidthcapacity);
+  test_memeq(rp2->onion_curve25519_pkey->public_key,
+             r2->onion_curve25519_pkey->public_key,
+             CURVE25519_PUBKEY_LEN);
   test_assert(crypto_pk_cmp_keys(rp2->onion_pkey, pk2) == 0);
   test_assert(crypto_pk_cmp_keys(rp2->identity_pkey, pk1) == 0);
-  test_eq(rp2->exit_policy->policy_type, EXIT_POLICY_ACCEPT);
-  test_streq(rp2->exit_policy->string, "accept *:80");
-  test_streq(rp2->exit_policy->address, "*");
-  test_streq(rp2->exit_policy->port, "80");
-  test_eq(rp2->exit_policy->next->policy_type, EXIT_POLICY_REJECT);
-  test_streq(rp2->exit_policy->next->string, "reject 18.*:24");
-  test_streq(rp2->exit_policy->next->address, "18.*");
-  test_streq(rp2->exit_policy->next->port, "24");
-  test_assert(rp2->exit_policy->next->next == NULL);
 
+  test_eq(smartlist_len(rp2->exit_policy), 2);
+
+  p = smartlist_get(rp2->exit_policy, 0);
+  test_eq(p->policy_type, ADDR_POLICY_ACCEPT);
+  test_assert(tor_addr_is_null(&p->addr));
+  test_eq(p->maskbits, 0);
+  test_eq(p->prt_min, 80);
+  test_eq(p->prt_max, 80);
+
+  p = smartlist_get(rp2->exit_policy, 1);
+  test_eq(p->policy_type, ADDR_POLICY_REJECT);
+  test_assert(tor_addr_eq(&p->addr, &ex2->addr));
+  test_eq(p->maskbits, 8);
+  test_eq(p->prt_min, 24);
+  test_eq(p->prt_max, 24);
+
+#if 0
   /* Okay, now for the directories. */
   {
     fingerprint_list = smartlist_new();
@@ -232,12 +276,11 @@ test_dir_formats(void)
   if (r2)
     routerinfo_free(r2);
 
+  tor_free(buf);
   tor_free(pk1_str);
   tor_free(pk2_str);
-  tor_free(pk3_str);
   if (pk1) crypto_pk_free(pk1);
   if (pk2) crypto_pk_free(pk2);
-  if (pk3) crypto_pk_free(pk3);
   if (rp1) routerinfo_free(rp1);
   tor_free(dir1); /* XXXX And more !*/
   tor_free(dir2); /* And more !*/
@@ -407,10 +450,8 @@ test_dir_split_fps(void *testdata)
     "0123456789ABCdef0123456789ABCdef0123456789ABCdef0123456789ABCdef"
 #define B64_1 "/g2v+JEnOJvGdVhpEjEjRVEZPu4"
 #define B64_2 "3q2+75mZmZERERmZmRERERHwC6Q"
-#define B64_3 "sz/wDbM/8A2zP/ANsz/wDbM/8A0"
 #define B64_256_1 "8/Pz8/u7vz8/Pz+7vz8/Pz+7u/Pz8/P7u/Pz8/P7u78"
 #define B64_256_2 "zMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMw"
-#define B64_256_3 "ASNFZ4mrze8BI0VniavN7wEjRWeJq83vASNFZ4mrze8"
 
   /* no flags set */
   dir_split_resource_into_fingerprints("A+C+B", sl, NULL, 0);
@@ -510,7 +551,7 @@ test_dir_split_fps(void *testdata)
 }
 
 static void
-test_dir_measured_bw(void)
+test_dir_measured_bw_kb(void)
 {
   measured_bw_line_t mbwl;
   int i;
@@ -566,10 +607,87 @@ test_dir_measured_bw(void)
   for (i = 0; strcmp(lines_pass[i], "end"); i++) {
     //fprintf(stderr, "Testing: %s %d\n", lines_pass[i], TOR_ISSPACE('\n'));
     test_assert(measured_bw_line_parse(&mbwl, lines_pass[i]) == 0);
-    test_assert(mbwl.bw == 1024);
+    test_assert(mbwl.bw_kb == 1024);
     test_assert(strcmp(mbwl.node_hex,
                 "557365204145532d32353620696e73746561642e") == 0);
   }
+
+ done:
+  return;
+}
+
+#define MBWC_INIT_TIME 1000
+
+/** Do the measured bandwidth cache unit test */
+static void
+test_dir_measured_bw_kb_cache(void)
+{
+  /* Initial fake time_t for testing */
+  time_t curr = MBWC_INIT_TIME;
+  /* Some measured_bw_line_ts */
+  measured_bw_line_t mbwl[3];
+  /* For receiving output on cache queries */
+  long bw;
+  time_t as_of;
+
+  /* First, clear the cache and assert that it's empty */
+  dirserv_clear_measured_bw_cache();
+  test_eq(dirserv_get_measured_bw_cache_size(), 0);
+  /*
+   * Set up test mbwls; none of the dirserv_cache_*() functions care about
+   * the node_hex field.
+   */
+  memset(mbwl[0].node_id, 0x01, DIGEST_LEN);
+  mbwl[0].bw_kb = 20;
+  memset(mbwl[1].node_id, 0x02, DIGEST_LEN);
+  mbwl[1].bw_kb = 40;
+  memset(mbwl[2].node_id, 0x03, DIGEST_LEN);
+  mbwl[2].bw_kb = 80;
+  /* Try caching something */
+  dirserv_cache_measured_bw(&(mbwl[0]), curr);
+  test_eq(dirserv_get_measured_bw_cache_size(), 1);
+  /* Okay, let's see if we can retrieve it */
+  test_assert(dirserv_query_measured_bw_cache_kb(mbwl[0].node_id,&bw, &as_of));
+  test_eq(bw, 20);
+  test_eq(as_of, MBWC_INIT_TIME);
+  /* Try retrieving it without some outputs */
+  test_assert(dirserv_query_measured_bw_cache_kb(mbwl[0].node_id,NULL, NULL));
+  test_assert(dirserv_query_measured_bw_cache_kb(mbwl[0].node_id,&bw, NULL));
+  test_eq(bw, 20);
+  test_assert(dirserv_query_measured_bw_cache_kb(mbwl[0].node_id,NULL,&as_of));
+  test_eq(as_of, MBWC_INIT_TIME);
+  /* Now expire it */
+  curr += MAX_MEASUREMENT_AGE + 1;
+  dirserv_expire_measured_bw_cache(curr);
+  /* Check that the cache is empty */
+  test_eq(dirserv_get_measured_bw_cache_size(), 0);
+  /* Check that we can't retrieve it */
+  test_assert(!dirserv_query_measured_bw_cache_kb(mbwl[0].node_id, NULL,NULL));
+  /* Try caching a few things now */
+  dirserv_cache_measured_bw(&(mbwl[0]), curr);
+  test_eq(dirserv_get_measured_bw_cache_size(), 1);
+  curr += MAX_MEASUREMENT_AGE / 4;
+  dirserv_cache_measured_bw(&(mbwl[1]), curr);
+  test_eq(dirserv_get_measured_bw_cache_size(), 2);
+  curr += MAX_MEASUREMENT_AGE / 4;
+  dirserv_cache_measured_bw(&(mbwl[2]), curr);
+  test_eq(dirserv_get_measured_bw_cache_size(), 3);
+  curr += MAX_MEASUREMENT_AGE / 4 + 1;
+  /* Do an expire that's too soon to get any of them */
+  dirserv_expire_measured_bw_cache(curr);
+  test_eq(dirserv_get_measured_bw_cache_size(), 3);
+  /* Push the oldest one off the cliff */
+  curr += MAX_MEASUREMENT_AGE / 4;
+  dirserv_expire_measured_bw_cache(curr);
+  test_eq(dirserv_get_measured_bw_cache_size(), 2);
+  /* And another... */
+  curr += MAX_MEASUREMENT_AGE / 4;
+  dirserv_expire_measured_bw_cache(curr);
+  test_eq(dirserv_get_measured_bw_cache_size(), 1);
+  /* This should empty it out again */
+  curr += MAX_MEASUREMENT_AGE / 4;
+  dirserv_expire_measured_bw_cache(curr);
+  test_eq(dirserv_get_measured_bw_cache_size(), 0);
 
  done:
   return;
@@ -754,8 +872,8 @@ generate_ri_from_rs(const vote_routerstatus_t *vrs)
      * router_get_advertised_bandwidth_capped() of routerlist.c and
      * routerstatus_format_entry() of dirserv.c.
      */
-    r->bandwidthrate = rs->bandwidth * 1000;
-    r->bandwidthcapacity = rs->bandwidth * 1000;
+    r->bandwidthrate = rs->bandwidth_kb * 1000;
+    r->bandwidthcapacity = rs->bandwidth_kb * 1000;
   }
   return r;
 }
@@ -859,6 +977,13 @@ gen_routerstatus_for_v3ns(int idx, time_t now)
       /* Shouldn't happen */
       test_assert(0);
   }
+  if (vrs) {
+    vrs->microdesc = tor_malloc_zero(sizeof(vote_microdesc_hash_t));
+    tor_asprintf(&vrs->microdesc->microdesc_hash_line,
+                 "m 9,10,11,12,13,14,15,16,17 "
+                 "sha256=xyzajkldsdsajdadlsdjaslsdksdjlsdjsdaskdaaa%d\n",
+                 idx);
+  }
 
  done:
   return vrs;
@@ -877,7 +1002,7 @@ vote_tweaks_for_v3ns(networkstatus_t *v, int voter, time_t now)
   if (voter == 1) {
     measured_bw_line_t mbw;
     memset(mbw.node_id, 33, sizeof(mbw.node_id));
-    mbw.bw = 1024;
+    mbw.bw_kb = 1024;
     test_assert(measured_bw_line_apply(&mbw,
                 v->routerstatus_list) == 1);
   } else if (voter == 2 || voter == 3) {
@@ -973,7 +1098,7 @@ test_vrs_for_v3ns(vote_routerstatus_t *vrs, int voter, time_t now)
                        (voter == 1 || voter == 2)) {
     /* Check the measured bandwidth bits */
     test_assert(vrs->has_measured_bw &&
-                vrs->measured_bw == 1024);
+                vrs->measured_bw_kb == 1024);
   } else {
     /*
      * Didn't expect this, but the old unit test only checked some of them,
@@ -1704,12 +1829,12 @@ test_dir_random_weighted(void *testdata)
   ;
 }
 
-/* Function pointers for test_dir_clip_unmeasured_bw() */
+/* Function pointers for test_dir_clip_unmeasured_bw_kb() */
 
 static uint32_t alternate_clip_bw = 0;
 
 /**
- * Generate a routerstatus for clip_unmeasured_bw test; based on the
+ * Generate a routerstatus for clip_unmeasured_bw_kb test; based on the
  * v3_networkstatus ones.
  */
 static vote_routerstatus_t *
@@ -1718,8 +1843,8 @@ gen_routerstatus_for_umbw(int idx, time_t now)
   vote_routerstatus_t *vrs = NULL;
   routerstatus_t *rs;
   tor_addr_t addr_ipv6;
-  uint32_t max_unmeasured_bw = (alternate_clip_bw > 0) ?
-    alternate_clip_bw : DEFAULT_MAX_UNMEASURED_BW;
+  uint32_t max_unmeasured_bw_kb = (alternate_clip_bw > 0) ?
+    alternate_clip_bw : DEFAULT_MAX_UNMEASURED_BW_KB;
 
   switch (idx) {
     case 0:
@@ -1743,7 +1868,7 @@ gen_routerstatus_for_umbw(int idx, time_t now)
        */
       vrs->has_measured_bw = 1;
       rs->has_bandwidth = 1;
-      vrs->measured_bw = rs->bandwidth = max_unmeasured_bw / 2;
+      vrs->measured_bw_kb = rs->bandwidth_kb = max_unmeasured_bw_kb / 2;
       break;
     case 1:
       /* Generate the second routerstatus. */
@@ -1769,7 +1894,7 @@ gen_routerstatus_for_umbw(int idx, time_t now)
        */
       vrs->has_measured_bw = 1;
       rs->has_bandwidth = 1;
-      vrs->measured_bw = rs->bandwidth = 2 * max_unmeasured_bw;
+      vrs->measured_bw_kb = rs->bandwidth_kb = 2 * max_unmeasured_bw_kb;
       break;
     case 2:
       /* Generate the third routerstatus. */
@@ -1793,8 +1918,8 @@ gen_routerstatus_for_umbw(int idx, time_t now)
        */
       vrs->has_measured_bw = 0;
       rs->has_bandwidth = 1;
-      vrs->measured_bw = 0;
-      rs->bandwidth = 2 * max_unmeasured_bw;
+      vrs->measured_bw_kb = 0;
+      rs->bandwidth_kb = 2 * max_unmeasured_bw_kb;
       break;
     case 3:
       /* Generate a fourth routerstatus that is not running. */
@@ -1817,8 +1942,8 @@ gen_routerstatus_for_umbw(int idx, time_t now)
        */
       vrs->has_measured_bw = 0;
       rs->has_bandwidth = 1;
-      vrs->measured_bw = 0;
-      rs->bandwidth = max_unmeasured_bw / 2;
+      vrs->measured_bw_kb = 0;
+      rs->bandwidth_kb = max_unmeasured_bw_kb / 2;
       break;
     case 4:
       /* No more for this test; return NULL */
@@ -1827,6 +1952,13 @@ gen_routerstatus_for_umbw(int idx, time_t now)
     default:
       /* Shouldn't happen */
       test_assert(0);
+  }
+  if (vrs) {
+    vrs->microdesc = tor_malloc_zero(sizeof(vote_microdesc_hash_t));
+    tor_asprintf(&vrs->microdesc->microdesc_hash_line,
+                 "m 9,10,11,12,13,14,15,16,17 "
+                 "sha256=xyzajkldsdsajdadlsdjaslsdksdjlsdjsdaskdaaa%d\n",
+                 idx);
   }
 
  done:
@@ -1847,7 +1979,7 @@ vote_tweaks_for_umbw(networkstatus_t *v, int voter, time_t now)
 
   test_assert(v->supported_methods);
   smartlist_clear(v->supported_methods);
-  /* Method 17 is MIN_METHOD_TO_CLIP_UNMEASURED_BW */
+  /* Method 17 is MIN_METHOD_TO_CLIP_UNMEASURED_BW_KB */
   smartlist_split_string(v->supported_methods,
                          "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17",
                          NULL, 0, -1);
@@ -1873,8 +2005,8 @@ test_vrs_for_umbw(vote_routerstatus_t *vrs, int voter, time_t now)
 {
   routerstatus_t *rs;
   tor_addr_t addr_ipv6;
-  uint32_t max_unmeasured_bw = (alternate_clip_bw > 0) ?
-    alternate_clip_bw : DEFAULT_MAX_UNMEASURED_BW;
+  uint32_t max_unmeasured_bw_kb = (alternate_clip_bw > 0) ?
+    alternate_clip_bw : DEFAULT_MAX_UNMEASURED_BW_KB;
 
   (void)voter;
   test_assert(vrs);
@@ -1903,8 +2035,8 @@ test_vrs_for_umbw(vote_routerstatus_t *vrs, int voter, time_t now)
     test_eq(rs->dir_port, 8000);
     test_assert(rs->has_bandwidth);
     test_assert(vrs->has_measured_bw);
-    test_eq(rs->bandwidth, max_unmeasured_bw / 2);
-    test_eq(vrs->measured_bw, max_unmeasured_bw / 2);
+    test_eq(rs->bandwidth_kb, max_unmeasured_bw_kb / 2);
+    test_eq(vrs->measured_bw_kb, max_unmeasured_bw_kb / 2);
   } else if (tor_memeq(rs->identity_digest,
                        "\x5\x5\x5\x5\x5\x5\x5\x5\x5\x5"
                        "\x5\x5\x5\x5\x5\x5\x5\x5\x5\x5",
@@ -1930,8 +2062,8 @@ test_vrs_for_umbw(vote_routerstatus_t *vrs, int voter, time_t now)
     test_eq(rs->ipv6_orport, 4711);
     test_assert(rs->has_bandwidth);
     test_assert(vrs->has_measured_bw);
-    test_eq(rs->bandwidth, max_unmeasured_bw * 2);
-    test_eq(vrs->measured_bw, max_unmeasured_bw * 2);
+    test_eq(rs->bandwidth_kb, max_unmeasured_bw_kb * 2);
+    test_eq(vrs->measured_bw_kb, max_unmeasured_bw_kb * 2);
   } else if (tor_memeq(rs->identity_digest,
                        "\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33"
                        "\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33",
@@ -1943,8 +2075,8 @@ test_vrs_for_umbw(vote_routerstatus_t *vrs, int voter, time_t now)
      */
     test_assert(rs->has_bandwidth);
     test_assert(!(vrs->has_measured_bw));
-    test_eq(rs->bandwidth, max_unmeasured_bw * 2);
-    test_eq(vrs->measured_bw, 0);
+    test_eq(rs->bandwidth_kb, max_unmeasured_bw_kb * 2);
+    test_eq(vrs->measured_bw_kb, 0);
   } else if (tor_memeq(rs->identity_digest,
                        "\x34\x34\x34\x34\x34\x34\x34\x34\x34\x34"
                        "\x34\x34\x34\x34\x34\x34\x34\x34\x34\x34",
@@ -1955,8 +2087,8 @@ test_vrs_for_umbw(vote_routerstatus_t *vrs, int voter, time_t now)
      */
     test_assert(rs->has_bandwidth);
     test_assert(!(vrs->has_measured_bw));
-    test_eq(rs->bandwidth, max_unmeasured_bw / 2);
-    test_eq(vrs->measured_bw, 0);
+    test_eq(rs->bandwidth_kb, max_unmeasured_bw_kb / 2);
+    test_eq(vrs->measured_bw_kb, 0);
   } else {
     test_assert(0);
   }
@@ -1975,7 +2107,7 @@ test_consensus_for_umbw(networkstatus_t *con, time_t now)
 
   test_assert(con);
   test_assert(!con->cert);
-  /* test_assert(con->consensus_method >= MIN_METHOD_TO_CLIP_UNMEASURED_BW); */
+  // test_assert(con->consensus_method >= MIN_METHOD_TO_CLIP_UNMEASURED_BW_KB);
   test_assert(con->consensus_method >= 16);
   test_eq(4, smartlist_len(con->routerstatus_list));
   /* There should be four listed routers; all voters saw the same in this */
@@ -1991,8 +2123,8 @@ static void
 test_routerstatus_for_umbw(routerstatus_t *rs, time_t now)
 {
   tor_addr_t addr_ipv6;
-  uint32_t max_unmeasured_bw = (alternate_clip_bw > 0) ?
-    alternate_clip_bw : DEFAULT_MAX_UNMEASURED_BW;
+  uint32_t max_unmeasured_bw_kb = (alternate_clip_bw > 0) ?
+    alternate_clip_bw : DEFAULT_MAX_UNMEASURED_BW_KB;
 
   test_assert(rs);
 
@@ -2018,7 +2150,7 @@ test_routerstatus_for_umbw(routerstatus_t *rs, time_t now)
     test_assert(!rs->is_named);
     /* This one should have measured bandwidth below the clip cutoff */
     test_assert(rs->has_bandwidth);
-    test_eq(rs->bandwidth, max_unmeasured_bw / 2);
+    test_eq(rs->bandwidth_kb, max_unmeasured_bw_kb / 2);
     test_assert(!(rs->bw_is_unmeasured));
   } else if (tor_memeq(rs->identity_digest,
                        "\x5\x5\x5\x5\x5\x5\x5\x5\x5\x5"
@@ -2049,7 +2181,7 @@ test_routerstatus_for_umbw(routerstatus_t *rs, time_t now)
     test_assert(!rs->is_named);
     /* This one should have measured bandwidth above the clip cutoff */
     test_assert(rs->has_bandwidth);
-    test_eq(rs->bandwidth, max_unmeasured_bw * 2);
+    test_eq(rs->bandwidth_kb, max_unmeasured_bw_kb * 2);
     test_assert(!(rs->bw_is_unmeasured));
   } else if (tor_memeq(rs->identity_digest,
                 "\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33"
@@ -2060,7 +2192,7 @@ test_routerstatus_for_umbw(routerstatus_t *rs, time_t now)
      * and so should be clipped
      */
     test_assert(rs->has_bandwidth);
-    test_eq(rs->bandwidth, max_unmeasured_bw);
+    test_eq(rs->bandwidth_kb, max_unmeasured_bw_kb);
     test_assert(rs->bw_is_unmeasured);
   } else if (tor_memeq(rs->identity_digest,
                 "\x34\x34\x34\x34\x34\x34\x34\x34\x34\x34"
@@ -2071,7 +2203,7 @@ test_routerstatus_for_umbw(routerstatus_t *rs, time_t now)
      * and so should not be clipped
      */
     test_assert(rs->has_bandwidth);
-    test_eq(rs->bandwidth, max_unmeasured_bw / 2);
+    test_eq(rs->bandwidth_kb, max_unmeasured_bw_kb / 2);
     test_assert(rs->bw_is_unmeasured);
   } else {
     /* Weren't expecting this... */
@@ -2089,7 +2221,7 @@ test_routerstatus_for_umbw(routerstatus_t *rs, time_t now)
  */
 
 static void
-test_dir_clip_unmeasured_bw(void)
+test_dir_clip_unmeasured_bw_kb(void)
 {
   /* Run the test with the default clip bandwidth */
   alternate_clip_bw = 0;
@@ -2101,20 +2233,20 @@ test_dir_clip_unmeasured_bw(void)
 }
 
 /**
- * This version of test_dir_clip_unmeasured_bw() uses a non-default choice of
- * clip bandwidth.
+ * This version of test_dir_clip_unmeasured_bw_kb() uses a non-default choice
+ * of clip bandwidth.
  */
 
 static void
-test_dir_clip_unmeasured_bw_alt(void)
+test_dir_clip_unmeasured_bw_kb_alt(void)
 {
   /*
    * Try a different one; this value is chosen so that the below-the-cutoff
    * unmeasured nodes the test uses, at alternate_clip_bw / 2, will be above
-   * DEFAULT_MAX_UNMEASURED_BW and if the consensus incorrectly uses that
+   * DEFAULT_MAX_UNMEASURED_BW_KB and if the consensus incorrectly uses that
    * cutoff it will fail the test.
    */
-  alternate_clip_bw = 3 * DEFAULT_MAX_UNMEASURED_BW;
+  alternate_clip_bw = 3 * DEFAULT_MAX_UNMEASURED_BW_KB;
   test_a_networkstatus(gen_routerstatus_for_umbw,
                        vote_tweaks_for_umbw,
                        test_vrs_for_umbw,
@@ -2122,25 +2254,138 @@ test_dir_clip_unmeasured_bw_alt(void)
                        test_routerstatus_for_umbw);
 }
 
+extern time_t time_of_process_start; /* from main.c */
+
+static void
+test_dir_v2_dir(void *arg)
+{
+  /* Runs in a forked process: acts like a v2 directory just enough to make and
+   * sign a v2 networkstatus opinion */
+
+  cached_dir_t *v2 = NULL;
+  or_options_t *options = get_options_mutable();
+  crypto_pk_t *id_key = pk_generate(4);
+  (void) arg;
+
+  options->ORPort_set = 1; /* So we believe we're a server. */
+  options->DirPort_set = 1;
+  options->Address = tor_strdup("99.99.99.99");
+  options->Nickname = tor_strdup("TestV2Auth");
+  options->ContactInfo = tor_strdup("TestV2Auth <testv2auth@example.com>");
+  {
+    /* Give it a DirPort */
+    smartlist_t *ports = (smartlist_t *)get_configured_ports();
+    port_cfg_t *port = tor_malloc_zero(sizeof(port_cfg_t));
+    port->type = CONN_TYPE_DIR_LISTENER;
+    port->port = 9999;
+    smartlist_add(ports, port);
+  }
+  set_server_identity_key(id_key);
+  set_client_identity_key(id_key);
+
+  /* Add a router. */
+  {
+    was_router_added_t wra;
+    const char *msg = NULL;
+    routerinfo_t *r1 = tor_malloc_zero(sizeof(routerinfo_t));
+    r1->address = tor_strdup("18.244.0.1");
+    r1->addr = 0xc0a80001u; /* 192.168.0.1 */
+    r1->cache_info.published_on = time(NULL)-60;
+    r1->or_port = 9000;
+    r1->dir_port = 9003;
+    tor_addr_parse(&r1->ipv6_addr, "1:2:3:4::");
+    r1->ipv6_orport = 9999;
+    r1->onion_pkey = pk_generate(1);
+    r1->identity_pkey = pk_generate(2);
+    r1->bandwidthrate = 1000;
+    r1->bandwidthburst = 5000;
+    r1->bandwidthcapacity = 10000;
+    r1->exit_policy = NULL;
+    r1->nickname = tor_strdup("Magri");
+    r1->platform = tor_strdup("Tor 0.2.7.7-gamma");
+    r1->cache_info.routerlist_index = -1;
+    r1->cache_info.signed_descriptor_body =
+      router_dump_router_to_string(r1, r1->identity_pkey);
+    r1->cache_info.signed_descriptor_len =
+      strlen(r1->cache_info.signed_descriptor_body);
+    wra = router_add_to_routerlist(r1, &msg, 0, 0);
+    tt_int_op(wra, ==, ROUTER_ADDED_SUCCESSFULLY);
+  }
+
+  /* Prevent call of rep_hist_note_router_unreachable(). */
+  time_of_process_start = time(NULL);
+
+  /* Make a directory so there's somewhere to store the thing */
+#ifdef _WIN32
+  mkdir(get_fname("cached-status"));
+#else
+  mkdir(get_fname("cached-status"), 0700);
+#endif
+
+  v2 = generate_v2_networkstatus_opinion();
+  tt_assert(v2);
+
+ done:
+  crypto_pk_free(id_key);
+  cached_dir_decref(v2);
+}
+
+static void
+test_dir_fmt_control_ns(void *arg)
+{
+  char *s = NULL;
+  routerstatus_t rs;
+  (void)arg;
+
+  memset(&rs, 0, sizeof(rs));
+  rs.published_on = 1364925198;
+  strlcpy(rs.nickname, "TetsuoMilk", sizeof(rs.nickname));
+  memcpy(rs.identity_digest, "Stately, plump Buck ", DIGEST_LEN);
+  memcpy(rs.descriptor_digest, "Mulligan came up fro", DIGEST_LEN);
+  rs.addr = 0x20304050;
+  rs.or_port = 9001;
+  rs.dir_port = 9002;
+  rs.is_exit = 1;
+  rs.is_fast = 1;
+  rs.is_flagged_running = 1;
+  rs.has_bandwidth = 1;
+  rs.bandwidth_kb = 1000;
+
+  s = networkstatus_getinfo_helper_single(&rs);
+  tt_assert(s);
+  tt_str_op(s, ==,
+            "r TetsuoMilk U3RhdGVseSwgcGx1bXAgQnVjayA "
+               "TXVsbGlnYW4gY2FtZSB1cCBmcm8 2013-04-02 17:53:18 "
+               "32.48.64.80 9001 9002\n"
+            "s Exit Fast Running\n"
+            "w Bandwidth=1000\n");
+
+ done:
+  tor_free(s);
+}
+
 #define DIR_LEGACY(name)                                                   \
   { #name, legacy_test_helper, TT_FORK, &legacy_setup, test_dir_ ## name }
 
-#define DIR(name)                               \
-  { #name, test_dir_##name, 0, NULL, NULL }
+#define DIR(name,flags)                              \
+  { #name, test_dir_##name, (flags), NULL, NULL }
 
 struct testcase_t dir_tests[] = {
   DIR_LEGACY(nicknames),
   DIR_LEGACY(formats),
   DIR_LEGACY(versions),
   DIR_LEGACY(fp_pairs),
-  DIR(split_fps),
-  DIR_LEGACY(measured_bw),
+  DIR(split_fps, 0),
+  DIR_LEGACY(measured_bw_kb),
+  DIR_LEGACY(measured_bw_kb_cache),
   DIR_LEGACY(param_voting),
   DIR_LEGACY(v3_networkstatus),
-  DIR(random_weighted),
-  DIR(scale_bw),
-  DIR_LEGACY(clip_unmeasured_bw),
-  DIR_LEGACY(clip_unmeasured_bw_alt),
+  DIR(random_weighted, 0),
+  DIR(scale_bw, 0),
+  DIR_LEGACY(clip_unmeasured_bw_kb),
+  DIR_LEGACY(clip_unmeasured_bw_kb_alt),
+  DIR(v2_dir, TT_FORK),
+  DIR(fmt_control_ns, 0),
   END_OF_TESTCASES
 };
 

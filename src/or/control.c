@@ -1711,8 +1711,7 @@ getinfo_helper_dir(control_connection_t *control_conn,
     const node_t *node = node_get_by_hex_id(question+strlen("md/id/"));
     const microdesc_t *md = NULL;
     if (node) md = node->md;
-    if (md) {
-      tor_assert(md->body);
+    if (md && md->body) {
       *answer = tor_strndup(md->body, md->bodylen);
     }
   } else if (!strcmpstart(question, "md/name/")) {
@@ -1722,8 +1721,7 @@ getinfo_helper_dir(control_connection_t *control_conn,
     /* XXXX duplicated code */
     const microdesc_t *md = NULL;
     if (node) md = node->md;
-    if (md) {
-      tor_assert(md->body);
+    if (md && md->body) {
       *answer = tor_strndup(md->body, md->bodylen);
     }
   } else if (!strcmpstart(question, "desc-annotations/id/")) {
@@ -2939,7 +2937,7 @@ handle_control_resolve(control_connection_t *conn, uint32_t len,
   failed = smartlist_new();
   SMARTLIST_FOREACH(args, const char *, arg, {
       if (!is_keyval_pair(arg)) {
-          if (dnsserv_launch_request(arg, is_reverse)<0)
+          if (dnsserv_launch_request(arg, is_reverse, conn)<0)
             smartlist_add(failed, (char*)arg);
       }
   });
@@ -2947,7 +2945,7 @@ handle_control_resolve(control_connection_t *conn, uint32_t len,
   send_control_done(conn);
   SMARTLIST_FOREACH(failed, const char *, arg, {
       control_event_address_mapped(arg, arg, time(NULL),
-                                   "internal");
+                                   "internal", 0);
   });
 
   SMARTLIST_FOREACH(args, char *, cp, tor_free(cp));
@@ -3742,9 +3740,22 @@ control_event_stream_status(entry_connection_t *conn, stream_status_event_t tp,
     }
   }
 
-  if (tp == STREAM_EVENT_NEW) {
-    tor_snprintf(addrport_buf,sizeof(addrport_buf), " SOURCE_ADDR=%s:%d",
-                 ENTRY_TO_CONN(conn)->address, ENTRY_TO_CONN(conn)->port);
+  if (tp == STREAM_EVENT_NEW || tp == STREAM_EVENT_NEW_RESOLVE) {
+    /*
+     * When the control conn is an AF_UNIX socket and we have no address,
+     * it gets set to "(Tor_internal)"; see dnsserv_launch_request() in
+     * dnsserv.c.
+     */
+    if (strcmp(ENTRY_TO_CONN(conn)->address, "(Tor_internal)") != 0) {
+      tor_snprintf(addrport_buf,sizeof(addrport_buf), " SOURCE_ADDR=%s:%d",
+                   ENTRY_TO_CONN(conn)->address, ENTRY_TO_CONN(conn)->port);
+    } else {
+      /*
+       * else leave it blank so control on AF_UNIX doesn't need to make
+       * something up.
+       */
+      addrport_buf[0] = '\0';
+    }
   } else {
     addrport_buf[0] = '\0';
   }
@@ -3752,11 +3763,7 @@ control_event_stream_status(entry_connection_t *conn, stream_status_event_t tp,
   if (tp == STREAM_EVENT_NEW_RESOLVE) {
     purpose = " PURPOSE=DNS_REQUEST";
   } else if (tp == STREAM_EVENT_NEW) {
-    if (ENTRY_TO_EDGE_CONN(conn)->is_dns_request ||
-        (conn->socks_request &&
-         SOCKS_COMMAND_IS_RESOLVE(conn->socks_request->command)))
-      purpose = " PURPOSE=DNS_REQUEST";
-    else if (conn->use_begindir) {
+    if (conn->use_begindir) {
       connection_t *linked = ENTRY_TO_CONN(conn)->linked_conn;
       int linked_dir_purpose = -1;
       if (linked && linked->type == CONN_TYPE_DIR)
@@ -4028,15 +4035,17 @@ control_event_descriptors_changed(smartlist_t *routers)
  */
 int
 control_event_address_mapped(const char *from, const char *to, time_t expires,
-                             const char *error)
+                             const char *error, const int cached)
 {
   if (!EVENT_IS_INTERESTING(EVENT_ADDRMAP))
     return 0;
 
   if (expires < 3 || expires == TIME_MAX)
     send_control_event(EVENT_ADDRMAP, ALL_FORMATS,
-                                "650 ADDRMAP %s %s NEVER %s\r\n", from, to,
-                                error?error:"");
+                                "650 ADDRMAP %s %s NEVER %s%s"
+                                "CACHED=\"%s\"\r\n",
+                                  from, to, error?error:"", error?" ":"",
+                                cached?"YES":"NO");
   else {
     char buf[ISO_TIME_LEN+1];
     char buf2[ISO_TIME_LEN+1];
@@ -4044,10 +4053,10 @@ control_event_address_mapped(const char *from, const char *to, time_t expires,
     format_iso_time(buf2,expires);
     send_control_event(EVENT_ADDRMAP, ALL_FORMATS,
                                 "650 ADDRMAP %s %s \"%s\""
-                                " %s%sEXPIRES=\"%s\"\r\n",
+                                " %s%sEXPIRES=\"%s\" CACHED=\"%s\"\r\n",
                                 from, to, buf,
                                 error?error:"", error?" ":"",
-                                buf2);
+                                buf2, cached?"YES":"NO");
   }
 
   return 0;
@@ -4395,7 +4404,7 @@ control_event_guard(const char *nickname, const char *digest,
  * a smartlist_t containing (key, value, ...) pairs in sequence.
  * <b>value</b> can be NULL. */
 int
-control_event_conf_changed(smartlist_t *elements)
+control_event_conf_changed(const smartlist_t *elements)
 {
   int i;
   char *result;
@@ -4716,6 +4725,9 @@ control_event_bootstrap_problem(const char *warn, int reason)
       !any_bridge_descriptors_known() &&
       !any_pending_bridge_descriptor_fetches())
     recommendation = "warn";
+
+  if (we_are_hibernating())
+    recommendation = "ignore";
 
   while (status>=0 && bootstrap_status_to_string(status, &tag, &summary) < 0)
     status--; /* find a recognized status string based on current progress */

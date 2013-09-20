@@ -158,10 +158,6 @@ int can_complete_circuit=0;
 /** How long do we let a directory connection stall before expiring it? */
 #define DIR_CONN_MAX_STALL (5*60)
 
-/** How long do we let OR connections handshake before we decide that
- * they are obsolete? */
-#define TLS_HANDSHAKE_TIMEOUT (60)
-
 /** Decides our behavior when no logs are configured/before any
  * logs have been configured.  For 0, we log notice to stdout as normal.
  * For 1, we log warnings only.  For 2, we log nothing.
@@ -1129,7 +1125,7 @@ signewnym_impl(time_t now)
     return;
   }
 
-  circuit_expire_all_dirty_circs();
+  circuit_mark_all_dirty_circs_as_unusable();
   addressmap_clear_transient();
   rend_client_purge_state();
   time_of_last_signewnym = now;
@@ -1357,6 +1353,11 @@ run_scheduled_events(time_t now)
         next_time_to_write_stats_files = next_write;
     }
     time_to_write_stats_files = next_time_to_write_stats_files;
+
+    /* Also commandeer this opportunity to log how our circuit handshake
+     * stats have been doing. */
+    if (public_server_mode(options))
+      rep_hist_log_circuit_handshake_stats(now);
   }
 
   /* 1h. Check whether we should write bridge statistics to disk.
@@ -1848,7 +1849,7 @@ do_hup(void)
   /* Rotate away from the old dirty circuits. This has to be done
    * after we've read the new options, but before we start using
    * circuits for directory fetches. */
-  circuit_expire_all_dirty_circs();
+  circuit_mark_all_dirty_circs_as_unusable();
 
   /* retry appropriate downloads */
   router_reset_status_download_failures();
@@ -1885,6 +1886,13 @@ do_main_loop(void)
               "retry instead, set the ServerDNSAllowBrokenResolvConf option.");
     }
   }
+
+#ifdef USE_BUFFEREVENTS
+  log_warn(LD_GENERAL, "Tor was compiled with the --enable-bufferevents "
+           "option. This is still experimental, and might cause strange "
+           "bugs. If you want a more stable Tor, be sure to build without "
+           "--enable-bufferevents.");
+#endif
 
   handle_signals(1);
 

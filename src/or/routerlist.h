@@ -13,7 +13,20 @@
 
 int get_n_authorities(dirinfo_type_t type);
 int trusted_dirs_reload_certs(void);
-int trusted_dirs_load_certs_from_string(const char *contents, int from_store,
+
+/*
+ * Pass one of these as source to trusted_dirs_load_certs_from_string()
+ * to indicate whence string originates; this controls error handling
+ * behavior such as marking downloads as failed.
+ */
+
+#define TRUSTED_DIRS_CERTS_SRC_SELF 0
+#define TRUSTED_DIRS_CERTS_SRC_FROM_STORE 1
+#define TRUSTED_DIRS_CERTS_SRC_DL_BY_ID_DIGEST 2
+#define TRUSTED_DIRS_CERTS_SRC_DL_BY_ID_SK_DIGEST 3
+#define TRUSTED_DIRS_CERTS_SRC_FROM_VOTE 4
+
+int trusted_dirs_load_certs_from_string(const char *contents, int source,
                                         int flush);
 void trusted_dirs_flush_certs_to_disk(void);
 authority_cert_t *authority_cert_get_newest_by_id(const char *id_digest);
@@ -21,7 +34,8 @@ authority_cert_t *authority_cert_get_by_sk_digest(const char *sk_digest);
 authority_cert_t *authority_cert_get_by_digests(const char *id_digest,
                                                 const char *sk_digest);
 void authority_cert_get_all(smartlist_t *certs_out);
-void authority_cert_dl_failed(const char *id_digest, int status);
+void authority_cert_dl_failed(const char *id_digest,
+                              const char *signing_key_digest, int status);
 void authority_certs_fetch_missing(networkstatus_t *status, time_t now);
 int router_reload_router_list(void);
 int authority_cert_dl_looks_uncertain(const char *id_digest);
@@ -42,7 +56,6 @@ int router_get_my_share_of_directory_requests(double *v2_share_out,
                                               double *v3_share_out);
 void router_reset_status_download_failures(void);
 int routers_have_same_or_addrs(const routerinfo_t *r1, const routerinfo_t *r2);
-int router_nickname_is_in_list(const routerinfo_t *router, const char *list);
 const routerinfo_t *routerlist_find_my_routerinfo(void);
 uint32_t router_get_advertised_bandwidth(const routerinfo_t *router);
 uint32_t router_get_advertised_bandwidth_capped(const routerinfo_t *router);
@@ -146,7 +159,6 @@ void dir_server_add(dir_server_t *ent);
 
 void authority_cert_free(authority_cert_t *cert);
 void clear_dir_servers(void);
-int any_trusted_dir_is_v1_authority(void);
 void update_consensus_router_descriptor_downloads(time_t now, int is_vote,
                                                   networkstatus_t *consensus);
 void update_router_descriptor_downloads(time_t now);

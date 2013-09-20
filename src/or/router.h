@@ -58,8 +58,11 @@ int authdir_mode_publishes_statuses(const or_options_t *options);
 int authdir_mode_tests_reachability(const or_options_t *options);
 int authdir_mode_bridge(const or_options_t *options);
 
-uint16_t router_get_active_listener_port_by_type(int listener_type);
+uint16_t router_get_active_listener_port_by_type_af(int listener_type,
+                                                    sa_family_t family);
 uint16_t router_get_advertised_or_port(const or_options_t *options);
+uint16_t router_get_advertised_or_port_by_af(const or_options_t *options,
+                                             sa_family_t family);
 uint16_t router_get_advertised_dir_port(const or_options_t *options,
                                         uint16_t dirport);
 
@@ -90,8 +93,8 @@ int router_is_me(const routerinfo_t *router);
 int router_fingerprint_is_me(const char *fp);
 int router_pick_published_address(const or_options_t *options, uint32_t *addr);
 int router_rebuild_descriptor(int force);
-int router_dump_router_to_string(char *s, size_t maxlen, routerinfo_t *router,
-                                 crypto_pk_t *ident_key);
+char *router_dump_router_to_string(routerinfo_t *router,
+                                   crypto_pk_t *ident_key);
 void router_get_prim_orport(const routerinfo_t *router,
                             tor_addr_port_t *addr_port_out);
 void router_get_pref_orport(const routerinfo_t *router,
@@ -132,8 +135,6 @@ const char *routerstatus_describe(const routerstatus_t *ri);
 const char *extend_info_describe(const extend_info_t *ei);
 
 void router_get_verbose_nickname(char *buf, const routerinfo_t *router);
-void routerstatus_get_verbose_nickname(char *buf,
-                                       const routerstatus_t *router);
 void router_reset_warnings(void);
 void router_reset_reachability(void);
 void router_free_all(void);
