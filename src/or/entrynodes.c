@@ -54,6 +54,10 @@ typedef struct {
 
   /** When should we next try to fetch a descriptor for this bridge? */
   download_status_t fetch_status;
+
+  /** A smartlist of k=v values to be passed to the SOCKS proxy, if
+      transports are used for this bridge. */
+  smartlist_t *socks_args;
 } bridge_info_t;
 
 /** A list of our chosen entry guards. */
@@ -359,7 +363,7 @@ add_an_entry_guard(const node_t *chosen, int reset_status, int prepend,
         entry->can_retry = 1;
       }
       entry->is_dir_cache = node->rs &&
-        node->rs->version_supports_microdesc_cache;
+                            node->rs->version_supports_microdesc_cache;
       if (get_options()->UseBridges && node_is_a_configured_bridge(node))
         entry->is_dir_cache = 1;
       return NULL;
@@ -392,8 +396,8 @@ add_an_entry_guard(const node_t *chosen, int reset_status, int prepend,
            node_describe(node));
   strlcpy(entry->nickname, node_get_nickname(node), sizeof(entry->nickname));
   memcpy(entry->identity, node->identity, DIGEST_LEN);
-  entry->is_dir_cache = node_is_dir(node) &&
-    node->rs && node->rs->version_supports_microdesc_cache;
+  entry->is_dir_cache = node_is_dir(node) && node->rs &&
+                        node->rs->version_supports_microdesc_cache;
   if (get_options()->UseBridges && node_is_a_configured_bridge(node))
     entry->is_dir_cache = 1;
 
@@ -1583,6 +1587,11 @@ bridge_free(bridge_info_t *bridge)
     return;
 
   tor_free(bridge->transport_name);
+  if (bridge->socks_args) {
+    SMARTLIST_FOREACH(bridge->socks_args, char*, s, tor_free(s));
+    smartlist_free(bridge->socks_args);
+  }
+
   tor_free(bridge);
 }
 
@@ -1761,29 +1770,50 @@ bridge_resolve_conflicts(const tor_addr_t *addr, uint16_t port,
   } SMARTLIST_FOREACH_END(bridge);
 }
 
-/** Remember a new bridge at <b>addr</b>:<b>port</b>. If <b>digest</b>
- * is set, it tells us the identity key too.  If we already had the
- * bridge in our list, unmark it, and don't actually add anything new.
- * If <b>transport_name</b> is non-NULL - the bridge is associated with a
- * pluggable transport - we assign the transport to the bridge. */
+/** Register the bridge information in <b>bridge_line</b> to the
+ *  bridge subsystem. Steals reference of <b>bridge_line</b>. */
 void
-bridge_add_from_config(const tor_addr_t *addr, uint16_t port,
-                       const char *digest, const char *transport_name)
+bridge_add_from_config(bridge_line_t *bridge_line)
 {
   bridge_info_t *b;
 
-  bridge_resolve_conflicts(addr, port, digest, transport_name);
+  { /* Log the bridge we are about to register: */
+    log_debug(LD_GENERAL, "Registering bridge at %s (transport: %s) (%s)",
+              fmt_addrport(&bridge_line->addr, bridge_line->port),
+              bridge_line->transport_name ?
+              bridge_line->transport_name : "no transport",
+              tor_digest_is_zero(bridge_line->digest) ?
+              "no key listed" : hex_str(bridge_line->digest, DIGEST_LEN));
+
+    if (bridge_line->socks_args) { /* print socks arguments */
+      int i = 0;
+
+      tor_assert(smartlist_len(bridge_line->socks_args) > 0);
+
+      log_debug(LD_GENERAL, "Bridge uses %d SOCKS arguments:",
+                smartlist_len(bridge_line->socks_args));
+      SMARTLIST_FOREACH(bridge_line->socks_args, const char *, arg,
+                        log_debug(LD_CONFIG, "%d: %s", ++i, arg));
+    }
+  }
+
+  bridge_resolve_conflicts(&bridge_line->addr,
+                           bridge_line->port,
+                           bridge_line->digest,
+                           bridge_line->transport_name);
 
   b = tor_malloc_zero(sizeof(bridge_info_t));
-  tor_addr_copy(&b->addr, addr);
-  b->port = port;
-  if (digest)
-    memcpy(b->identity, digest, DIGEST_LEN);
-  if (transport_name)
-    b->transport_name = tor_strdup(transport_name);
+  tor_addr_copy(&b->addr, &bridge_line->addr);
+  b->port = bridge_line->port;
+  memcpy(b->identity, bridge_line->digest, DIGEST_LEN);
+  if (bridge_line->transport_name)
+    b->transport_name = bridge_line->transport_name;
   b->fetch_status.schedule = DL_SCHED_BRIDGE;
+  b->socks_args = bridge_line->socks_args;
   if (!bridge_list)
     bridge_list = smartlist_new();
+
+  tor_free(bridge_line); /* Deallocate bridge_line now. */
 
   smartlist_add(bridge_list, b);
 }
@@ -1845,7 +1875,7 @@ find_transport_name_by_bridge_addrport(const tor_addr_t *addr, uint16_t port)
  * transport, but the transport could not be found.
  */
 int
-find_transport_by_bridge_addrport(const tor_addr_t *addr, uint16_t port,
+get_transport_by_bridge_addrport(const tor_addr_t *addr, uint16_t port,
                                   const transport_t **transport)
 {
   *transport = NULL;
@@ -1870,6 +1900,17 @@ find_transport_by_bridge_addrport(const tor_addr_t *addr, uint16_t port,
 
   *transport = NULL;
   return 0;
+}
+
+/** Return a smartlist containing all the SOCKS arguments that we
+ *  should pass to the SOCKS proxy. */
+const smartlist_t *
+get_socks_args_by_bridge_addrport(const tor_addr_t *addr, uint16_t port)
+{
+  bridge_info_t *bridge = get_configured_bridge_by_addr_port_digest(addr,
+                                                                    port,
+                                                                    NULL);
+  return bridge ? bridge->socks_args : NULL;
 }
 
 /** We need to ask <b>bridge</b> for its server descriptor. */
@@ -2238,6 +2279,6 @@ entry_guards_free_all(void)
   clear_bridge_list();
   smartlist_free(bridge_list);
   bridge_list = NULL;
-  circuit_build_times_free_timeouts(&circ_times);
+  circuit_build_times_free_timeouts(get_circuit_build_times_mutable());
 }
 

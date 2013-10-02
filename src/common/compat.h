@@ -8,6 +8,7 @@
 
 #include "orconfig.h"
 #include "torint.h"
+#include "testsupport.h"
 #ifdef _WIN32
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0501
@@ -84,12 +85,18 @@
 
 /* ===== Compiler compatibility */
 
-/* GCC can check printf types on arbitrary functions. */
+/* GCC can check printf and scanf types on arbitrary functions. */
 #ifdef __GNUC__
 #define CHECK_PRINTF(formatIdx, firstArg) \
    __attribute__ ((format(printf, formatIdx, firstArg)))
 #else
 #define CHECK_PRINTF(formatIdx, firstArg)
+#endif
+#ifdef __GNUC__
+#define CHECK_SCANF(formatIdx, firstArg) \
+   __attribute__ ((format(scanf, formatIdx, firstArg)))
+#else
+#define CHECK_SCANF(formatIdx, firstArg)
 #endif
 
 /* inline is __inline on windows. */
@@ -444,10 +451,22 @@ typedef int socklen_t;
 #define TOR_INVALID_SOCKET (-1)
 #endif
 
+int tor_close_socket_simple(tor_socket_t s);
 int tor_close_socket(tor_socket_t s);
+tor_socket_t tor_open_socket_with_extensions(
+                                           int domain, int type, int protocol,
+                                           int cloexec, int nonblock);
 tor_socket_t tor_open_socket(int domain, int type, int protocol);
+tor_socket_t tor_open_socket_nonblocking(int domain, int type, int protocol);
 tor_socket_t tor_accept_socket(tor_socket_t sockfd, struct sockaddr *addr,
                                   socklen_t *len);
+tor_socket_t tor_accept_socket_nonblocking(tor_socket_t sockfd,
+                                           struct sockaddr *addr,
+                                           socklen_t *len);
+tor_socket_t tor_accept_socket_with_extensions(tor_socket_t sockfd,
+                                               struct sockaddr *addr,
+                                               socklen_t *len,
+                                               int cloexec, int nonblock);
 int get_n_open_sockets(void);
 
 #define tor_socket_send(s, buf, len, flags) send(s, buf, len, flags)
@@ -718,6 +737,14 @@ char *format_win32_error(DWORD err);
 #define VER_SUITE_SINGLEUSERTS 0x00000100
 #endif
 
+#endif
+
+#ifdef COMPAT_PRIVATE
+#if !defined(HAVE_SOCKETPAIR) || defined(_WIN32) || defined(TOR_UNIT_TESTS)
+#define NEED_ERSATZ_SOCKETPAIR
+STATIC int tor_ersatz_socketpair(int family, int type, int protocol,
+                                   tor_socket_t fd[2]);
+#endif
 #endif
 
 #endif

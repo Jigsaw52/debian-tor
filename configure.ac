@@ -3,7 +3,7 @@ dnl Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson
 dnl Copyright (c) 2007-2013, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
-AC_INIT([tor],[0.2.4.17-rc])
+AC_INIT([tor],[0.2.5.1-alpha])
 AC_CONFIG_SRCDIR([src/or/main.c])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE
@@ -39,6 +39,13 @@ AC_ARG_ENABLE(static-tor,
    AS_HELP_STRING(--enable-static-tor, Create an entirely static Tor binary. Requires --with-openssl-dir and --with-libevent-dir and --with-zlib-dir))
 AC_ARG_ENABLE(curve25519,
    AS_HELP_STRING(--disable-curve25519, Build Tor with no curve25519 elliptic-curve crypto support))
+AC_ARG_ENABLE(unittests,
+   AS_HELP_STRING(--disable-unittests, [Don't build unit tests for Tor. Risky!]))
+AC_ARG_ENABLE(coverage,
+   AS_HELP_STRING(--enable-coverage, [Enable coverage support in the unit-test build]))
+
+AM_CONDITIONAL(UNITTESTS_ENABLED, test x$enable_unittests != xno)
+AM_CONDITIONAL(COVERAGE_ENABLED, test x$enable_coverage = xyes)
 
 if test "$enable_static_tor" = "yes"; then
   enable_static_libevent="yes";
@@ -395,7 +402,13 @@ save_CPPFLAGS="$CPPFLAGS"
 LIBS="-levent $STATIC_LIBEVENT_FLAGS $TOR_LIB_WS32 $LIBS"
 LDFLAGS="$TOR_LDFLAGS_libevent $LDFLAGS"
 CPPFLAGS="$TOR_CPPFLAGS_libevent $CPPFLAGS"
-AC_CHECK_FUNCS(event_get_version event_get_version_number event_get_method event_set_log_callback evdns_set_outgoing_bind_address event_base_loopexit)
+AC_CHECK_FUNCS([event_get_version \
+                event_get_version_number \
+                event_get_method \
+                event_set_log_callback \
+                evdns_set_outgoing_bind_address \
+                evutil_secure_rng_set_urandom_device_file \
+                event_base_loopexit])
 AC_CHECK_MEMBERS([struct event.min_heap_idx], , ,
 [#include <event.h>
 ])
@@ -492,7 +505,7 @@ dnl ------------------------------------------------------
 dnl Where do you live, openssl?  And how do we call you?
 
 tor_openssl_pkg_redhat="openssl"
-tor_openssl_pkg_debian="libssl"
+tor_openssl_pkg_debian="libssl-dev"
 tor_openssl_devpkg_redhat="openssl-devel"
 tor_openssl_devpkg_debian="libssl-dev"
 
@@ -584,6 +597,19 @@ if test x$enable_linker_hardening != xno; then
 fi
 
 dnl ------------------------------------------------------
+dnl Now see if we have a -fomit-frame-pointer compiler option.
+
+saved_CFLAGS="$CFLAGS"
+TOR_CHECK_CFLAGS(-fomit-frame-pointer)
+if test "$saved_CFLAGS" != "$CFLAGS"; then
+  F_OMIT_FRAME_POINTER='-fomit-frame-pointer'
+else
+  F_OMIT_FRAME_POINTER=''
+fi
+CFLAGS="$saved_CFLAGS"
+AC_SUBST(F_OMIT_FRAME_POINTER)
+
+dnl ------------------------------------------------------
 dnl Where do you live, libnatpmp?  And how do we call you?
 dnl There are no packages for Debian or Redhat as of this patch
 
@@ -641,6 +667,12 @@ if test "$upnp" = "true"; then
             [/usr/lib/])
     fi
 fi
+
+dnl ============================================================
+dnl Check for libseccomp
+
+AC_CHECK_HEADERS([seccomp.h])
+AC_SEARCH_LIBS(seccomp_init, [seccomp])
 
 dnl ============================================================
 dnl We need an implementation of curve25519.
@@ -1440,7 +1472,12 @@ if test x$enable_gcc_warnings = xyes || test x$enable_gcc_warnings_advisory = xy
 # CFLAGS="$CFLAGS -Winline"
 fi
 
-
+if test "$enable_coverage" = yes && test "$have_clang" = "no"; then
+   case "$host_os" in
+    darwin*)
+      AC_MSG_WARN([Tried to enable coverage on OSX without using the clang compiler. This might not work! If coverage fails, use CC=clang when configuring with --enable-profiling.])
+   esac
+fi
 
 CPPFLAGS="$CPPFLAGS $TOR_CPPFLAGS_libevent $TOR_CPPFLAGS_openssl $TOR_CPPFLAGS_zlib"
 
@@ -1451,9 +1488,24 @@ AC_CONFIG_FILES([
         contrib/tor.logrotate
         contrib/tor.sh
         contrib/torctl
-        contrib/torify
         src/config/torrc.sample
 ])
+
+if test x$asciidoc = xtrue && test "$ASCIIDOC" = "none" ; then
+  regular_mans="doc/tor doc/tor-gencert doc/tor-resolve doc/torify"
+  for file in $regular_mans ; do
+    if ! [[ -f "$srcdir/$file.1.in" ]] || ! [[ -f "$srcdir/$file.html.in" ]] ; then
+      echo "==================================";
+      echo;
+      echo "You need asciidoc installed to be able to build the manpage.";
+      echo "To build without manpages, use the --disable-asciidoc argument";
+      echo "when calling configure.";
+      echo;
+      echo "==================================";
+      exit 1;
+    fi
+  done
+fi
 
 AC_OUTPUT
 

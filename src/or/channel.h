@@ -10,7 +10,6 @@
 #define TOR_CHANNEL_H
 
 #include "or.h"
-#include "tor_queue.h"
 #include "circuitmux.h"
 
 /* Channel handler function pointer typedefs */
@@ -84,6 +83,8 @@ struct channel_s {
    * available.
    */
   int (*get_remote_addr)(channel_t *, tor_addr_t *);
+  int (*get_transport_name)(channel_t *chan, char **transport_out);
+
 #define GRD_FLAG_ORIGINAL 1
 #define GRD_FLAG_ADDR_ONLY 2
   /*
@@ -476,6 +477,10 @@ uint64_t channel_count_recved(channel_t *chan);
 uint64_t channel_count_xmitted(channel_t *chan);
 
 uint64_t channel_listener_count_accepted(channel_listener_t *chan_l);
+
+int packed_cell_is_destroy(channel_t *chan,
+                           const packed_cell_t *packed_cell,
+                           circid_t *circid_out);
 
 #endif
 

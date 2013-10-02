@@ -16,6 +16,7 @@
 #include "connection_edge.h"
 #include "directory.h"
 #include "main.h"
+#include "networkstatus.h"
 #include "nodelist.h"
 #include "relay.h"
 #include "rendclient.h"
@@ -125,6 +126,16 @@ rend_client_reextend_intro_circuit(origin_circuit_t *circ)
   }
   extend_info_free(extend_info);
   return result;
+}
+
+/** Return true iff we should send timestamps in our INTRODUCE1 cells */
+static int
+rend_client_should_send_timestamp(void)
+{
+  if (get_options()->Support022HiddenServices >= 0)
+    return get_options()->Support022HiddenServices;
+
+  return networkstatus_get_param(NULL, "Support022HiddenServices", 1, 0, 1);
 }
 
 /** Called when we're trying to connect an ap conn; sends an INTRODUCE1 cell
@@ -238,7 +249,14 @@ rend_client_send_introduction(origin_circuit_t *introcirc,
              REND_DESC_COOKIE_LEN);
       v3_shift += 2+REND_DESC_COOKIE_LEN;
     }
-    set_uint32(tmp+v3_shift+1, htonl((uint32_t)time(NULL)));
+    if (rend_client_should_send_timestamp()) {
+      uint32_t now = (uint32_t)time(NULL);
+      now += 300;
+      now -= now % 600;
+      set_uint32(tmp+v3_shift+1, htonl(now));
+    } else {
+      set_uint32(tmp+v3_shift+1, 0);
+    }
     v3_shift += 4;
   } /* if version 2 only write version number */
   else if (entry->parsed->protocols & (1<<2)) {
@@ -358,7 +376,7 @@ rend_client_close_other_intros(const char *onion_address)
 {
   circuit_t *c;
   /* abort parallel intro circs, if any */
-  for (c = circuit_get_global_list_(); c; c = c->next) {
+  TOR_LIST_FOREACH(c, circuit_get_global_list(), head) {
     if ((c->purpose == CIRCUIT_PURPOSE_C_INTRODUCING ||
         c->purpose == CIRCUIT_PURPOSE_C_INTRODUCE_ACK_WAIT) &&
         !c->marked_for_close && CIRCUIT_IS_ORIGIN(c)) {

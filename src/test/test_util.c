@@ -4,6 +4,7 @@
 /* See LICENSE for licensing information */
 
 #include "orconfig.h"
+#define COMPAT_PRIVATE
 #define CONTROL_PRIVATE
 #define MEMPOOL_PRIVATE
 #define UTIL_PRIVATE
@@ -795,6 +796,64 @@ test_util_expand_filename(void)
   tor_free(str);
 }
 #endif
+
+/** Test tor_escape_str_for_pt_args(). */
+static void
+test_util_escape_string_socks(void)
+{
+  char *escaped_string = NULL;
+
+  /** Simple backslash escape. */
+  escaped_string = tor_escape_str_for_pt_args("This is a backslash: \\",";\\");
+  test_assert(escaped_string);
+  test_streq(escaped_string, "This is a backslash: \\\\");
+  tor_free(escaped_string);
+
+  /** Simple semicolon escape. */
+  escaped_string = tor_escape_str_for_pt_args("First rule:Do not use ;",";\\");
+  test_assert(escaped_string);
+  test_streq(escaped_string, "First rule:Do not use \\;");
+  tor_free(escaped_string);
+
+  /** Empty string. */
+  escaped_string = tor_escape_str_for_pt_args("", ";\\");
+  test_assert(escaped_string);
+  test_streq(escaped_string, "");
+  tor_free(escaped_string);
+
+  /** Escape all characters. */
+  escaped_string = tor_escape_str_for_pt_args(";\\;\\", ";\\");
+  test_assert(escaped_string);
+  test_streq(escaped_string, "\\;\\\\\\;\\\\");
+  tor_free(escaped_string);
+
+  escaped_string = tor_escape_str_for_pt_args(";", ";\\");
+  test_assert(escaped_string);
+  test_streq(escaped_string, "\\;");
+  tor_free(escaped_string);
+
+ done:
+  tor_free(escaped_string);
+}
+
+static void
+test_util_string_is_key_value(void *ptr)
+{
+  (void)ptr;
+  test_assert(string_is_key_value(LOG_WARN, "key=value"));
+  test_assert(string_is_key_value(LOG_WARN, "k=v"));
+  test_assert(string_is_key_value(LOG_WARN, "key="));
+  test_assert(string_is_key_value(LOG_WARN, "x="));
+  test_assert(string_is_key_value(LOG_WARN, "xx="));
+  test_assert(!string_is_key_value(LOG_WARN, "=value"));
+  test_assert(!string_is_key_value(LOG_WARN, "=x"));
+  test_assert(!string_is_key_value(LOG_WARN, "="));
+
+  /* ??? */
+  /* test_assert(!string_is_key_value(LOG_WARN, "===")); */
+ done:
+  ;
+}
 
 /** Test basic string functionality. */
 static void
@@ -2223,6 +2282,7 @@ test_util_load_win_lib(void *ptr)
 }
 #endif
 
+#ifndef _WIN32
 static void
 clear_hex_errno(char *hex_errno)
 {
@@ -2266,6 +2326,7 @@ test_util_exit_status(void *ptr)
  done:
   ;
 }
+#endif
 
 #ifndef _WIN32
 /** Check that fgets waits until a full line, and not return a partial line, on
@@ -2567,14 +2628,14 @@ test_util_spawn_background_partial_read(void *ptr)
 }
 
 /**
- * Test for format_hex_number_for_helper_exit_status()
+ * Test for format_hex_number_sigsafe()
  */
 
 static void
 test_util_format_hex_number(void *ptr)
 {
   int i, len;
-  char buf[HEX_ERRNO_SIZE + 1];
+  char buf[33];
   const struct {
     const char *str;
     unsigned int x;
@@ -2583,6 +2644,8 @@ test_util_format_hex_number(void *ptr)
     {"1", 1},
     {"273A", 0x273a},
     {"FFFF", 0xffff},
+    {"7FFFFFFF", 0x7fffffff},
+    {"FFFFFFFF", 0xffffffff},
 #if UINT_MAX >= 0xffffffff
     {"31BC421D", 0x31bc421d},
     {"FFFFFFFF", 0xffffffff},
@@ -2593,19 +2656,23 @@ test_util_format_hex_number(void *ptr)
   (void)ptr;
 
   for (i = 0; test_data[i].str != NULL; ++i) {
-    len = format_hex_number_for_helper_exit_status(test_data[i].x,
-        buf, HEX_ERRNO_SIZE);
+    len = format_hex_number_sigsafe(test_data[i].x, buf, sizeof(buf));
     test_neq(len, 0);
-    buf[len] = '\0';
+    test_eq(len, strlen(buf));
     test_streq(buf, test_data[i].str);
   }
+
+  test_eq(4, format_hex_number_sigsafe(0xffff, buf, 5));
+  test_streq(buf, "FFFF");
+  test_eq(0, format_hex_number_sigsafe(0xffff, buf, 4));
+  test_eq(0, format_hex_number_sigsafe(0, buf, 1));
 
  done:
   return;
 }
 
 /**
- * Test that we can properly format q Windows command line
+ * Test that we can properly format a Windows command line
  */
 static void
 test_util_join_win_cmdline(void *ptr)
@@ -2816,7 +2883,7 @@ test_util_eat_whitespace(void *ptr)
   (void)ptr;
 
   /* Try one leading ws */
-  strcpy(str, "fuubaar");
+  strlcpy(str, "fuubaar", sizeof(str));
   for (i = 0; i < sizeof(ws); ++i) {
     str[0] = ws[i];
     test_eq_ptr(str + 1, eat_whitespace(str));
@@ -2831,14 +2898,14 @@ test_util_eat_whitespace(void *ptr)
   test_eq_ptr(str,     eat_whitespace_eos_no_nl(str, str + strlen(str)));
 
   /* Empty string */
-  strcpy(str, "");
+  strlcpy(str, "", sizeof(str));
   test_eq_ptr(str, eat_whitespace(str));
   test_eq_ptr(str, eat_whitespace_eos(str, str));
   test_eq_ptr(str, eat_whitespace_no_nl(str));
   test_eq_ptr(str, eat_whitespace_eos_no_nl(str, str));
 
   /* Only ws */
-  strcpy(str, " \t\r\n");
+  strlcpy(str, " \t\r\n", sizeof(str));
   test_eq_ptr(str + strlen(str), eat_whitespace(str));
   test_eq_ptr(str + strlen(str), eat_whitespace_eos(str, str + strlen(str)));
   test_eq_ptr(str + strlen(str) - 1,
@@ -2846,7 +2913,7 @@ test_util_eat_whitespace(void *ptr)
   test_eq_ptr(str + strlen(str) - 1,
               eat_whitespace_eos_no_nl(str, str + strlen(str)));
 
-  strcpy(str, " \t\r ");
+  strlcpy(str, " \t\r ", sizeof(str));
   test_eq_ptr(str + strlen(str), eat_whitespace(str));
   test_eq_ptr(str + strlen(str),
               eat_whitespace_eos(str, str + strlen(str)));
@@ -2855,7 +2922,7 @@ test_util_eat_whitespace(void *ptr)
               eat_whitespace_eos_no_nl(str, str + strlen(str)));
 
   /* Multiple ws */
-  strcpy(str, "fuubaar");
+  strlcpy(str, "fuubaar", sizeof(str));
   for (i = 0; i < sizeof(ws); ++i)
     str[i] = ws[i];
   test_eq_ptr(str + sizeof(ws), eat_whitespace(str));
@@ -2865,28 +2932,28 @@ test_util_eat_whitespace(void *ptr)
               eat_whitespace_eos_no_nl(str, str + strlen(str)));
 
   /* Eat comment */
-  strcpy(str, "# Comment \n No Comment");
+  strlcpy(str, "# Comment \n No Comment", sizeof(str));
   test_streq("No Comment", eat_whitespace(str));
   test_streq("No Comment", eat_whitespace_eos(str, str + strlen(str)));
   test_eq_ptr(str, eat_whitespace_no_nl(str));
   test_eq_ptr(str, eat_whitespace_eos_no_nl(str, str + strlen(str)));
 
   /* Eat comment & ws mix */
-  strcpy(str, " # \t Comment \n\t\nNo Comment");
+  strlcpy(str, " # \t Comment \n\t\nNo Comment", sizeof(str));
   test_streq("No Comment", eat_whitespace(str));
   test_streq("No Comment", eat_whitespace_eos(str, str + strlen(str)));
   test_eq_ptr(str + 1, eat_whitespace_no_nl(str));
   test_eq_ptr(str + 1, eat_whitespace_eos_no_nl(str, str + strlen(str)));
 
   /* Eat entire comment */
-  strcpy(str, "#Comment");
+  strlcpy(str, "#Comment", sizeof(str));
   test_eq_ptr(str + strlen(str), eat_whitespace(str));
   test_eq_ptr(str + strlen(str), eat_whitespace_eos(str, str + strlen(str)));
   test_eq_ptr(str, eat_whitespace_no_nl(str));
   test_eq_ptr(str, eat_whitespace_eos_no_nl(str, str + strlen(str)));
 
   /* Blank line, then comment */
-  strcpy(str, " \t\n # Comment");
+  strlcpy(str, " \t\n # Comment", sizeof(str));
   test_eq_ptr(str + strlen(str), eat_whitespace(str));
   test_eq_ptr(str + strlen(str), eat_whitespace_eos(str, str + strlen(str)));
   test_eq_ptr(str + 2, eat_whitespace_no_nl(str));
@@ -3211,11 +3278,175 @@ test_util_mathlog(void *arg)
   ;
 }
 
+static void
+test_util_round_to_next_multiple_of(void *arg)
+{
+  (void)arg;
+
+  test_assert(round_uint64_to_next_multiple_of(0,1) == 0);
+  test_assert(round_uint64_to_next_multiple_of(0,7) == 0);
+
+  test_assert(round_uint64_to_next_multiple_of(99,1) == 99);
+  test_assert(round_uint64_to_next_multiple_of(99,7) == 105);
+  test_assert(round_uint64_to_next_multiple_of(99,9) == 99);
+
+ done:
+  ;
+}
+
+static void
+test_util_strclear(void *arg)
+{
+  static const char *vals[] = { "", "a", "abcdef", "abcdefgh", NULL };
+  int i;
+  char *v = NULL;
+  (void)arg;
+
+  for (i = 0; vals[i]; ++i) {
+    size_t n;
+    v = tor_strdup(vals[i]);
+    n = strlen(v);
+    tor_strclear(v);
+    tt_assert(tor_mem_is_zero(v, n+1));
+    tor_free(v);
+  }
+ done:
+  tor_free(v);
+}
+
 #define UTIL_LEGACY(name)                                               \
   { #name, legacy_test_helper, 0, &legacy_setup, test_util_ ## name }
 
 #define UTIL_TEST(name, flags)                          \
   { #name, test_util_ ## name, flags, NULL, NULL }
+
+#ifdef FD_CLOEXEC
+#define CAN_CHECK_CLOEXEC
+static int
+fd_is_cloexec(tor_socket_t fd)
+{
+  int flags = fcntl(fd, F_GETFD, 0);
+  return (flags & FD_CLOEXEC) == FD_CLOEXEC;
+}
+#endif
+
+#ifndef _WIN32
+#define CAN_CHECK_NONBLOCK
+static int
+fd_is_nonblocking(tor_socket_t fd)
+{
+  int flags = fcntl(fd, F_GETFL, 0);
+  return (flags & O_NONBLOCK) == O_NONBLOCK;
+}
+#endif
+
+static void
+test_util_socket(void *arg)
+{
+  tor_socket_t fd1 = TOR_INVALID_SOCKET;
+  tor_socket_t fd2 = TOR_INVALID_SOCKET;
+  tor_socket_t fd3 = TOR_INVALID_SOCKET;
+  tor_socket_t fd4 = TOR_INVALID_SOCKET;
+  int n = get_n_open_sockets();
+
+  TT_BLATHER(("Starting with %d open sockets.", n));
+
+  (void)arg;
+
+  fd1 = tor_open_socket_with_extensions(AF_INET, SOCK_STREAM, 0, 0, 0);
+  fd2 = tor_open_socket_with_extensions(AF_INET, SOCK_STREAM, 0, 0, 1);
+  tt_assert(SOCKET_OK(fd1));
+  tt_assert(SOCKET_OK(fd2));
+  tt_int_op(get_n_open_sockets(), ==, n + 2);
+  //fd3 = tor_open_socket_with_extensions(AF_INET, SOCK_STREAM, 0, 1, 0);
+  //fd4 = tor_open_socket_with_extensions(AF_INET, SOCK_STREAM, 0, 1, 1);
+  fd3 = tor_open_socket(AF_INET, SOCK_STREAM, 0);
+  fd4 = tor_open_socket_nonblocking(AF_INET, SOCK_STREAM, 0);
+  tt_assert(SOCKET_OK(fd3));
+  tt_assert(SOCKET_OK(fd4));
+  tt_int_op(get_n_open_sockets(), ==, n + 4);
+
+#ifdef CAN_CHECK_CLOEXEC
+  tt_int_op(fd_is_cloexec(fd1), ==, 0);
+  tt_int_op(fd_is_cloexec(fd2), ==, 0);
+  tt_int_op(fd_is_cloexec(fd3), ==, 1);
+  tt_int_op(fd_is_cloexec(fd4), ==, 1);
+#endif
+#ifdef CAN_CHECK_NONBLOCK
+  tt_int_op(fd_is_nonblocking(fd1), ==, 0);
+  tt_int_op(fd_is_nonblocking(fd2), ==, 1);
+  tt_int_op(fd_is_nonblocking(fd3), ==, 0);
+  tt_int_op(fd_is_nonblocking(fd4), ==, 1);
+#endif
+
+  tor_close_socket(fd1);
+  tor_close_socket(fd2);
+  fd1 = fd2 = TOR_INVALID_SOCKET;
+  tt_int_op(get_n_open_sockets(), ==, n + 2);
+  tor_close_socket(fd3);
+  tor_close_socket(fd4);
+  fd3 = fd4 = TOR_INVALID_SOCKET;
+  tt_int_op(get_n_open_sockets(), ==, n);
+
+ done:
+  if (SOCKET_OK(fd1))
+    tor_close_socket(fd1);
+  if (SOCKET_OK(fd2))
+    tor_close_socket(fd2);
+  if (SOCKET_OK(fd3))
+    tor_close_socket(fd3);
+  if (SOCKET_OK(fd4))
+    tor_close_socket(fd4);
+}
+
+static void *
+socketpair_test_setup(const struct testcase_t *testcase)
+{
+  return testcase->setup_data;
+}
+static int
+socketpair_test_cleanup(const struct testcase_t *testcase, void *ptr)
+{
+  (void)testcase;
+  (void)ptr;
+  return 1;
+}
+
+static const struct testcase_setup_t socketpair_setup = {
+  socketpair_test_setup, socketpair_test_cleanup
+};
+
+/* Test for socketpair and ersatz_socketpair().  We test them both, since
+ * the latter is a tolerably good way to exersize tor_accept_socket(). */
+static void
+test_util_socketpair(void *arg)
+{
+  const int ersatz = !strcmp(arg, "1");
+  int (*const tor_socketpair_fn)(int, int, int, tor_socket_t[2]) =
+    ersatz ? tor_ersatz_socketpair : tor_socketpair;
+  int n = get_n_open_sockets();
+  tor_socket_t fds[2] = {TOR_INVALID_SOCKET, TOR_INVALID_SOCKET};
+  const int family = AF_UNIX;
+
+  tt_int_op(0, ==, tor_socketpair_fn(family, SOCK_STREAM, 0, fds));
+  tt_assert(SOCKET_OK(fds[0]));
+  tt_assert(SOCKET_OK(fds[1]));
+  tt_int_op(get_n_open_sockets(), ==, n + 2);
+#ifdef CAN_CHECK_CLOEXEC
+  tt_int_op(fd_is_cloexec(fds[0]), ==, 1);
+  tt_int_op(fd_is_cloexec(fds[1]), ==, 1);
+#endif
+#ifdef CAN_CHECK_NONBLOCK
+  tt_int_op(fd_is_nonblocking(fds[0]), ==, 0);
+  tt_int_op(fd_is_nonblocking(fds[1]), ==, 0);
+#endif
+
+ done:
+  if (SOCKET_OK(fds[0]))
+    tor_close_socket(fds[0]);
+  if (SOCKET_OK(fds[1]))
+    tor_close_socket(fds[1]);
+}
 
 struct testcase_t util_tests[] = {
   UTIL_LEGACY(time),
@@ -3227,6 +3458,8 @@ struct testcase_t util_tests[] = {
 #ifndef _WIN32
   UTIL_LEGACY(expand_filename),
 #endif
+  UTIL_LEGACY(escape_string_socks),
+  UTIL_LEGACY(string_is_key_value),
   UTIL_LEGACY(strmisc),
   UTIL_LEGACY(pow2),
   UTIL_LEGACY(gzip),
@@ -3240,6 +3473,8 @@ struct testcase_t util_tests[] = {
   UTIL_LEGACY(path_is_relative),
   UTIL_LEGACY(strtok),
   UTIL_LEGACY(di_ops),
+  UTIL_TEST(round_to_next_multiple_of, 0),
+  UTIL_TEST(strclear, 0),
   UTIL_TEST(find_str_at_start_of_line, 0),
   UTIL_TEST(string_is_C_identifier, 0),
   UTIL_TEST(asprintf, 0),
@@ -3248,8 +3483,8 @@ struct testcase_t util_tests[] = {
 #ifdef _WIN32
   UTIL_TEST(load_win_lib, 0),
 #endif
-  UTIL_TEST(exit_status, 0),
 #ifndef _WIN32
+  UTIL_TEST(exit_status, 0),
   UTIL_TEST(fgets_eagain, TT_SKIP),
 #endif
   UTIL_TEST(spawn_background_ok, 0),
@@ -3269,6 +3504,11 @@ struct testcase_t util_tests[] = {
   UTIL_TEST(read_file_eof_zero_bytes, 0),
   UTIL_TEST(mathlog, 0),
   UTIL_TEST(weak_random, 0),
+  UTIL_TEST(socket, TT_FORK),
+  { "socketpair", test_util_socketpair, TT_FORK, &socketpair_setup,
+    (void*)"0" },
+  { "socketpair_ersatz", test_util_socketpair, TT_FORK,
+    &socketpair_setup, (void*)"1" },
   END_OF_TESTCASES
 };
 

@@ -60,7 +60,7 @@ static char *make_consensus_method_list(int low, int high, const char *sep);
 /** Return a new string containing the string representation of the vote in
  * <b>v3_ns</b>, signed with our v3 signing key <b>private_signing_key</b>.
  * For v3 authorities. */
-char *
+STATIC char *
 format_networkstatus_vote(crypto_pk_t *private_signing_key,
                           networkstatus_t *v3_ns)
 {
@@ -587,7 +587,7 @@ compute_consensus_versions_list(smartlist_t *lst, int n_versioning)
 /** Helper: given a list of valid networkstatus_t, return a new string
  * containing the contents of the consensus network parameter set.
  */
-/* private */ char *
+STATIC char *
 dirvote_compute_params(smartlist_t *votes, int method, int total_authorities)
 {
   int i;
@@ -2533,12 +2533,13 @@ dirvote_get_preferred_voting_intervals(vote_timing_t *timing_out)
   timing_out->dist_delay = options->V3AuthDistDelay;
 }
 
-/** Return the start of the next interval of size <b>interval</b> (in seconds)
- * after <b>now</b>.  Midnight always starts a fresh interval, and if the last
- * interval of a day would be truncated to less than half its size, it is
- * rolled into the previous interval. */
+/** Return the start of the next interval of size <b>interval</b> (in
+ * seconds) after <b>now</b>, plus <b>offset</b>. Midnight always
+ * starts a fresh interval, and if the last interval of a day would be
+ * truncated to less than half its size, it is rolled into the
+ * previous interval. */
 time_t
-dirvote_get_start_of_next_interval(time_t now, int interval)
+dirvote_get_start_of_next_interval(time_t now, int interval, int offset)
 {
   struct tm tm;
   time_t midnight_today=0;
@@ -2565,6 +2566,10 @@ dirvote_get_start_of_next_interval(time_t now, int interval)
    * skip over to the next day. */
   if (next + interval/2 > midnight_tomorrow)
     next = midnight_tomorrow;
+
+  next += offset;
+  if (next - interval > now)
+    next -= interval;
 
   return next;
 }
@@ -2629,8 +2634,10 @@ dirvote_recalculate_timing(const or_options_t *options, time_t now)
     vote_delay = dist_delay = interval / 4;
 
   start = voting_schedule.interval_starts =
-    dirvote_get_start_of_next_interval(now,interval);
-  end = dirvote_get_start_of_next_interval(start+1, interval);
+    dirvote_get_start_of_next_interval(now,interval,
+                                      options->TestingV3AuthVotingStartOffset);
+  end = dirvote_get_start_of_next_interval(start+1, interval,
+                                      options->TestingV3AuthVotingStartOffset);
 
   tor_assert(end > start);
 

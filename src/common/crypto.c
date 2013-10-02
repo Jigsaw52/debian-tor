@@ -56,6 +56,7 @@
 #include "../common/util.h"
 #include "container.h"
 #include "compat.h"
+#include "sandbox.h"
 
 #if OPENSSL_VERSION_NUMBER < OPENSSL_V_SERIES(0,9,8)
 #error "We require OpenSSL >= 0.9.8"
@@ -114,7 +115,6 @@ crypto_get_rsa_padding_overhead(int padding)
   switch (padding)
     {
     case RSA_PKCS1_OAEP_PADDING: return PKCS1_OAEP_PADDING_OVERHEAD;
-    case RSA_PKCS1_PADDING: return PKCS1_PADDING_OVERHEAD;
     default: tor_assert(0); return -1;
     }
 }
@@ -126,7 +126,6 @@ crypto_get_rsa_padding(int padding)
 {
   switch (padding)
     {
-    case PK_PKCS1_PADDING: return RSA_PKCS1_PADDING;
     case PK_PKCS1_OAEP_PADDING: return RSA_PKCS1_OAEP_PADDING;
     default: tor_assert(0); return -1;
     }
@@ -197,6 +196,27 @@ try_load_engine(const char *path, const char *engine)
 }
 #endif
 
+/* Returns a trimmed and human-readable version of an openssl version string
+* <b>raw_version</b>. They are usually in the form of 'OpenSSL 1.0.0b 10
+* May 2012' and this will parse them into a form similar to '1.0.0b' */
+static char *
+parse_openssl_version_str(const char *raw_version)
+{
+  const char *end_of_version = NULL;
+  /* The output should be something like "OpenSSL 1.0.0b 10 May 2012. Let's
+     trim that down. */
+  if (!strcmpstart(raw_version, "OpenSSL ")) {
+    raw_version += strlen("OpenSSL ");
+    end_of_version = strchr(raw_version, ' ');
+  }
+
+  if (end_of_version)
+    return tor_strndup(raw_version,
+                      end_of_version-raw_version);
+  else
+    return tor_strdup(raw_version);
+}
+
 static char *crypto_openssl_version_str = NULL;
 /* Return a human-readable version of the run-time openssl version number. */
 const char *
@@ -204,21 +224,22 @@ crypto_openssl_get_version_str(void)
 {
   if (crypto_openssl_version_str == NULL) {
     const char *raw_version = SSLeay_version(SSLEAY_VERSION);
-    const char *end_of_version = NULL;
-    /* The output should be something like "OpenSSL 1.0.0b 10 May 2012. Let's
-       trim that down. */
-    if (!strcmpstart(raw_version, "OpenSSL ")) {
-      raw_version += strlen("OpenSSL ");
-      end_of_version = strchr(raw_version, ' ');
-    }
-
-    if (end_of_version)
-      crypto_openssl_version_str = tor_strndup(raw_version,
-                                               end_of_version-raw_version);
-    else
-      crypto_openssl_version_str = tor_strdup(raw_version);
+    crypto_openssl_version_str = parse_openssl_version_str(raw_version);
   }
   return crypto_openssl_version_str;
+}
+
+static char *crypto_openssl_header_version_str = NULL;
+/* Return a human-readable version of the compile-time openssl version
+* number. */
+const char *
+crypto_openssl_get_header_version_str(void)
+{
+  if (crypto_openssl_header_version_str == NULL) {
+    crypto_openssl_header_version_str =
+                        parse_openssl_version_str(OPENSSL_VERSION_TEXT);
+  }
+  return crypto_openssl_header_version_str;
 }
 
 /** Initialize the crypto library.  Return 0 on success, -1 on failure.
@@ -1154,22 +1175,21 @@ int
 crypto_pk_asn1_encode(crypto_pk_t *pk, char *dest, size_t dest_len)
 {
   int len;
-  unsigned char *buf, *cp;
-  len = i2d_RSAPublicKey(pk->key, NULL);
-  if (len < 0 || (size_t)len > dest_len || dest_len > SIZE_T_CEILING)
+  unsigned char *buf = NULL;
+
+  len = i2d_RSAPublicKey(pk->key, &buf);
+  if (len < 0 || buf == NULL)
     return -1;
-  cp = buf = tor_malloc(len+1);
-  len = i2d_RSAPublicKey(pk->key, &cp);
-  if (len < 0) {
-    crypto_log_errors(LOG_WARN,"encoding public key");
-    tor_free(buf);
+
+  if ((size_t)len > dest_len || dest_len > SIZE_T_CEILING) {
+    OPENSSL_free(buf);
     return -1;
   }
   /* We don't encode directly into 'dest', because that would be illegal
    * type-punning.  (C99 is smarter than me, C99 is smarter than me...)
    */
   memcpy(dest,buf,len);
-  tor_free(buf);
+  OPENSSL_free(buf);
   return len;
 }
 
@@ -1200,24 +1220,17 @@ crypto_pk_asn1_decode(const char *str, size_t len)
 int
 crypto_pk_get_digest(crypto_pk_t *pk, char *digest_out)
 {
-  unsigned char *buf, *bufp;
+  unsigned char *buf = NULL;
   int len;
 
-  len = i2d_RSAPublicKey(pk->key, NULL);
-  if (len < 0)
+  len = i2d_RSAPublicKey(pk->key, &buf);
+  if (len < 0 || buf == NULL)
     return -1;
-  buf = bufp = tor_malloc(len+1);
-  len = i2d_RSAPublicKey(pk->key, &bufp);
-  if (len < 0) {
-    crypto_log_errors(LOG_WARN,"encoding public key");
-    tor_free(buf);
-    return -1;
-  }
   if (crypto_digest(digest_out, (char*)buf, len) < 0) {
-    tor_free(buf);
+    OPENSSL_free(buf);
     return -1;
   }
-  tor_free(buf);
+  OPENSSL_free(buf);
   return 0;
 }
 
@@ -1226,31 +1239,24 @@ crypto_pk_get_digest(crypto_pk_t *pk, char *digest_out)
 int
 crypto_pk_get_all_digests(crypto_pk_t *pk, digests_t *digests_out)
 {
-  unsigned char *buf, *bufp;
+  unsigned char *buf = NULL;
   int len;
 
-  len = i2d_RSAPublicKey(pk->key, NULL);
-  if (len < 0)
+  len = i2d_RSAPublicKey(pk->key, &buf);
+  if (len < 0 || buf == NULL)
     return -1;
-  buf = bufp = tor_malloc(len+1);
-  len = i2d_RSAPublicKey(pk->key, &bufp);
-  if (len < 0) {
-    crypto_log_errors(LOG_WARN,"encoding public key");
-    tor_free(buf);
-    return -1;
-  }
   if (crypto_digest_all(digests_out, (char*)buf, len) < 0) {
-    tor_free(buf);
+    OPENSSL_free(buf);
     return -1;
   }
-  tor_free(buf);
+  OPENSSL_free(buf);
   return 0;
 }
 
 /** Copy <b>in</b> to the <b>outlen</b>-byte buffer <b>out</b>, adding spaces
  * every four spaces. */
-/* static */ void
-add_spaces_to_fp(char *out, size_t outlen, const char *in)
+void
+crypto_add_spaces_to_fp(char *out, size_t outlen, const char *in)
 {
   int n = 0;
   char *end = out+outlen;
@@ -1287,7 +1293,7 @@ crypto_pk_get_fingerprint(crypto_pk_t *pk, char *fp_out, int add_space)
   }
   base16_encode(hexdigest,sizeof(hexdigest),digest,DIGEST_LEN);
   if (add_space) {
-    add_spaces_to_fp(fp_out, FINGERPRINT_LEN+1, hexdigest);
+    crypto_add_spaces_to_fp(fp_out, FINGERPRINT_LEN+1, hexdigest);
   } else {
     strncpy(fp_out, hexdigest, HEX_DIGEST_LEN+1);
   }
@@ -1637,21 +1643,6 @@ crypto_digest_smartlist(char *digest_out, size_t len_out,
   crypto_digest_free(d);
 }
 
-/** Compute the HMAC-SHA-1 of the <b>msg_len</b> bytes in <b>msg</b>, using
- * the <b>key</b> of length <b>key_len</b>.  Store the DIGEST_LEN-byte result
- * in <b>hmac_out</b>.
- */
-void
-crypto_hmac_sha1(char *hmac_out,
-                 const char *key, size_t key_len,
-                 const char *msg, size_t msg_len)
-{
-  tor_assert(key_len < INT_MAX);
-  tor_assert(msg_len < INT_MAX);
-  HMAC(EVP_sha1(), key, (int)key_len, (unsigned char*)msg, (int)msg_len,
-       (unsigned char*)hmac_out, NULL);
-}
-
 /** Compute the HMAC-SHA-256 of the <b>msg_len</b> bytes in <b>msg</b>, using
  * the <b>key</b> of length <b>key_len</b>.  Store the DIGEST256_LEN-byte
  * result in <b>hmac_out</b>.
@@ -1720,7 +1711,7 @@ crypto_store_dynamic_dh_modulus(const char *fname)
 {
   int len, new_len;
   DH *dh = NULL;
-  unsigned char *dh_string_repr = NULL, *cp = NULL;
+  unsigned char *dh_string_repr = NULL;
   char *base64_encoded_dh = NULL;
   char *file_string = NULL;
   int retval = -1;
@@ -1744,15 +1735,8 @@ crypto_store_dynamic_dh_modulus(const char *fname)
   if (!BN_set_word(dh->g, DH_GENERATOR))
     goto done;
 
-  len = i2d_DHparams(dh, NULL);
-  if (len < 0) {
-    log_warn(LD_CRYPTO, "Error occured while DER encoding DH modulus (1).");
-    goto done;
-  }
-
-  cp = dh_string_repr = tor_malloc_zero(len+1);
-  len = i2d_DHparams(dh, &cp);
-  if ((len < 0) || ((cp - dh_string_repr) != len)) {
+  len = i2d_DHparams(dh, &dh_string_repr);
+  if ((len < 0) || (dh_string_repr == NULL)) {
     log_warn(LD_CRYPTO, "Error occured while DER encoding DH modulus (2).");
     goto done;
   }
@@ -1779,7 +1763,8 @@ crypto_store_dynamic_dh_modulus(const char *fname)
  done:
   if (dh)
     DH_free(dh);
-  tor_free(dh_string_repr);
+  if (dh_string_repr)
+    OPENSSL_free(dh_string_repr);
   tor_free(base64_encoded_dh);
   tor_free(file_string);
 
@@ -2387,7 +2372,7 @@ crypto_strongest_rand(uint8_t *out, size_t out_len)
   return 0;
 #else
   for (i = 0; filenames[i]; ++i) {
-    fd = open(filenames[i], O_RDONLY, 0);
+    fd = open(sandbox_intern_string(filenames[i]), O_RDONLY, 0);
     if (fd<0) continue;
     log_info(LD_CRYPTO, "Reading entropy from \"%s\"", filenames[i]);
     n = read_all(fd, (char*)out, out_len, 0);
@@ -2442,8 +2427,8 @@ crypto_seed_rng(int startup)
 /** Write <b>n</b> bytes of strong random data to <b>to</b>. Return 0 on
  * success, -1 on failure.
  */
-int
-crypto_rand(char *to, size_t n)
+MOCK_IMPL(int,
+crypto_rand, (char *to, size_t n))
 {
   int r;
   tor_assert(n < INT_MAX);
@@ -3137,6 +3122,7 @@ crypto_global_cleanup(void)
   }
 #endif
   tor_free(crypto_openssl_version_str);
+  tor_free(crypto_openssl_header_version_str);
   return 0;
 }
 

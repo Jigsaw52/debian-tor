@@ -12,10 +12,12 @@
 #ifndef TOR_DIRVOTE_H
 #define TOR_DIRVOTE_H
 
+#include "testsupport.h"
+
 /** Lowest allowable value for VoteSeconds. */
-#define MIN_VOTE_SECONDS 20
+#define MIN_VOTE_SECONDS 2
 /** Lowest allowable value for DistSeconds. */
-#define MIN_DIST_SECONDS 20
+#define MIN_DIST_SECONDS 2
 /** Smallest allowable voting interval. */
 #define MIN_VOTE_INTERVAL 300
 
@@ -86,7 +88,9 @@ authority_cert_t *authority_cert_dup(authority_cert_t *cert);
 
 /* vote scheduling */
 void dirvote_get_preferred_voting_intervals(vote_timing_t *timing_out);
-time_t dirvote_get_start_of_next_interval(time_t now, int interval);
+time_t dirvote_get_start_of_next_interval(time_t now,
+                                          int interval,
+                                          int offset);
 void dirvote_recalculate_timing(const or_options_t *options, time_t now);
 void dirvote_act(const or_options_t *options, time_t now);
 
@@ -134,9 +138,9 @@ document_signature_t *voter_get_sig_by_algorithm(
                            digest_algorithm_t alg);
 
 #ifdef DIRVOTE_PRIVATE
-char *format_networkstatus_vote(crypto_pk_t *private_key,
+STATIC char *format_networkstatus_vote(crypto_pk_t *private_key,
                                  networkstatus_t *v3_ns);
-char *dirvote_compute_params(smartlist_t *votes, int method,
+STATIC char *dirvote_compute_params(smartlist_t *votes, int method,
                              int total_authorities);
 #endif
 

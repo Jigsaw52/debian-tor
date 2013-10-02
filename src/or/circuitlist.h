@@ -12,7 +12,11 @@
 #ifndef TOR_CIRCUITLIST_H
 #define TOR_CIRCUITLIST_H
 
-circuit_t * circuit_get_global_list_(void);
+#include "testsupport.h"
+
+TOR_LIST_HEAD(global_circuitlist_s, circuit_t);
+
+struct global_circuitlist_s* circuit_get_global_list(void);
 const char *circuit_state_to_string(int state);
 const char *circuit_purpose_to_controller_string(uint8_t purpose);
 const char *circuit_purpose_to_controller_hs_state_string(uint8_t purpose);
@@ -23,6 +27,8 @@ void circuit_set_p_circid_chan(or_circuit_t *circ, circid_t id,
                                channel_t *chan);
 void circuit_set_n_circid_chan(circuit_t *circ, circid_t id,
                                channel_t *chan);
+void channel_mark_circid_unusable(channel_t *chan, circid_t id);
+void channel_mark_circid_usable(channel_t *chan, circid_t id);
 void circuit_set_state(circuit_t *circ, uint8_t state);
 void circuit_close_all_marked(void);
 int32_t circuit_initial_package_window(void);
@@ -62,6 +68,14 @@ void assert_cpath_layer_ok(const crypt_path_t *cp);
 void assert_circuit_ok(const circuit_t *c);
 void circuit_free_all(void);
 void circuits_handle_oom(size_t current_allocation);
+
+void channel_note_destroy_pending(channel_t *chan, circid_t id);
+void channel_note_destroy_not_pending(channel_t *chan, circid_t id);
+
+#ifdef CIRCUITLIST_PRIVATE
+STATIC void circuit_free(circuit_t *circ);
+STATIC size_t n_cells_in_circ_queues(const circuit_t *c);
+#endif
 
 #endif
 

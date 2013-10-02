@@ -24,6 +24,7 @@
 #include "torint.h"
 #include "container.h"
 #include "address.h"
+#include "../common/sandbox.h"
 
 #ifdef _WIN32
 #include <io.h>
@@ -879,6 +880,39 @@ tor_digest_is_zero(const char *digest)
   return tor_memeq(digest, ZERO_DIGEST, DIGEST_LEN);
 }
 
+/** Return true if <b>string</b> is a valid '<key>=[<value>]' string.
+ *  <value> is optional, to indicate the empty string. Log at logging
+ *  <b>severity</b> if something ugly happens. */
+int
+string_is_key_value(int severity, const char *string)
+{
+  /* position of equal sign in string */
+  const char *equal_sign_pos = NULL;
+
+  tor_assert(string);
+
+  if (strlen(string) < 2) { /* "x=" is shortest args string */
+    tor_log(severity, LD_GENERAL, "'%s' is too short to be a k=v value.",
+            escaped(string));
+    return 0;
+  }
+
+  equal_sign_pos = strchr(string, '=');
+  if (!equal_sign_pos) {
+    tor_log(severity, LD_GENERAL, "'%s' is not a k=v value.", escaped(string));
+    return 0;
+  }
+
+  /* validate that the '=' is not in the beginning of the string. */
+  if (equal_sign_pos == string) {
+    tor_log(severity, LD_GENERAL, "'%s' is not a valid k=v value.",
+            escaped(string));
+    return 0;
+  }
+
+  return 1;
+}
+
 /** Return true iff the DIGEST256_LEN bytes in digest are all zero. */
 int
 tor_digest256_is_zero(const char *digest)
@@ -1188,6 +1222,43 @@ escaped(const char *s)
     escaped_val_ = NULL;
 
   return escaped_val_;
+}
+
+/** Return a newly allocated string equal to <b>string</b>, except that every
+ * character in <b>chars_to_escape</b> is preceded by a backslash. */
+char *
+tor_escape_str_for_pt_args(const char *string, const char *chars_to_escape)
+{
+  char *new_string = NULL;
+  char *new_cp = NULL;
+  size_t length, new_length;
+
+  tor_assert(string);
+
+  length = strlen(string);
+
+  if (!length) /* If we were given the empty string, return the same. */
+    return tor_strdup("");
+  /* (new_length > SIZE_MAX) => ((length * 2) + 1 > SIZE_MAX) =>
+     (length*2 > SIZE_MAX - 1) => (length > (SIZE_MAX - 1)/2) */
+  if (length > (SIZE_MAX - 1)/2) /* check for overflow */
+    return NULL;
+
+  /* this should be enough even if all characters must be escaped */
+  new_length = (length * 2) + 1;
+
+  new_string = new_cp = tor_malloc(new_length);
+
+  while (*string) {
+    if (strchr(chars_to_escape, *string))
+      *new_cp++ = '\\';
+
+    *new_cp++ = *string++;
+  }
+
+  *new_cp = '\0'; /* NUL-terminate the new string */
+
+  return new_string;
 }
 
 /* =====
@@ -1729,7 +1800,7 @@ file_status(const char *fname)
   int r;
   f = tor_strdup(fname);
   clean_name_for_stat(f);
-  r = stat(f, &st);
+  r = stat(sandbox_intern_string(f), &st);
   tor_free(f);
   if (r) {
     if (errno == ENOENT) {
@@ -1779,7 +1850,7 @@ check_private_dir(const char *dirname, cpd_check_t check,
   tor_assert(dirname);
   f = tor_strdup(dirname);
   clean_name_for_stat(f);
-  r = stat(f, &st);
+  r = stat(sandbox_intern_string(f), &st);
   tor_free(f);
   if (r) {
     if (errno != ENOENT) {
@@ -2146,9 +2217,9 @@ write_bytes_to_file_impl(const char *fname, const char *str, size_t len,
 
 /** As write_str_to_file, but does not assume a NUL-terminated
  * string. Instead, we write <b>len</b> bytes, starting at <b>str</b>. */
-int
-write_bytes_to_file(const char *fname, const char *str, size_t len,
-                    int bin)
+MOCK_IMPL(int,
+write_bytes_to_file,(const char *fname, const char *str, size_t len,
+                     int bin))
 {
   return write_bytes_to_file_impl(fname, str, len,
                                   OPEN_FLAGS_REPLACE|(bin?O_BINARY:O_TEXT));
@@ -3010,9 +3081,10 @@ tor_listdir(const char *dirname)
   FindClose(handle);
   tor_free(pattern);
 #else
+  const char *prot_dname = sandbox_intern_string(dirname);
   DIR *d;
   struct dirent *de;
-  if (!(d = opendir(dirname)))
+  if (!(d = opendir(prot_dname)))
     return NULL;
 
   result = smartlist_new();
@@ -3309,13 +3381,13 @@ tor_join_win_cmdline(const char *argv[])
 }
 
 /**
- * Helper function to output hex numbers, called by
- * format_helper_exit_status().  This writes the hexadecimal digits of x into
- * buf, up to max_len digits, and returns the actual number of digits written.
- * If there is insufficient space, it will write nothing and return 0.
+ * Helper function to output hex numbers from within a signal handler.
  *
- * This function DOES NOT add a terminating NUL character to its output: be
- * careful!
+ * Writes the nul-terminated hexadecimal digits of <b>x</b> into a buffer
+ * <b>buf</b> of size <b>buf_len</b>, and return the actual number of digits
+ * written, not counting the terminal NUL.
+ *
+ * If there is insufficient space, write nothing and return 0.
  *
  * This accepts an unsigned int because format_helper_exit_status() needs to
  * call it with a signed int and an unsigned char, and since the C standard
@@ -3330,15 +3402,14 @@ tor_join_win_cmdline(const char *argv[])
  * arbitrary C functions.
  */
 int
-format_hex_number_for_helper_exit_status(unsigned int x, char *buf,
-                                         int max_len)
+format_hex_number_sigsafe(unsigned int x, char *buf, int buf_len)
 {
   int len;
   unsigned int tmp;
   char *cur;
 
   /* Sanity check */
-  if (!buf || max_len <= 0)
+  if (!buf || buf_len <= 1)
     return 0;
 
   /* How many chars do we need for x? */
@@ -3354,7 +3425,7 @@ format_hex_number_for_helper_exit_status(unsigned int x, char *buf,
   }
 
   /* Bail if we would go past the end of the buffer */
-  if (len > max_len)
+  if (len+1 > buf_len)
     return 0;
 
   /* Point to last one */
@@ -3366,10 +3437,13 @@ format_hex_number_for_helper_exit_status(unsigned int x, char *buf,
     x >>= 4;
   } while (x != 0 && cur >= buf);
 
+  buf[len] = '\0';
+
   /* Return len */
   return len;
 }
 
+#ifndef _WIN32
 /** Format <b>child_state</b> and <b>saved_errno</b> as a hex string placed in
  * <b>hex_errno</b>.  Called between fork and _exit, so must be signal-handler
  * safe.
@@ -3385,7 +3459,7 @@ format_hex_number_for_helper_exit_status(unsigned int x, char *buf,
  * On success return the number of characters added to hex_errno, not counting
  * the terminating NUL; return -1 on error.
  */
-int
+STATIC int
 format_helper_exit_status(unsigned char child_state, int saved_errno,
                           char *hex_errno)
 {
@@ -3416,8 +3490,8 @@ format_helper_exit_status(unsigned char child_state, int saved_errno,
   cur = hex_errno;
 
   /* Emit child_state */
-  written = format_hex_number_for_helper_exit_status(child_state,
-                                                     cur, left);
+  written = format_hex_number_sigsafe(child_state, cur, left);
+
   if (written <= 0)
     goto err;
 
@@ -3446,8 +3520,7 @@ format_helper_exit_status(unsigned char child_state, int saved_errno,
   }
 
   /* Emit unsigned_errno */
-  written = format_hex_number_for_helper_exit_status(unsigned_errno,
-                                                     cur, left);
+  written = format_hex_number_sigsafe(unsigned_errno, cur, left);
 
   if (written <= 0)
     goto err;
@@ -3478,6 +3551,7 @@ format_helper_exit_status(unsigned char child_state, int saved_errno,
  done:
   return res;
 }
+#endif
 
 /* Maximum number of file descriptors, if we cannot get it via sysconf() */
 #define DEFAULT_MAX_FD 256
@@ -3894,9 +3968,9 @@ tor_spawn_background(const char *const filename, const char **argv,
  *  <b>process_handle</b>.
  *  If <b>also_terminate_process</b> is true, also terminate the
  *  process of the process handle. */
-void
-tor_process_handle_destroy(process_handle_t *process_handle,
-                           int also_terminate_process)
+MOCK_IMPL(void,
+tor_process_handle_destroy,(process_handle_t *process_handle,
+                            int also_terminate_process))
 {
   if (!process_handle)
     return;
@@ -4405,9 +4479,9 @@ stream_status_to_string(enum stream_status stream_status)
 /** Return a smartlist containing lines outputted from
  *  <b>handle</b>. Return NULL on error, and set
  *  <b>stream_status_out</b> appropriately. */
-smartlist_t *
-tor_get_lines_from_handle(HANDLE *handle,
-                          enum stream_status *stream_status_out)
+MOCK_IMPL(smartlist_t *,
+tor_get_lines_from_handle, (HANDLE *handle,
+                            enum stream_status *stream_status_out))
 {
   int pos;
   char stdout_buf[600] = {0};
@@ -4495,8 +4569,9 @@ log_from_handle(HANDLE *pipe, int severity)
 /** Return a smartlist containing lines outputted from
  *  <b>handle</b>. Return NULL on error, and set
  *  <b>stream_status_out</b> appropriately. */
-smartlist_t *
-tor_get_lines_from_handle(FILE *handle, enum stream_status *stream_status_out)
+MOCK_IMPL(smartlist_t *,
+tor_get_lines_from_handle, (FILE *handle,
+                            enum stream_status *stream_status_out))
 {
   enum stream_status stream_status;
   char stdout_buf[400];

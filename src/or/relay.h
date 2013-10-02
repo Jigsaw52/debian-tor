@@ -51,10 +51,11 @@ size_t packed_cell_mem_cost(void);
 /* For channeltls.c */
 void packed_cell_free(packed_cell_t *cell);
 
+void cell_queue_init(cell_queue_t *queue);
 void cell_queue_clear(cell_queue_t *queue);
 void cell_queue_append(cell_queue_t *queue, packed_cell_t *cell);
 void cell_queue_append_packed_copy(cell_queue_t *queue, const cell_t *cell,
-                                   int wide_circ_ids);
+                                   int wide_circ_ids, int use_stats);
 
 void append_cell_to_circuit_queue(circuit_t *circ, channel_t *chan,
                                   cell_t *cell, cell_direction_t direction,
@@ -75,11 +76,14 @@ void circuit_clear_cell_queue(circuit_t *circ, channel_t *chan);
 
 void stream_choice_seed_weak_rng(void);
 
-#ifdef RELAY_PRIVATE
 int relay_crypt(circuit_t *circ, cell_t *cell, cell_direction_t cell_direction,
                 crypt_path_t **layer_hint, char *recognized);
-int connected_cell_parse(const relay_header_t *rh, const cell_t *cell,
+
+#ifdef RELAY_PRIVATE
+STATIC int connected_cell_parse(const relay_header_t *rh, const cell_t *cell,
                          tor_addr_t *addr_out, int *ttl_out);
+STATIC packed_cell_t *packed_cell_new(void);
+STATIC packed_cell_t *cell_queue_pop(cell_queue_t *queue);
 #endif
 
 #endif

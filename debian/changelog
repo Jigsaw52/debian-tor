@@ -1,5 +1,6 @@
-tor (0.2.5.0-alpha-0.1) UNRELEASED; urgency=low
+tor (0.2.5.1-alpha-1) experimental; urgency=low
 
+  * New upstream tree, new upstream version.
   * Current alpha no longer /builds/ contrib/torify, it just ships it.
     Adapt debian/tor.install to get it from contrib/torify instead of
     build/contrib/torify.

@@ -21,6 +21,7 @@
 #include "circuituse.h"
 #include "command.h"
 #include "config.h"
+#include "confparse.h"
 #include "connection.h"
 #include "connection_edge.h"
 #include "connection_or.h"
@@ -52,11 +53,13 @@
 #include "routerparse.h"
 #include "statefile.h"
 #include "status.h"
+#include "ext_orport.h"
 #ifdef USE_DMALLOC
 #include <dmalloc.h>
 #include <openssl/crypto.h>
 #endif
 #include "memarea.h"
+#include "../common/sandbox.h"
 
 #ifdef HAVE_EVENT2_EVENT_H
 #include <event2/event.h>
@@ -155,8 +158,6 @@ int can_complete_circuit=0;
 /** How often do we 'forgive' undownloadable router descriptors and attempt
  * to download them again? */
 #define DESCRIPTOR_FAILURE_RESET_INTERVAL (60*60)
-/** How long do we let a directory connection stall before expiring it? */
-#define DIR_CONN_MAX_STALL (5*60)
 
 /** Decides our behavior when no logs are configured/before any
  * logs have been configured.  For 0, we log notice to stdout as normal.
@@ -414,6 +415,19 @@ connection_unlink(connection_t *conn)
   connection_free(conn);
 }
 
+/** Initialize the global connection list, closeable connection list,
+ * and active connection list. */
+STATIC void
+init_connection_lists(void)
+{
+  if (!connection_array)
+    connection_array = smartlist_new();
+  if (!closeable_connection_lst)
+    closeable_connection_lst = smartlist_new();
+  if (!active_linked_connection_lst)
+    active_linked_connection_lst = smartlist_new();
+}
+
 /** Schedule <b>conn</b> to be closed. **/
 void
 add_connection_to_closeable_list(connection_t *conn)
@@ -507,8 +521,8 @@ connection_is_reading(connection_t *conn)
 }
 
 /** Tell the main loop to stop notifying <b>conn</b> of any read events. */
-void
-connection_stop_reading(connection_t *conn)
+MOCK_IMPL(void,
+connection_stop_reading,(connection_t *conn))
 {
   tor_assert(conn);
 
@@ -532,8 +546,8 @@ connection_stop_reading(connection_t *conn)
 }
 
 /** Tell the main loop to start notifying <b>conn</b> of any read events. */
-void
-connection_start_reading(connection_t *conn)
+MOCK_IMPL(void,
+connection_start_reading,(connection_t *conn))
 {
   tor_assert(conn);
 
@@ -572,8 +586,8 @@ connection_is_writing(connection_t *conn)
 }
 
 /** Tell the main loop to stop notifying <b>conn</b> of any write events. */
-void
-connection_stop_writing(connection_t *conn)
+MOCK_IMPL(void,
+connection_stop_writing,(connection_t *conn))
 {
   tor_assert(conn);
 
@@ -598,8 +612,8 @@ connection_stop_writing(connection_t *conn)
 }
 
 /** Tell the main loop to start notifying <b>conn</b> of any write events. */
-void
-connection_start_writing(connection_t *conn)
+MOCK_IMPL(void,
+connection_start_writing,(connection_t *conn))
 {
   tor_assert(conn);
 
@@ -687,7 +701,7 @@ connection_stop_reading_from_linked_conn(connection_t *conn)
 }
 
 /** Close all connections that have been scheduled to get closed. */
-static void
+STATIC void
 close_closeable_connections(void)
 {
   int i;
@@ -1028,9 +1042,11 @@ run_connection_housekeeping(int i, time_t now)
    * if a server or received if a client) for 5 min */
   if (conn->type == CONN_TYPE_DIR &&
       ((DIR_CONN_IS_SERVER(conn) &&
-        conn->timestamp_lastwritten + DIR_CONN_MAX_STALL < now) ||
+        conn->timestamp_lastwritten
+            + options->TestingDirConnectionMaxStall < now) ||
        (!DIR_CONN_IS_SERVER(conn) &&
-        conn->timestamp_lastread + DIR_CONN_MAX_STALL < now))) {
+        conn->timestamp_lastread
+            + options->TestingDirConnectionMaxStall < now))) {
     log_info(LD_DIR,"Expiring wedged directory conn (fd %d, purpose %d)",
              (int)conn->s, conn->purpose);
     /* This check is temporary; it's to let us know whether we should consider
@@ -1153,6 +1169,7 @@ run_scheduled_events(time_t now)
   static time_t time_to_check_v3_certificate = 0;
   static time_t time_to_check_listeners = 0;
   static time_t time_to_check_descriptor = 0;
+  static time_t time_to_download_networkstatus = 0;
   static time_t time_to_shrink_memory = 0;
   static time_t time_to_try_getting_descriptors = 0;
   static time_t time_to_reset_descriptor_failures = 0;
@@ -1447,10 +1464,18 @@ run_scheduled_events(time_t now)
     networkstatus_v2_list_clean(now);
     /* Remove dead routers. */
     routerlist_remove_old_routers();
+  }
 
-    /* Also, once per minute, check whether we want to download any
-     * networkstatus documents.
-     */
+  /* 2c. Every minute (or every second if TestingTorNetwork), check
+   * whether we want to download any networkstatus documents. */
+
+/* How often do we check whether we should download network status
+ * documents? */
+#define networkstatus_dl_check_interval(o) ((o)->TestingTorNetwork ? 1 : 60)
+
+  if (time_to_download_networkstatus < now && !options->DisableNetwork) {
+    time_to_download_networkstatus =
+      now + networkstatus_dl_check_interval(options);
     update_networkstatus_downloads(now);
   }
 
@@ -1870,7 +1895,7 @@ do_hup(void)
 }
 
 /** Tor main loop. */
-/* static */ int
+int
 do_main_loop(void)
 {
   int loop_result;
@@ -2297,18 +2322,13 @@ handle_signals(int is_parent)
 
 /** Main entry point for the Tor command-line client.
  */
-/* static */ int
+int
 tor_init(int argc, char *argv[])
 {
   char buf[256];
-  int i, quiet = 0;
+  int quiet = 0;
   time_of_process_start = time(NULL);
-  if (!connection_array)
-    connection_array = smartlist_new();
-  if (!closeable_connection_lst)
-    closeable_connection_lst = smartlist_new();
-  if (!active_linked_connection_lst)
-    active_linked_connection_lst = smartlist_new();
+  init_connection_lists();
   /* Have the log set up with our application name. */
   tor_snprintf(buf, sizeof(buf), "Tor %s", get_version());
   log_set_application_name(buf);
@@ -2319,17 +2339,29 @@ tor_init(int argc, char *argv[])
   addressmap_init(); /* Init the client dns cache. Do it always, since it's
                       * cheap. */
 
+  {
   /* We search for the "quiet" option first, since it decides whether we
    * will log anything at all to the command line. */
-  for (i=1;i<argc;++i) {
-    if (!strcmp(argv[i], "--hush"))
-      quiet = 1;
-    if (!strcmp(argv[i], "--quiet"))
-      quiet = 2;
-    /* --version implies --quiet */
-    if (!strcmp(argv[i], "--version"))
-      quiet = 2;
+    config_line_t *opts = NULL, *cmdline_opts = NULL;
+    const config_line_t *cl;
+    (void) config_parse_commandline(argc, argv, 1, &opts, &cmdline_opts);
+    for (cl = cmdline_opts; cl; cl = cl->next) {
+      if (!strcmp(cl->key, "--hush"))
+        quiet = 1;
+      if (!strcmp(cl->key, "--quiet") ||
+          !strcmp(cl->key, "--dump-config"))
+        quiet = 2;
+      /* --version, --digests, and --help imply --hush */
+      if (!strcmp(cl->key, "--version") || !strcmp(cl->key, "--digests") ||
+          !strcmp(cl->key, "--list-torrc-options") ||
+          !strcmp(cl->key, "--library-versions") ||
+          !strcmp(cl->key, "-h") || !strcmp(cl->key, "--help"))
+        quiet = 1;
+    }
+    config_free_lines(opts);
+    config_free_lines(cmdline_opts);
   }
+
  /* give it somewhere to log to initially */
   switch (quiet) {
     case 2:
@@ -2351,11 +2383,12 @@ tor_init(int argc, char *argv[])
 #else
       "";
 #endif
-    log_notice(LD_GENERAL, "Tor v%s %srunning on %s with Libevent %s "
-               "and OpenSSL %s.", version, bev_str,
+    log_notice(LD_GENERAL, "Tor v%s %srunning on %s with Libevent %s, "
+               "OpenSSL %s and Zlib %s.", version, bev_str,
                get_uname(),
                tor_libevent_get_version_str(),
-               crypto_openssl_get_version_str());
+               crypto_openssl_get_version_str(),
+               tor_zlib_get_version_str());
 
     log_notice(LD_GENERAL, "Tor can't help you if you use it wrong! "
                "Learn how to be safe at "
@@ -2497,6 +2530,8 @@ tor_free_all(int postfork)
   memarea_clear_freelist();
   nodelist_free_all();
   microdesc_free_all();
+  ext_orport_free_all();
+  control_free_all();
   if (!postfork) {
     config_free_all();
     or_state_free_all();
@@ -2563,7 +2598,7 @@ tor_cleanup(void)
 }
 
 /** Read/create keys as needed, and echo our fingerprint to stdout. */
-/* static */ int
+static int
 do_list_fingerprint(void)
 {
   char buf[FINGERPRINT_LEN+1];
@@ -2571,7 +2606,7 @@ do_list_fingerprint(void)
   const char *nickname = get_options()->Nickname;
   if (!server_mode(get_options())) {
     log_err(LD_GENERAL,
-            "Clients don't have long-term identity keys. Exiting.\n");
+            "Clients don't have long-term identity keys. Exiting.");
     return -1;
   }
   tor_assert(nickname);
@@ -2593,7 +2628,7 @@ do_list_fingerprint(void)
 
 /** Entry point for password hashing: take the desired password from
  * the command line, and print its salted hash to stdout. **/
-/* static */ void
+static void
 do_hash_password(void)
 {
 
@@ -2607,6 +2642,34 @@ do_hash_password(void)
                 key);
   base16_encode(output, sizeof(output), key, sizeof(key));
   printf("16:%s\n",output);
+}
+
+/** Entry point for configuration dumping: write the configuration to
+ * stdout. */
+static int
+do_dump_config(void)
+{
+  const or_options_t *options = get_options();
+  const char *arg = options->command_arg;
+  int how;
+  char *opts;
+  if (!strcmp(arg, "short")) {
+    how = OPTIONS_DUMP_MINIMAL;
+  } else if (!strcmp(arg, "non-builtin")) {
+    how = OPTIONS_DUMP_DEFAULTS;
+  } else if (!strcmp(arg, "full")) {
+    how = OPTIONS_DUMP_ALL;
+  } else {
+    printf("%s is not a recognized argument to --dump-config. "
+           "Please select 'short', 'non-builtin', or 'full'", arg);
+    return -1;
+  }
+
+  opts = options_dump(options, how);
+  printf("%s", opts);
+  tor_free(opts);
+
+  return 0;
 }
 
 #if defined (WINCE)
@@ -2633,6 +2696,95 @@ find_flashcard_path(PWCHAR path, size_t size)
   return 0;
 }
 #endif
+
+static void
+init_addrinfo(void)
+{
+  char hname[256];
+
+  // host name to sandbox
+  gethostname(hname, sizeof(hname));
+  sandbox_add_addrinfo(hname);
+}
+
+static sandbox_cfg_t*
+sandbox_init_filter(void)
+{
+  sandbox_cfg_t *cfg = sandbox_cfg_new();
+
+  sandbox_cfg_allow_openat_filename(&cfg,
+      get_datadir_fname("cached-status"), 1);
+
+  sandbox_cfg_allow_open_filename_array(&cfg,
+      get_datadir_fname("cached-certs"), 1,
+      get_datadir_fname("cached-certs.tmp"), 1,
+      get_datadir_fname("cached-consensus"), 1,
+      get_datadir_fname("unverified-consensus"), 1,
+      get_datadir_fname("unverified-consensus.tmp"), 1,
+      get_datadir_fname("cached-microdesc-consensus"), 1,
+      get_datadir_fname("cached-microdesc-consensus.tmp"), 1,
+      get_datadir_fname("cached-microdescs"), 1,
+      get_datadir_fname("cached-microdescs.tmp"), 1,
+      get_datadir_fname("cached-microdescs.new"), 1,
+      get_datadir_fname("cached-microdescs.new.tmp"), 1,
+      get_datadir_fname("unverified-microdesc-consensus"), 1,
+      get_datadir_fname("cached-descriptors"), 1,
+      get_datadir_fname("cached-descriptors.new"), 1,
+      get_datadir_fname("cached-descriptors.tmp"), 1,
+      get_datadir_fname("cached-descriptors.new.tmp"), 1,
+      get_datadir_fname("cached-descriptors.tmp.tmp"), 1,
+      get_datadir_fname("cached-extrainfo"), 1,
+      get_datadir_fname("state.tmp"), 1,
+      get_datadir_fname("unparseable-desc.tmp"), 1,
+      get_datadir_fname("unparseable-desc"), 1,
+      "/dev/srandom", 0,
+      "/dev/urandom", 0,
+      "/dev/random", 0,
+      NULL, 0
+  );
+
+  sandbox_cfg_allow_stat_filename_array(&cfg,
+      get_datadir_fname(NULL), 1,
+      get_datadir_fname("lock"), 1,
+      get_datadir_fname("state"), 1,
+      get_datadir_fname("router-stability"), 1,
+      get_datadir_fname("cached-extrainfo.new"), 1,
+      NULL, 0
+  );
+
+  // orport
+  if (server_mode(get_options())) {
+    sandbox_cfg_allow_open_filename_array(&cfg,
+        get_datadir_fname2("keys", "secret_id_key"), 1,
+        get_datadir_fname2("keys", "secret_onion_key"), 1,
+        get_datadir_fname2("keys", "secret_onion_key_ntor"), 1,
+        get_datadir_fname2("keys", "secret_onion_key_ntor.tmp"), 1,
+        get_datadir_fname2("keys", "secret_id_key.old"), 1,
+        get_datadir_fname2("keys", "secret_onion_key.old"), 1,
+        get_datadir_fname2("keys", "secret_onion_key_ntor.old"), 1,
+        get_datadir_fname2("keys", "secret_onion_key.tmp"), 1,
+        get_datadir_fname2("keys", "secret_id_key.tmp"), 1,
+        get_datadir_fname("fingerprint"), 1,
+        get_datadir_fname("fingerprint.tmp"), 1,
+        get_datadir_fname("cached-consensus"), 1,
+        get_datadir_fname("cached-consensus.tmp"), 1,
+        "/etc/resolv.conf", 0,
+        NULL, 0
+    );
+
+    sandbox_cfg_allow_stat_filename_array(&cfg,
+        get_datadir_fname("keys"), 1,
+        get_datadir_fname("stats/dirreq-stats"), 1,
+        NULL, 0
+    );
+  }
+
+  sandbox_cfg_allow_execve(&cfg, "/usr/local/bin/tor");
+
+  init_addrinfo();
+
+  return cfg;
+}
 
 /** Main entry point for the Tor process.  Called from main(). */
 /* This function is distinct from main() only so we can link main.c into
@@ -2700,6 +2852,22 @@ tor_main(int argc, char *argv[])
 #endif
   if (tor_init(argc, argv)<0)
     return -1;
+
+  if (get_options()->Sandbox) {
+    sandbox_cfg_t* cfg = sandbox_init_filter();
+
+    if (sandbox_init(cfg)) {
+      log_err(LD_BUG,"Failed to create syscall sandbox filter");
+      return -1;
+    }
+
+    // registering libevent rng
+#ifdef HAVE_EVUTIL_SECURE_RNG_SET_URANDOM_DEVICE_FILE
+    evutil_secure_rng_set_urandom_device_file(
+        (char*) sandbox_intern_string("/dev/urandom"));
+#endif
+  }
+
   switch (get_options()->command) {
   case CMD_RUN_TOR:
 #ifdef NT_SERVICE
@@ -2717,6 +2885,9 @@ tor_main(int argc, char *argv[])
   case CMD_VERIFY_CONFIG:
     printf("Configuration was valid\n");
     result = 0;
+    break;
+  case CMD_DUMP_CONFIG:
+    result = do_dump_config();
     break;
   case CMD_RUN_UNITTESTS: /* only set by test.c */
   default:
