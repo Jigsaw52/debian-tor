@@ -114,12 +114,6 @@ typedef struct log_severity_list_t {
   log_domain_mask_t masks[LOG_DEBUG-LOG_ERR+1];
 } log_severity_list_t;
 
-#ifdef LOG_PRIVATE
-/** Given a severity, yields an index into log_severity_list_t.masks to use
- * for that severity. */
-#define SEVERITY_MASK_IDX(sev) ((sev) - LOG_ERR)
-#endif
-
 /** Callback type used for add_callback_log. */
 typedef void (*log_callback)(int severity, uint32_t domain, const char *msg);
 
@@ -142,6 +136,7 @@ int get_min_log_level(void);
 void switch_logs_debug(void);
 void logs_free_all(void);
 void add_temp_log(int min_severity);
+int get_err_logging_fd(void);
 void close_temp_logs(void);
 void rollback_log_changes(void);
 void mark_logs_temp(void);

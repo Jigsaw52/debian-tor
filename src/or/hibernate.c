@@ -255,6 +255,13 @@ accounting_get_interval_length(void)
   return (int)(interval_end_time - interval_start_time);
 }
 
+/** Return the time at which the current accounting interval will end. */
+time_t
+accounting_get_end_time(void)
+{
+  return interval_end_time;
+}
+
 /** Called from main.c to tell us that <b>seconds</b> seconds have
  * passed, <b>n_read</b> bytes have been read, and <b>n_written</b>
  * bytes have been written. */
@@ -1010,6 +1017,7 @@ getinfo_helper_accounting(control_connection_t *conn,
   return 0;
 }
 
+#ifdef TOR_UNIT_TESTS
 /**
  * Manually change the hibernation state.  Private; used only by the unit
  * tests.
@@ -1019,4 +1027,5 @@ hibernate_set_state_for_testing_(hibernate_state_t newstate)
 {
   hibernate_state = newstate;
 }
+#endif
 

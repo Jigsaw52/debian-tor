@@ -52,46 +52,13 @@
  * finished authentication and is accepting commands. */
 #define STATE_IS_OPEN(s) ((s) == CONTROL_CONN_STATE_OPEN)
 
-/* Recognized asynchronous event types.  It's okay to expand this list
- * because it is used both as a list of v0 event types, and as indices
- * into the bitfield to determine which controllers want which events.
- */
-#define EVENT_MIN_             0x0001
-#define EVENT_CIRCUIT_STATUS   0x0001
-#define EVENT_STREAM_STATUS    0x0002
-#define EVENT_OR_CONN_STATUS   0x0003
-#define EVENT_BANDWIDTH_USED   0x0004
-#define EVENT_CIRCUIT_STATUS_MINOR 0x0005
-#define EVENT_NEW_DESC         0x0006
-#define EVENT_DEBUG_MSG        0x0007
-#define EVENT_INFO_MSG         0x0008
-#define EVENT_NOTICE_MSG       0x0009
-#define EVENT_WARN_MSG         0x000A
-#define EVENT_ERR_MSG          0x000B
-#define EVENT_ADDRMAP          0x000C
-// #define EVENT_AUTHDIR_NEWDESCS 0x000D
-#define EVENT_DESCCHANGED      0x000E
-// #define EVENT_NS               0x000F
-#define EVENT_STATUS_CLIENT    0x0010
-#define EVENT_STATUS_SERVER    0x0011
-#define EVENT_STATUS_GENERAL   0x0012
-#define EVENT_GUARD            0x0013
-#define EVENT_STREAM_BANDWIDTH_USED   0x0014
-#define EVENT_CLIENTS_SEEN     0x0015
-#define EVENT_NEWCONSENSUS     0x0016
-#define EVENT_BUILDTIMEOUT_SET     0x0017
-#define EVENT_SIGNAL           0x0018
-#define EVENT_CONF_CHANGED     0x0019
-#define EVENT_MAX_             0x0019
-/* If EVENT_MAX_ ever hits 0x0020, we need to make the mask wider. */
-
 /** Bitfield: The bit 1&lt;&lt;e is set if <b>any</b> open control
  * connection is interested in events of type <b>e</b>.  We use this
  * so that we can decide to skip generating event messages that nobody
  * has interest in without having to walk over the global connection
  * list to find out.
  **/
-typedef uint32_t event_mask_t;
+typedef uint64_t event_mask_t;
 
 /** An event mask of all the events that any controller is interested in
  * receiving. */
@@ -103,7 +70,7 @@ static int disable_log_messages = 0;
 /** Macro: true if any control connection is interested in events of type
  * <b>e</b>. */
 #define EVENT_IS_INTERESTING(e) \
-  (global_event_mask & (1<<(e)))
+  (!! (global_event_mask & (((uint64_t)1)<<(e))))
 
 /** If we're using cookie-type authentication, how long should our cookies be?
  */
@@ -115,7 +82,7 @@ static int authentication_cookie_is_set = 0;
 /** If authentication_cookie_is_set, a secret cookie that we've stored to disk
  * and which we're using to authenticate controllers.  (If the controller can
  * read it off disk, it has permission to connect.) */
-static char authentication_cookie[AUTHENTICATION_COOKIE_LEN];
+static uint8_t *authentication_cookie = NULL;
 
 #define SAFECOOKIE_SERVER_TO_CONTROLLER_CONSTANT \
   "Tor safe cookie authentication server-to-controller hash"
@@ -129,15 +96,6 @@ static char authentication_cookie[AUTHENTICATION_COOKIE_LEN];
 /** What was the last bootstrap phase message we sent? We keep track
  * of this so we can respond to getinfo status/bootstrap-phase queries. */
 static char last_sent_bootstrap_message[BOOTSTRAP_MSG_LEN];
-
-/** Flag for event_format_t.  Indicates that we should use the one standard
-    format.
- */
-#define ALL_FORMATS 1
-
-/** Bit field of flags to select how to format a controller event.  Recognized
- * flag is ALL_FORMATS. */
-typedef int event_format_t;
 
 static void connection_printf_to_buf(control_connection_t *conn,
                                      const char *format, ...)
@@ -334,7 +292,7 @@ connection_write_str_to_buf(const char *s, control_connection_t *conn)
  * the end. Replace all LF characters sequences with CRLF.  Return the number
  * of bytes in *<b>out</b>.
  */
-/* static */ size_t
+STATIC size_t
 write_escaped_data(const char *data, size_t len, char **out)
 {
   size_t sz_out = len+8;
@@ -382,7 +340,7 @@ write_escaped_data(const char *data, size_t len, char **out)
  * that appears at the start of a line, and replacing all CRLF sequences
  * with LF.   Return the number of
  * bytes in *<b>out</b>. */
-/* static */ size_t
+STATIC size_t
 read_escaped_data(const char *data, size_t len, char **out)
 {
   char *outp;
@@ -592,9 +550,9 @@ send_control_done(control_connection_t *conn)
  *
  * The EXTENDED_FORMAT and NONEXTENDED_FORMAT flags behave similarly with
  * respect to the EXTENDED_EVENTS feature. */
-static void
-send_control_event_string(uint16_t event, event_format_t which,
-                          const char *msg)
+MOCK_IMPL(STATIC void,
+send_control_event_string,(uint16_t event, event_format_t which,
+                           const char *msg))
 {
   smartlist_t *conns = get_connection_array();
   (void)which;
@@ -958,6 +916,7 @@ static const struct control_event_t control_event_table[] = {
   { EVENT_BUILDTIMEOUT_SET, "BUILDTIMEOUT_SET" },
   { EVENT_SIGNAL, "SIGNAL" },
   { EVENT_CONF_CHANGED, "CONF_CHANGED"},
+  { EVENT_TRANSPORT_LAUNCHED, "TRANSPORT_LAUNCHED" },
   { 0, NULL },
 };
 
@@ -1447,7 +1406,7 @@ getinfo_helper_misc(control_connection_t *conn, const char *question,
   } else if (!strcmp(question, "config-defaults-file")) {
     *answer = tor_strdup(get_torrc_fname(1));
   } else if (!strcmp(question, "config-text")) {
-    *answer = options_dump(get_options(), 1);
+    *answer = options_dump(get_options(), OPTIONS_DUMP_MINIMAL);
   } else if (!strcmp(question, "info/names")) {
     *answer = list_getinfo_options();
   } else if (!strcmp(question, "dormant")) {
@@ -1572,7 +1531,8 @@ munge_extrainfo_into_routerinfo(const char *ri_body,
     if (!(cp = tor_memstr(ei_body, ei_len, kwd)))
       continue;
     ++cp;
-    eol = memchr(cp, '\n', ei_len - (cp-ei_body));
+    if (!(eol = memchr(cp, '\n', ei_len - (cp-ei_body))))
+      continue;
     memcpy(outp, cp, eol-cp+1);
     outp += eol-cp+1;
   }
@@ -1927,7 +1887,7 @@ getinfo_helper_events(control_connection_t *control_conn,
   if (!strcmp(question, "circuit-status")) {
     circuit_t *circ_;
     smartlist_t *status = smartlist_new();
-    for (circ_ = circuit_get_global_list_(); circ_; circ_ = circ_->next) {
+    TOR_LIST_FOREACH(circ_, circuit_get_global_list(), head) {
       origin_circuit_t *circ;
       char *circdesc;
       const char *state;
@@ -4162,16 +4122,13 @@ control_event_newconsensus(const networkstatus_t *consensus)
 
 /** Called when we compute a new circuitbuildtimeout */
 int
-control_event_buildtimeout_set(const circuit_build_times_t *cbt,
-                        buildtimeout_set_event_t type)
+control_event_buildtimeout_set(buildtimeout_set_event_t type,
+                               const char *args)
 {
   const char *type_string = NULL;
-  double qnt;
 
   if (!control_event_is_interesting(EVENT_BUILDTIMEOUT_SET))
     return 0;
-
-  qnt = circuit_build_times_quantile_cutoff();
 
   switch (type) {
     case BUILDTIMEOUT_SET_EVENT_COMPUTED:
@@ -4179,15 +4136,12 @@ control_event_buildtimeout_set(const circuit_build_times_t *cbt,
       break;
     case BUILDTIMEOUT_SET_EVENT_RESET:
       type_string = "RESET";
-      qnt = 1.0;
       break;
     case BUILDTIMEOUT_SET_EVENT_SUSPENDED:
       type_string = "SUSPENDED";
-      qnt = 1.0;
       break;
     case BUILDTIMEOUT_SET_EVENT_DISCARD:
       type_string = "DISCARD";
-      qnt = 1.0;
       break;
     case BUILDTIMEOUT_SET_EVENT_RESUME:
       type_string = "RESUME";
@@ -4198,15 +4152,8 @@ control_event_buildtimeout_set(const circuit_build_times_t *cbt,
   }
 
   send_control_event(EVENT_BUILDTIMEOUT_SET, ALL_FORMATS,
-                     "650 BUILDTIMEOUT_SET %s TOTAL_TIMES=%lu "
-                     "TIMEOUT_MS=%lu XM=%lu ALPHA=%f CUTOFF_QUANTILE=%f "
-                     "TIMEOUT_RATE=%f CLOSE_MS=%lu CLOSE_RATE=%f\r\n",
-                     type_string, (unsigned long)cbt->total_build_times,
-                     (unsigned long)cbt->timeout_ms,
-                     (unsigned long)cbt->Xm, cbt->alpha, qnt,
-                     circuit_build_times_timeout_rate(cbt),
-                     (unsigned long)cbt->close_ms,
-                     circuit_build_times_close_rate(cbt));
+                     "650 BUILDTIMEOUT_SET %s %s\r\n",
+                     type_string, args);
 
   return 0;
 }
@@ -4445,44 +4392,27 @@ get_cookie_file(void)
   }
 }
 
-/** Choose a random authentication cookie and write it to disk.
- * Anybody who can read the cookie from disk will be considered
- * authorized to use the control connection. Return -1 if we can't
- * write the file, or 0 on success. */
+/* Initialize the cookie-based authentication system of the
+ * ControlPort. If <b>enabled</b> is 0, then disable the cookie
+ * authentication system.  */
 int
-init_cookie_authentication(int enabled)
+init_control_cookie_authentication(int enabled)
 {
-  char *fname;
+  char *fname = NULL;
+  int retval;
+
   if (!enabled) {
     authentication_cookie_is_set = 0;
     return 0;
   }
 
-  /* We don't want to generate a new cookie every time we call
-   * options_act(). One should be enough. */
-  if (authentication_cookie_is_set)
-    return 0; /* all set */
-
   fname = get_cookie_file();
-  crypto_rand(authentication_cookie, AUTHENTICATION_COOKIE_LEN);
-  authentication_cookie_is_set = 1;
-  if (write_bytes_to_file(fname, authentication_cookie,
-                          AUTHENTICATION_COOKIE_LEN, 1)) {
-    log_warn(LD_FS,"Error writing authentication cookie to %s.",
-             escaped(fname));
-    tor_free(fname);
-    return -1;
-  }
-#ifndef _WIN32
-  if (get_options()->CookieAuthFileGroupReadable) {
-    if (chmod(fname, 0640)) {
-      log_warn(LD_FS,"Unable to make %s group-readable.", escaped(fname));
-    }
-  }
-#endif
-
+  retval = init_cookie_authentication(fname, "", /* no header */
+                                      AUTHENTICATION_COOKIE_LEN,
+                                      &authentication_cookie,
+                                      &authentication_cookie_is_set);
   tor_free(fname);
-  return 0;
+  return retval;
 }
 
 /** A copy of the process specifier of Tor's owning controller, or
@@ -4698,8 +4628,8 @@ control_event_bootstrap(bootstrap_status_t status, int progress)
  * that indicates a problem. <b>warn</b> gives a hint as to why, and
  * <b>reason</b> provides an "or_conn_end_reason" tag.
  */
-void
-control_event_bootstrap_problem(const char *warn, int reason)
+MOCK_IMPL(void,
+control_event_bootstrap_problem, (const char *warn, int reason))
 {
   int status = bootstrap_percent;
   const char *tag, *summary;
@@ -4765,4 +4695,36 @@ control_event_clients_seen(const char *controller_str)
   send_control_event(EVENT_CLIENTS_SEEN, 0,
     "650 CLIENTS_SEEN %s\r\n", controller_str);
 }
+
+/** A new pluggable transport called <b>transport_name</b> was
+ *  launched on <b>addr</b>:<b>port</b>. <b>mode</b> is either
+ *  "server" or "client" depending on the mode of the pluggable
+ *  transport.
+ *  "650" SP "TRANSPORT_LAUNCHED" SP Mode SP Name SP Address SP Port
+ */
+void
+control_event_transport_launched(const char *mode, const char *transport_name,
+                                 tor_addr_t *addr, uint16_t port)
+{
+  send_control_event(EVENT_TRANSPORT_LAUNCHED, ALL_FORMATS,
+                     "650 TRANSPORT_LAUNCHED %s %s %s %u\r\n",
+                     mode, transport_name, fmt_addr(addr), port);
+}
+
+/** Free any leftover allocated memory of the control.c subsystem. */
+void
+control_free_all(void)
+{
+  if (authentication_cookie) /* Free the auth cookie */
+    tor_free(authentication_cookie);
+}
+
+#ifdef TOR_UNIT_TESTS
+/* For testing: change the value of global_event_mask */
+void
+control_testing_set_global_event_mask(uint64_t mask)
+{
+  global_event_mask = mask;
+}
+#endif
 

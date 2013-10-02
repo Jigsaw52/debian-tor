@@ -15,6 +15,7 @@
 #include "torint.h"
 #include "compat.h"
 #include "di_ops.h"
+#include "testsupport.h"
 #include <stdio.h>
 #include <stdlib.h>
 #ifdef _WIN32
@@ -222,23 +223,22 @@ const char *find_whitespace_eos(const char *s, const char *eos);
 const char *find_str_at_start_of_line(const char *haystack,
                                       const char *needle);
 int string_is_C_identifier(const char *string);
+int string_is_key_value(int severity, const char *string);
 
 int tor_mem_is_zero(const char *mem, size_t len);
 int tor_digest_is_zero(const char *digest);
 int tor_digest256_is_zero(const char *digest);
 char *esc_for_log(const char *string) ATTR_MALLOC;
 const char *escaped(const char *string);
+
+char *tor_escape_str_for_pt_args(const char *string,
+                                 const char *chars_to_escape);
+
 struct smartlist_t;
-int tor_vsscanf(const char *buf, const char *pattern, va_list ap)
-#ifdef __GNUC__
-  __attribute__((format(scanf, 2, 0)))
-#endif
-  ;
+int tor_vsscanf(const char *buf, const char *pattern, va_list ap) \
+  CHECK_SCANF(2, 0);
 int tor_sscanf(const char *buf, const char *pattern, ...)
-#ifdef __GNUC__
-  __attribute__((format(scanf, 2, 3)))
-#endif
-  ;
+  CHECK_SCANF(2, 3);
 
 void smartlist_add_asprintf(struct smartlist_t *sl, const char *pattern, ...)
   CHECK_PRINTF(2, 3);
@@ -355,8 +355,9 @@ FILE *fdopen_file(open_file_t *file_data);
 int finish_writing_to_file(open_file_t *file_data);
 int abort_writing_to_file(open_file_t *file_data);
 int write_str_to_file(const char *fname, const char *str, int bin);
-int write_bytes_to_file(const char *fname, const char *str, size_t len,
-                        int bin);
+MOCK_DECL(int,
+write_bytes_to_file,(const char *fname, const char *str, size_t len,
+                     int bin));
 /** An ad-hoc type to hold a string of characters and a count; used by
  * write_chunks_to_file. */
 typedef struct sized_chunk_t {
@@ -492,18 +493,21 @@ FILE *tor_process_get_stdout_pipe(process_handle_t *process_handle);
 #endif
 
 #ifdef _WIN32
-struct smartlist_t *
-tor_get_lines_from_handle(HANDLE *handle,
-                          enum stream_status *stream_status);
+MOCK_DECL(struct smartlist_t *,
+tor_get_lines_from_handle,(HANDLE *handle,
+                           enum stream_status *stream_status));
 #else
-struct smartlist_t *
-tor_get_lines_from_handle(FILE *handle,
-                          enum stream_status *stream_status);
+MOCK_DECL(struct smartlist_t *,
+tor_get_lines_from_handle,(FILE *handle,
+                           enum stream_status *stream_status));
 #endif
 
-int tor_terminate_process(process_handle_t *process_handle);
-void tor_process_handle_destroy(process_handle_t *process_handle,
-                                int also_terminate_process);
+int
+tor_terminate_process(process_handle_t *process_handle);
+
+MOCK_DECL(void,
+tor_process_handle_destroy,(process_handle_t *process_handle,
+                            int also_terminate_process));
 
 /* ===== Insecure rng */
 typedef struct tor_weak_rng_t {
@@ -519,12 +523,13 @@ int32_t tor_weak_random_range(tor_weak_rng_t *rng, int32_t top);
  * <b>n</b> */
 #define tor_weak_random_one_in_n(rng, n) (0==tor_weak_random_range((rng),(n)))
 
+int format_hex_number_sigsafe(unsigned int x, char *buf, int max_len);
+
 #ifdef UTIL_PRIVATE
 /* Prototypes for private functions only used by util.c (and unit tests) */
 
-int format_hex_number_for_helper_exit_status(unsigned int x, char *buf,
-                                             int max_len);
-int format_helper_exit_status(unsigned char child_state,
+#ifndef _WIN32
+STATIC int format_helper_exit_status(unsigned char child_state,
                               int saved_errno, char *hex_errno);
 
 /* Space for hex values of child state, a slash, saved_errno (with
@@ -533,7 +538,11 @@ int format_helper_exit_status(unsigned char child_state,
                         1 + sizeof(int) * 2 + 1)
 #endif
 
+#endif
+
 const char *libor_get_digests(void);
+
+#define ARRAY_LENGTH(x) (sizeof(x)) / sizeof(x[0])
 
 #endif
 

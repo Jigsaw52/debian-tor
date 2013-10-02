@@ -36,6 +36,10 @@
 #include "torlog.h"
 #include "container.h"
 
+/** Given a severity, yields an index into log_severity_list_t.masks to use
+ * for that severity. */
+#define SEVERITY_MASK_IDX(sev) ((sev) - LOG_ERR)
+
 /** @{ */
 /** The string we stick at the end of a log message when it is too long,
  * and its length. */
@@ -1136,6 +1140,22 @@ get_min_log_level(void)
         min = i;
   }
   return min;
+}
+
+/** Return the fd of a file log that is receiving ERR messages, or -1 if
+ * no such log exists. */
+int
+get_err_logging_fd(void)
+{
+  const logfile_t *lf;
+  for (lf = logfiles; lf; lf = lf->next) {
+    if (lf->is_temporary || lf->is_syslog || !lf->filename ||
+        lf->callback || lf->seems_dead || lf->fd < 0)
+      continue;
+    if (lf->severities->masks[LOG_ERR] & LD_GENERAL)
+      return lf->fd;
+  }
+  return -1;
 }
 
 /** Switch all logs to output at most verbose level. */

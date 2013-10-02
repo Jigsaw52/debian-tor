@@ -23,6 +23,7 @@
  * we can also take out the configure check. */
 #define _GNU_SOURCE
 
+#define COMPAT_PRIVATE
 #include "compat.h"
 
 #ifdef _WIN32
@@ -109,6 +110,7 @@
 #include "util.h"
 #include "container.h"
 #include "address.h"
+#include "sandbox.h"
 
 /* Inline the strl functions if the platform doesn't have them. */
 #ifndef HAVE_STRLCPY
@@ -125,6 +127,7 @@ tor_open_cloexec(const char *path, int flags, unsigned mode)
 {
   int fd;
 #ifdef O_CLOEXEC
+  path = sandbox_intern_string(path);
   fd = open(path, flags|O_CLOEXEC, mode);
   if (fd >= 0)
     return fd;
@@ -948,24 +951,40 @@ socket_accounting_unlock(void)
 }
 
 /** As close(), but guaranteed to work for sockets across platforms (including
- * Windows, where close()ing a socket doesn't work.  Returns 0 on success, -1
- * on failure. */
+ * Windows, where close()ing a socket doesn't work.  Returns 0 on success and
+ * the socket error code on failure. */
 int
-tor_close_socket(tor_socket_t s)
+tor_close_socket_simple(tor_socket_t s)
 {
   int r = 0;
 
   /* On Windows, you have to call close() on fds returned by open(),
-   * and closesocket() on fds returned by socket().  On Unix, everything
-   * gets close()'d.  We abstract this difference by always using
-   * tor_close_socket to close sockets, and always using close() on
-   * files.
-   */
-#if defined(_WIN32)
-  r = closesocket(s);
-#else
-  r = close(s);
-#endif
+  * and closesocket() on fds returned by socket().  On Unix, everything
+  * gets close()'d.  We abstract this difference by always using
+  * tor_close_socket to close sockets, and always using close() on
+  * files.
+  */
+  #if defined(_WIN32)
+    r = closesocket(s);
+  #else
+    r = close(s);
+  #endif
+
+  if (r != 0) {
+    int err = tor_socket_errno(-1);
+    log_info(LD_NET, "Close returned an error: %s", tor_socket_strerror(err));
+    return err;
+  }
+
+  return r;
+}
+
+/** As tor_close_socket_simple(), but keeps track of the number
+ * of open sockets. Returns 0 on success, -1 on failure. */
+int
+tor_close_socket(tor_socket_t s)
+{
+  int r = tor_close_socket_simple(s);
 
   socket_accounting_lock();
 #ifdef DEBUG_SOCKET_COUNTING
@@ -980,13 +999,11 @@ tor_close_socket(tor_socket_t s)
   if (r == 0) {
     --n_sockets_open;
   } else {
-    int err = tor_socket_errno(-1);
-    log_info(LD_NET, "Close returned an error: %s", tor_socket_strerror(err));
 #ifdef _WIN32
-    if (err != WSAENOTSOCK)
+    if (r != WSAENOTSOCK)
       --n_sockets_open;
 #else
-    if (err != EBADF)
+    if (r != EBADF)
       --n_sockets_open;
 #endif
     r = -1;
@@ -1032,33 +1049,61 @@ mark_socket_open(tor_socket_t s)
 tor_socket_t
 tor_open_socket(int domain, int type, int protocol)
 {
+  return tor_open_socket_with_extensions(domain, type, protocol, 1, 0);
+}
+
+/** As socket(), but creates a nonblocking socket and
+ * counts the number of open sockets. */
+tor_socket_t
+tor_open_socket_nonblocking(int domain, int type, int protocol)
+{
+  return tor_open_socket_with_extensions(domain, type, protocol, 1, 1);
+}
+
+/** As socket(), but counts the number of open sockets and handles
+ * socket creation with either of SOCK_CLOEXEC and SOCK_NONBLOCK specified.
+ * <b>cloexec</b> and <b>nonblock</b> should be either 0 or 1 to indicate
+ * if the corresponding extension should be used.*/
+tor_socket_t
+tor_open_socket_with_extensions(int domain, int type, int protocol,
+                                int cloexec, int nonblock)
+{
   tor_socket_t s;
-#ifdef SOCK_CLOEXEC
-  s = socket(domain, type|SOCK_CLOEXEC, protocol);
+#if defined(SOCK_CLOEXEC) && defined(SOCK_NONBLOCK)
+  int ext_flags = (cloexec ? SOCK_CLOEXEC : 0) |
+                  (nonblock ? SOCK_NONBLOCK : 0);
+  s = socket(domain, type|ext_flags, protocol);
   if (SOCKET_OK(s))
     goto socket_ok;
   /* If we got an error, see if it is EINVAL. EINVAL might indicate that,
-   * even though we were built on a system with SOCK_CLOEXEC support, we
-   * are running on one without. */
+   * even though we were built on a system with SOCK_CLOEXEC and SOCK_NONBLOCK
+   * support, we are running on one without. */
   if (errno != EINVAL)
     return s;
-#endif /* SOCK_CLOEXEC */
+#endif /* SOCK_CLOEXEC && SOCK_NONBLOCK */
 
   s = socket(domain, type, protocol);
   if (! SOCKET_OK(s))
     return s;
 
 #if defined(FD_CLOEXEC)
-  if (fcntl(s, F_SETFD, FD_CLOEXEC) == -1) {
-    log_warn(LD_FS,"Couldn't set FD_CLOEXEC: %s", strerror(errno));
-#if defined(_WIN32)
-    closesocket(s);
-#else
-    close(s);
-#endif
-    return -1;
+  if (cloexec) {
+    if (fcntl(s, F_SETFD, FD_CLOEXEC) == -1) {
+      log_warn(LD_FS,"Couldn't set FD_CLOEXEC: %s", strerror(errno));
+      tor_close_socket_simple(s);
+      return TOR_INVALID_SOCKET;
+    }
   }
+#else
+  (void)cloexec;
 #endif
+
+  if (nonblock) {
+    if (set_socket_nonblocking(s) == -1) {
+      tor_close_socket_simple(s);
+      return TOR_INVALID_SOCKET;
+    }
+  }
 
   goto socket_ok; /* So that socket_ok will not be unused. */
 
@@ -1070,19 +1115,41 @@ tor_open_socket(int domain, int type, int protocol)
   return s;
 }
 
-/** As socket(), but counts the number of open sockets. */
+/** As accept(), but counts the number of open sockets. */
 tor_socket_t
 tor_accept_socket(tor_socket_t sockfd, struct sockaddr *addr, socklen_t *len)
 {
+  return tor_accept_socket_with_extensions(sockfd, addr, len, 1, 0);
+}
+
+/** As accept(), but returns a nonblocking socket and
+ * counts the number of open sockets. */
+tor_socket_t
+tor_accept_socket_nonblocking(tor_socket_t sockfd, struct sockaddr *addr,
+                              socklen_t *len)
+{
+  return tor_accept_socket_with_extensions(sockfd, addr, len, 1, 1);
+}
+
+/** As accept(), but counts the number of open sockets and handles
+ * socket creation with either of SOCK_CLOEXEC and SOCK_NONBLOCK specified.
+ * <b>cloexec</b> and <b>nonblock</b> should be either 0 or 1 to indicate
+ * if the corresponding extension should be used.*/
+tor_socket_t
+tor_accept_socket_with_extensions(tor_socket_t sockfd, struct sockaddr *addr,
+                                 socklen_t *len, int cloexec, int nonblock)
+{
   tor_socket_t s;
-#if defined(HAVE_ACCEPT4) && defined(SOCK_CLOEXEC)
-  s = accept4(sockfd, addr, len, SOCK_CLOEXEC);
+#if defined(HAVE_ACCEPT4) && defined(SOCK_CLOEXEC) && defined(SOCK_NONBLOCK)
+  int ext_flags = (cloexec ? SOCK_CLOEXEC : 0) |
+                  (nonblock ? SOCK_NONBLOCK : 0);
+  s = accept4(sockfd, addr, len, ext_flags);
   if (SOCKET_OK(s))
     goto socket_ok;
   /* If we got an error, see if it is ENOSYS. ENOSYS indicates that,
    * even though we were built on a system with accept4 support, we
    * are running on one without. Also, check for EINVAL, which indicates that
-   * we are missing SOCK_CLOEXEC support. */
+   * we are missing SOCK_CLOEXEC/SOCK_NONBLOCK support. */
   if (errno != EINVAL && errno != ENOSYS)
     return s;
 #endif
@@ -1092,12 +1159,23 @@ tor_accept_socket(tor_socket_t sockfd, struct sockaddr *addr, socklen_t *len)
     return s;
 
 #if defined(FD_CLOEXEC)
-  if (fcntl(s, F_SETFD, FD_CLOEXEC) == -1) {
-    log_warn(LD_NET, "Couldn't set FD_CLOEXEC: %s", strerror(errno));
-    close(s);
-    return TOR_INVALID_SOCKET;
+  if (cloexec) {
+    if (fcntl(s, F_SETFD, FD_CLOEXEC) == -1) {
+      log_warn(LD_NET, "Couldn't set FD_CLOEXEC: %s", strerror(errno));
+      tor_close_socket_simple(s);
+      return TOR_INVALID_SOCKET;
+    }
   }
+#else
+  (void)cloexec;
 #endif
+
+  if (nonblock) {
+    if (set_socket_nonblocking(s) == -1) {
+      tor_close_socket_simple(s);
+      return TOR_INVALID_SOCKET;
+    }
+  }
 
   goto socket_ok; /* So that socket_ok will not be unused. */
 
@@ -1220,6 +1298,18 @@ tor_socketpair(int family, int type, int protocol, tor_socket_t fd[2])
 
   return 0;
 #else
+  return tor_ersatz_socketpair(family, type, protocol, fd);
+#endif
+}
+
+#ifdef NEED_ERSATZ_SOCKETPAIR
+/**
+ * Helper used to implement socketpair on systems that lack it, by
+ * making a direct connection to localhost.
+ */
+STATIC int
+tor_ersatz_socketpair(int family, int type, int protocol, tor_socket_t fd[2])
+{
     /* This socketpair does not work when localhost is down. So
      * it's really not the same thing at all. But it's close enough
      * for now, and really, when localhost is down sometimes, we
@@ -1230,7 +1320,7 @@ tor_socketpair(int family, int type, int protocol, tor_socket_t fd[2])
     tor_socket_t acceptor = TOR_INVALID_SOCKET;
     struct sockaddr_in listen_addr;
     struct sockaddr_in connect_addr;
-    int size;
+    socklen_t size;
     int saved_errno = -1;
 
     if (protocol
@@ -1313,8 +1403,8 @@ tor_socketpair(int family, int type, int protocol, tor_socket_t fd[2])
     if (SOCKET_OK(acceptor))
       tor_close_socket(acceptor);
     return -saved_errno;
-#endif
 }
+#endif
 
 /** Number of extra file descriptors to keep in reserve beyond those that we
  * tell Tor it's allowed to use. */
@@ -1746,6 +1836,15 @@ get_user_homedir(const char *username)
  * actually examine the filesystem; does a purely syntactic modification.
  *
  * The parent of the root director is considered to be iteself.
+ *
+ * Path separators are the forward slash (/) everywhere and additionally
+ * the backslash (\) on Win32.
+ *
+ * Cuts off any number of trailing path separators but otherwise ignores
+ * them for purposes of finding the parent directory.
+ *
+ * Returns 0 if a parent directory was successfully found, -1 otherwise (fname
+ * did not have any path separators or only had them at the end).
  * */
 int
 get_parent_directory(char *fname)

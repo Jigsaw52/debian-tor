@@ -58,6 +58,9 @@ static void adjust_exit_policy_from_exitpolicy_failure(origin_circuit_t *circ,
                                                   entry_connection_t *conn,
                                                   node_t *node,
                                                   const tor_addr_t *addr);
+#if 0
+static int get_max_middle_cells(void);
+#endif
 
 /** Stop reading on edge connections when we have this many cells
  * waiting on the appropriate queue. */
@@ -966,7 +969,7 @@ remap_event_helper(entry_connection_t *conn, const tor_addr_t *new_addr)
  * <b>addr_out</b> to the address we're connected to, and <b>ttl_out</b> to
  * the ttl of that address, in seconds, and return 0.  On failure, return
  * -1. */
-int
+STATIC int
 connected_cell_parse(const relay_header_t *rh, const cell_t *cell,
                      tor_addr_t *addr_out, int *ttl_out)
 {
@@ -1494,7 +1497,8 @@ connection_edge_process_relay_cell(cell_t *cell, circuit_t *circ,
         if (layer_hint) {
           if (layer_hint->package_window + CIRCWINDOW_INCREMENT >
                 CIRCWINDOW_START_MAX) {
-            log_fn(LOG_PROTOCOL_WARN, LD_PROTOCOL,
+            static struct ratelim_t exit_warn_ratelim = RATELIM_INIT(600);
+            log_fn_ratelim(&exit_warn_ratelim, LOG_WARN, LD_PROTOCOL,
                    "Unexpected sendme cell from exit relay. "
                    "Closing circ.");
             return -END_CIRC_REASON_TORPROTOCOL;
@@ -1506,7 +1510,8 @@ connection_edge_process_relay_cell(cell_t *cell, circuit_t *circ,
         } else {
           if (circ->package_window + CIRCWINDOW_INCREMENT >
                 CIRCWINDOW_START_MAX) {
-            log_fn(LOG_PROTOCOL_WARN, LD_PROTOCOL,
+            static struct ratelim_t client_warn_ratelim = RATELIM_INIT(600);
+            log_fn_ratelim(&client_warn_ratelim, LOG_WARN, LD_PROTOCOL,
                    "Unexpected sendme cell from client. "
                    "Closing circ (window %d).",
                    circ->package_window);
@@ -2084,7 +2089,7 @@ packed_cell_free_unchecked(packed_cell_t *cell)
 }
 
 /** Allocate and return a new packed_cell_t. */
-static INLINE packed_cell_t *
+STATIC packed_cell_t *
 packed_cell_new(void)
 {
   ++total_cells_allocated;
@@ -2095,6 +2100,8 @@ packed_cell_new(void)
 void
 packed_cell_free(packed_cell_t *cell)
 {
+  if (!cell)
+    return;
   packed_cell_free_unchecked(cell);
 }
 
@@ -2106,7 +2113,7 @@ dump_cell_pool_usage(int severity)
   circuit_t *c;
   int n_circs = 0;
   int n_cells = 0;
-  for (c = circuit_get_global_list_(); c; c = c->next) {
+  TOR_LIST_FOREACH(c, circuit_get_global_list(), head) {
     n_cells += c->n_chan_cells.n;
     if (!CIRCUIT_IS_ORIGIN(c))
       n_cells += TO_OR_CIRCUIT(c)->p_chan_cells.n;
@@ -2124,7 +2131,6 @@ packed_cell_copy(const cell_t *cell, int wide_circ_ids)
 {
   packed_cell_t *c = packed_cell_new();
   cell_pack(c, cell, wide_circ_ids);
-  c->next = NULL;
   return c;
 }
 
@@ -2132,25 +2138,18 @@ packed_cell_copy(const cell_t *cell, int wide_circ_ids)
 void
 cell_queue_append(cell_queue_t *queue, packed_cell_t *cell)
 {
-  if (queue->tail) {
-    tor_assert(!queue->tail->next);
-    queue->tail->next = cell;
-  } else {
-    queue->head = cell;
-  }
-  queue->tail = cell;
-  cell->next = NULL;
+  TOR_SIMPLEQ_INSERT_TAIL(&queue->head, cell, next);
   ++queue->n;
 }
 
 /** Append a newly allocated copy of <b>cell</b> to the end of <b>queue</b> */
 void
 cell_queue_append_packed_copy(cell_queue_t *queue, const cell_t *cell,
-                              int wide_circ_ids)
+                              int wide_circ_ids, int use_stats)
 {
   packed_cell_t *copy = packed_cell_copy(cell, wide_circ_ids);
   /* Remember the time when this cell was put in the queue. */
-  if (get_options()->CellStatistics) {
+  if (get_options()->CellStatistics && use_stats) {
     struct timeval now;
     uint32_t added;
     insertion_time_queue_t *it_queue = queue->insertion_times;
@@ -2182,18 +2181,24 @@ cell_queue_append_packed_copy(cell_queue_t *queue, const cell_t *cell,
   cell_queue_append(queue, copy);
 }
 
+/** Initialize <b>queue</b> as an empty cell queue. */
+void
+cell_queue_init(cell_queue_t *queue)
+{
+  memset(queue, 0, sizeof(cell_queue_t));
+  TOR_SIMPLEQ_INIT(&queue->head);
+}
+
 /** Remove and free every cell in <b>queue</b>. */
 void
 cell_queue_clear(cell_queue_t *queue)
 {
-  packed_cell_t *cell, *next;
-  cell = queue->head;
-  while (cell) {
-    next = cell->next;
+  packed_cell_t *cell;
+  while ((cell = TOR_SIMPLEQ_FIRST(&queue->head))) {
+    TOR_SIMPLEQ_REMOVE_HEAD(&queue->head, next);
     packed_cell_free_unchecked(cell);
-    cell = next;
   }
-  queue->head = queue->tail = NULL;
+  TOR_SIMPLEQ_INIT(&queue->head);
   queue->n = 0;
   if (queue->insertion_times) {
     while (queue->insertion_times->first) {
@@ -2207,17 +2212,13 @@ cell_queue_clear(cell_queue_t *queue)
 
 /** Extract and return the cell at the head of <b>queue</b>; return NULL if
  * <b>queue</b> is empty. */
-static INLINE packed_cell_t *
+STATIC packed_cell_t *
 cell_queue_pop(cell_queue_t *queue)
 {
-  packed_cell_t *cell = queue->head;
+  packed_cell_t *cell = TOR_SIMPLEQ_FIRST(&queue->head);
   if (!cell)
     return NULL;
-  queue->head = cell->next;
-  if (cell == queue->tail) {
-    tor_assert(!queue->head);
-    queue->tail = NULL;
-  }
+  TOR_SIMPLEQ_REMOVE_HEAD(&queue->head, next);
   --queue->n;
   return cell;
 }
@@ -2368,7 +2369,7 @@ channel_flush_from_first_active_circuit(channel_t *chan, int max)
 {
   circuitmux_t *cmux = NULL;
   int n_flushed = 0;
-  cell_queue_t *queue;
+  cell_queue_t *queue, *destroy_queue=NULL;
   circuit_t *circ;
   or_circuit_t *or_circ;
   int streams_blocked;
@@ -2381,7 +2382,18 @@ channel_flush_from_first_active_circuit(channel_t *chan, int max)
 
   /* Main loop: pick a circuit, send a cell, update the cmux */
   while (n_flushed < max) {
-    circ = circuitmux_get_first_active_circuit(cmux);
+    circ = circuitmux_get_first_active_circuit(cmux, &destroy_queue);
+    if (destroy_queue) {
+      /* this code is duplicated from some of the logic below. Ugly! XXXX */
+      tor_assert(destroy_queue->n > 0);
+      cell = cell_queue_pop(destroy_queue);
+      channel_write_packed_cell(chan, cell);
+      /* Update the cmux destroy counter */
+      circuitmux_notify_xmit_destroy(cmux);
+      cell = NULL;
+      ++n_flushed;
+      continue;
+    }
     /* If it returns NULL, no cells left to send */
     if (!circ) break;
     assert_cmux_ok_paranoid(chan);
@@ -2482,6 +2494,20 @@ channel_flush_from_first_active_circuit(channel_t *chan, int max)
   return n_flushed;
 }
 
+#if 0
+/** Indicate the current preferred cap for middle circuits; zero disables
+ * the cap.  Right now it's just a constant, ORCIRC_MAX_MIDDLE_CELLS, but
+ * the logic in append_cell_to_circuit_queue() is written to be correct
+ * if we want to base it on a consensus param or something that might change
+ * in the future.
+ */
+static int
+get_max_middle_cells(void)
+{
+  return ORCIRC_MAX_MIDDLE_CELLS;
+}
+#endif
+
 /** Add <b>cell</b> to the queue of <b>circ</b> writing to <b>chan</b>
  * transmitting in <b>direction</b>. */
 void
@@ -2492,6 +2518,9 @@ append_cell_to_circuit_queue(circuit_t *circ, channel_t *chan,
   or_circuit_t *orcirc = NULL;
   cell_queue_t *queue;
   int streams_blocked;
+#if 0
+  uint32_t tgt_max_middle_cells, p_len, n_len, tmp, hard_max_middle_cells;
+#endif
 
   if (circ->marked_for_close)
     return;
@@ -2513,28 +2542,81 @@ append_cell_to_circuit_queue(circuit_t *circ, channel_t *chan,
   if ((circ->n_chan != NULL) && CIRCUIT_IS_ORCIRC(circ)) {
     orcirc = TO_OR_CIRCUIT(circ);
     if (orcirc->p_chan) {
-      if (queue->n + 1 >= ORCIRC_MAX_MIDDLE_CELLS) {
-        /* Queueing this cell would put queue over the cap */
-        log_warn(LD_CIRC,
-                 "Got a cell exceeding the cap of %u in the %s direction "
-                 "on middle circ ID %u on chan ID " U64_FORMAT
-                 "; killing the circuit.",
-                 ORCIRC_MAX_MIDDLE_CELLS,
-                 (direction == CELL_DIRECTION_OUT) ? "n" : "p",
-                 (direction == CELL_DIRECTION_OUT) ?
-                   circ->n_circ_id : orcirc->p_circ_id,
-                 U64_PRINTF_ARG(
+      /* We are a middle circuit if we have both n_chan and p_chan */
+      /* We'll need to know the current preferred maximum */
+      tgt_max_middle_cells = get_max_middle_cells();
+      if (tgt_max_middle_cells > 0) {
+        /* Do we need to initialize middle_max_cells? */
+        if (orcirc->max_middle_cells == 0) {
+          orcirc->max_middle_cells = tgt_max_middle_cells;
+        } else {
+          if (tgt_max_middle_cells > orcirc->max_middle_cells) {
+            /* If we want to increase the cap, we can do so right away */
+            orcirc->max_middle_cells = tgt_max_middle_cells;
+          } else if (tgt_max_middle_cells < orcirc->max_middle_cells) {
+            /*
+             * If we're shrinking the cap, we can't shrink past either queue;
+             * compare tgt_max_middle_cells rather than tgt_max_middle_cells *
+             * ORCIRC_MAX_MIDDLE_KILL_THRESH so the queues don't shrink enough
+             * to generate spurious warnings, either.
+             */
+            n_len = circ->n_chan_cells.n;
+            p_len = orcirc->p_chan_cells.n;
+            tmp = tgt_max_middle_cells;
+            if (tmp < n_len) tmp = n_len;
+            if (tmp < p_len) tmp = p_len;
+            orcirc->max_middle_cells = tmp;
+          }
+          /* else no change */
+        }
+      } else {
+        /* tgt_max_middle_cells == 0 indicates we should disable the cap */
+        orcirc->max_middle_cells = 0;
+      }
+
+      /* Now we know orcirc->max_middle_cells is set correctly */
+      if (orcirc->max_middle_cells > 0) {
+        hard_max_middle_cells =
+          (uint32_t)(((double)orcirc->max_middle_cells) *
+                     ORCIRC_MAX_MIDDLE_KILL_THRESH);
+
+        if ((unsigned)queue->n + 1 >= hard_max_middle_cells) {
+          /* Queueing this cell would put queue over the kill theshold */
+          log_warn(LD_CIRC,
+                   "Got a cell exceeding the hard cap of %u in the "
+                   "%s direction on middle circ ID %u on chan ID "
+                   U64_FORMAT "; killing the circuit.",
+                   hard_max_middle_cells,
+                   (direction == CELL_DIRECTION_OUT) ? "n" : "p",
                    (direction == CELL_DIRECTION_OUT) ?
-                      circ->n_chan->global_identifier :
-                      orcirc->p_chan->global_identifier));
-        circuit_mark_for_close(circ, END_CIRC_REASON_RESOURCELIMIT);
-        return;
+                     circ->n_circ_id : orcirc->p_circ_id,
+                   U64_PRINTF_ARG(
+                     (direction == CELL_DIRECTION_OUT) ?
+                        circ->n_chan->global_identifier :
+                        orcirc->p_chan->global_identifier));
+          circuit_mark_for_close(circ, END_CIRC_REASON_RESOURCELIMIT);
+          return;
+        } else if ((unsigned)queue->n + 1 == orcirc->max_middle_cells) {
+          /* Only use ==, not >= for this test so we don't spam the log */
+          log_warn(LD_CIRC,
+                   "While trying to queue a cell, reached the soft cap of %u "
+                   "in the %s direction on middle circ ID %u "
+                   "on chan ID " U64_FORMAT ".",
+                   orcirc->max_middle_cells,
+                   (direction == CELL_DIRECTION_OUT) ? "n" : "p",
+                   (direction == CELL_DIRECTION_OUT) ?
+                     circ->n_circ_id : orcirc->p_circ_id,
+                   U64_PRINTF_ARG(
+                     (direction == CELL_DIRECTION_OUT) ?
+                        circ->n_chan->global_identifier :
+                        orcirc->p_chan->global_identifier));
+        }
       }
     }
   }
 #endif
 
-  cell_queue_append_packed_copy(queue, cell, chan->wide_circ_ids);
+  cell_queue_append_packed_copy(queue, cell, chan->wide_circ_ids, 1);
 
   if (PREDICT_UNLIKELY(cell_queues_check_size())) {
     /* We ran the OOM handler */

@@ -99,6 +99,7 @@
 #include "ht.h"
 #include "replaycache.h"
 #include "crypto_curve25519.h"
+#include "tor_queue.h"
 
 /* These signals are defined to help handle_control_signal work.
  */
@@ -227,8 +228,14 @@ typedef enum {
 #define CONN_TYPE_AP_NATD_LISTENER 14
 /** Type for sockets listening for DNS requests. */
 #define CONN_TYPE_AP_DNS_LISTENER 15
-#define CONN_TYPE_MAX_ 15
-/* !!!! If CONN_TYPE_MAX_ is ever over 15, we must grow the type field in
+
+/** Type for connections from the Extended ORPort. */
+#define CONN_TYPE_EXT_OR 16
+/** Type for sockets listening for Extended ORPort connections. */
+#define CONN_TYPE_EXT_OR_LISTENER 17
+
+#define CONN_TYPE_MAX_ 17
+/* !!!! If _CONN_TYPE_MAX is ever over 31, we must grow the type field in
  * connection_t. */
 
 /* Proxy client types */
@@ -238,7 +245,9 @@ typedef enum {
 #define PROXY_SOCKS5 3
 /* !!!! If there is ever a PROXY_* type over 2, we must grow the proxy_type
  * field in or_connection_t */
-/* pluggable transports proxy type */
+
+/* Pluggable transport proxy type. Don't use this in or_connection_t,
+ * instead use the actual underlying proxy type (see above).  */
 #define PROXY_PLUGGABLE 4
 
 /* Proxy client handshake states */
@@ -305,6 +314,25 @@ typedef enum {
 /** State for an OR connection: Ready to send/receive cells. */
 #define OR_CONN_STATE_OPEN 8
 #define OR_CONN_STATE_MAX_ 8
+
+/** States of the Extended ORPort protocol. Be careful before changing
+ *  the numbers: they matter. */
+#define EXT_OR_CONN_STATE_MIN_ 1
+/** Extended ORPort authentication is waiting for the authentication
+ *  type selected by the client. */
+#define EXT_OR_CONN_STATE_AUTH_WAIT_AUTH_TYPE 1
+/** Extended ORPort authentication is waiting for the client nonce. */
+#define EXT_OR_CONN_STATE_AUTH_WAIT_CLIENT_NONCE 2
+/** Extended ORPort authentication is waiting for the client hash. */
+#define EXT_OR_CONN_STATE_AUTH_WAIT_CLIENT_HASH 3
+#define EXT_OR_CONN_STATE_AUTH_MAX 3
+/** Authentication finished and the Extended ORPort is now accepting
+ *  traffic. */
+#define EXT_OR_CONN_STATE_OPEN 4
+/** Extended ORPort is flushing its last messages and preparing to
+ *  start accepting OR connections. */
+#define EXT_OR_CONN_STATE_FLUSHING 5
+#define EXT_OR_CONN_STATE_MAX_ 5
 
 #define EXIT_CONN_STATE_MIN_ 1
 /** State for an exit connection: waiting for response from DNS farm. */
@@ -823,9 +851,15 @@ typedef enum {
 /** Maximum number of queued cells on a circuit for which we are the
  * midpoint before we give up and kill it.  This must be >= circwindow
  * to avoid killing innocent circuits, and >= circwindow*2 to give
- * leaky-pipe a chance for being useful someday.
+ * leaky-pipe a chance of working someday. The ORCIRC_MAX_MIDDLE_KILL_THRESH
+ * ratio controls the margin of error between emitting a warning and
+ * killing the circuit.
  */
-#define ORCIRC_MAX_MIDDLE_CELLS (21*(CIRCWINDOW_START_MAX)/10)
+#define ORCIRC_MAX_MIDDLE_CELLS (CIRCWINDOW_START_MAX*2)
+/** Ratio of hard (circuit kill) to soft (warning) thresholds for the
+ * ORCIRC_MAX_MIDDLE_CELLS tests.
+ */
+#define ORCIRC_MAX_MIDDLE_KILL_THRESH (1.1f)
 
 /* Cell commands.  These values are defined in tor-spec.txt. */
 #define CELL_PADDING 0
@@ -1073,9 +1107,17 @@ typedef struct var_cell_t {
   uint8_t payload[FLEXIBLE_ARRAY_MEMBER];
 } var_cell_t;
 
+/** A parsed Extended ORPort message. */
+typedef struct ext_or_cmd_t {
+  uint16_t cmd; /** Command type */
+  uint16_t len; /** Body length */
+  char body[FLEXIBLE_ARRAY_MEMBER]; /** Message body */
+} ext_or_cmd_t;
+
 /** A cell as packed for writing to the network. */
 typedef struct packed_cell_t {
-  struct packed_cell_t *next; /**< Next cell queued on this circuit. */
+  /** Next cell queued on this circuit. */
+  TOR_SIMPLEQ_ENTRY(packed_cell_t) next;
   char body[CELL_MAX_NETWORK_SIZE]; /**< Cell as packed for network. */
 } packed_cell_t;
 
@@ -1097,8 +1139,8 @@ typedef struct insertion_time_queue_t {
 /** A queue of cells on a circuit, waiting to be added to the
  * or_connection_t's outbuf. */
 typedef struct cell_queue_t {
-  packed_cell_t *head; /**< The first cell, or NULL if the queue is empty. */
-  packed_cell_t *tail; /**< The last cell, or NULL if the queue is empty. */
+  /** Linked list of packed_cell_t*/
+  TOR_SIMPLEQ_HEAD(cell_simpleq, packed_cell_t) head;
   int n; /**< The number of cells in the queue. */
   insertion_time_queue_t *insertion_times; /**< Insertion times of cells. */
 } cell_queue_t;
@@ -1153,7 +1195,7 @@ typedef struct connection_t {
                    * *_CONNECTION_MAGIC. */
 
   uint8_t state; /**< Current state of this connection. */
-  unsigned int type:4; /**< What kind of connection is this? */
+  unsigned int type:5; /**< What kind of connection is this? */
   unsigned int purpose:5; /**< Only used for DIR and EXIT types currently. */
 
   /* The next fields are all one-bit booleans. Some are only applicable to
@@ -1398,6 +1440,9 @@ typedef struct or_handshake_state_t {
   /**@}*/
 } or_handshake_state_t;
 
+/** Length of Extended ORPort connection identifier. */
+#define EXT_OR_CONN_ID_LEN DIGEST_LEN /* 20 */
+
 /** Subtype of connection_t for an "OR connection" -- that is, one that speaks
  * cells over TLS. */
 typedef struct or_connection_t {
@@ -1406,6 +1451,20 @@ typedef struct or_connection_t {
   /** Hash of the public RSA key for the other side's identity key, or zeroes
    * if the other side hasn't shown us a valid identity key. */
   char identity_digest[DIGEST_LEN];
+
+  /** Extended ORPort connection identifier. */
+  char *ext_or_conn_id;
+  /** This is the ClientHash value we expect to receive from the
+   *  client during the Extended ORPort authentication protocol. We
+   *  compute it upon receiving the ClientNoce from the client, and we
+   *  compare it with the acual ClientHash value sent by the
+   *  client. */
+  char *ext_or_auth_correct_client_hash;
+  /** String carrying the name of the pluggable transport
+   *  (e.g. "obfs2") that is obfuscating this connection. If no
+   *  pluggable transports are used, it's NULL. */
+  char *ext_or_transport;
+
   char *nickname; /**< Nickname of OR on other side (if any). */
 
   tor_tls_t *tls; /**< TLS connection state. */
@@ -2289,14 +2348,6 @@ typedef struct node_t {
 
 } node_t;
 
-/** How many times will we try to download a router's descriptor before giving
- * up? */
-#define MAX_ROUTERDESC_DOWNLOAD_FAILURES 8
-
-/** How many times will we try to download a microdescriptor before giving
- * up? */
-#define MAX_MICRODESC_DOWNLOAD_FAILURES 8
-
 /** Contents of a v2 (non-consensus, non-vote) network status object. */
 typedef struct networkstatus_v2_t {
   /** When did we receive the network-status document? */
@@ -2506,10 +2557,6 @@ typedef struct desc_store_t {
    * filename for a temporary file when rebuilding the store, and .new to this
    * filename for the journal. */
   const char *fname_base;
-  /** Alternative (obsolete) value for fname_base: if the file named by
-   * fname_base isn't present, we read from here instead, but we never write
-   * here. */
-  const char *fname_alt_base;
   /** Human-readable description of what this store contains. */
   const char *description;
 
@@ -2799,6 +2846,13 @@ typedef struct circuit_t {
    * allowing n_streams to add any more cells. (OR circuit only.) */
   unsigned int streams_blocked_on_p_chan : 1;
 
+  /** True iff we have queued a delete backwards on this circuit, but not put
+   * it on the output buffer. */
+  unsigned int p_delete_pending : 1;
+  /** True iff we have queued a delete forwards on this circuit, but not put
+   * it on the output buffer. */
+  unsigned int n_delete_pending : 1;
+
   uint8_t state; /**< Current status of this circuit. */
   uint8_t purpose; /**< Why are we creating this circuit? */
 
@@ -2853,7 +2907,8 @@ typedef struct circuit_t {
   /** Unique ID for measuring tunneled network status requests. */
   uint64_t dirreq_id;
 
-  struct circuit_t *next; /**< Next circuit in linked list of all circuits. */
+  /** Next circuit in linked list of all circuits (global_circuitlist). */
+  TOR_LIST_ENTRY(circuit_t) head;
 
   /** Next circuit in the doubly-linked ring of circuits waiting to add
    * cells to n_conn.  NULL if we have no cells pending, or if we're not
@@ -3179,6 +3234,12 @@ typedef struct or_circuit_t {
    * exit-ward queues of this circuit; reset every time when writing
    * buffer stats to disk. */
   uint64_t total_cell_waiting_time;
+
+  /** Maximum cell queue size for a middle relay; this is stored per circuit
+   * so append_cell_to_circuit_queue() can adjust it if it changes.  If set
+   * to zero, it is initialized to the default value.
+   */
+  uint32_t max_middle_cells;
 } or_circuit_t;
 
 /** Convert a circuit subtype to a circuit_t. */
@@ -3337,9 +3398,9 @@ typedef struct {
   /** What should the tor process actually do? */
   enum {
     CMD_RUN_TOR=0, CMD_LIST_FINGERPRINT, CMD_HASH_PASSWORD,
-    CMD_VERIFY_CONFIG, CMD_RUN_UNITTESTS
+    CMD_VERIFY_CONFIG, CMD_RUN_UNITTESTS, CMD_DUMP_CONFIG
   } command;
-  const char *command_arg; /**< Argument for command-line option. */
+  char *command_arg; /**< Argument for command-line option. */
 
   config_line_t *Logs; /**< New-style list of configuration lines
                         * for logs */
@@ -3420,6 +3481,8 @@ typedef struct {
   char *User; /**< Name of user to run Tor as. */
   char *Group; /**< Name of group to run Tor as. */
   config_line_t *ORPort_lines; /**< Ports to listen on for OR connections. */
+  /** Ports to listen on for extended OR connections. */
+  config_line_t *ExtORPort_lines;
   /** Ports to listen on for SOCKS connections. */
   config_line_t *SocksPort_lines;
   /** Ports to listen on for transparent pf/netfilter connections. */
@@ -3455,6 +3518,7 @@ typedef struct {
   unsigned int ControlPort_set : 1;
   unsigned int DirPort_set : 1;
   unsigned int DNSPort_set : 1;
+  unsigned int ExtORPort_set : 1;
   /**@}*/
 
   int AssumeReachable; /**< Whether to publish our descriptor regardless. */
@@ -3493,6 +3557,9 @@ typedef struct {
 
   /** List of TCP/IP addresses that transports should listen at. */
   config_line_t *ServerTransportListenAddr;
+
+  /** List of options that must be passed to pluggable transports. */
+  config_line_t *ServerTransportOptions;
 
   int BridgeRelay; /**< Boolean: are we acting as a bridge relay? We make
                     * this explicit so we can change how we behave in the
@@ -3731,7 +3798,10 @@ typedef struct {
 
   int CookieAuthentication; /**< Boolean: do we enable cookie-based auth for
                              * the control system? */
-  char *CookieAuthFile; /**< Location of a cookie authentication file. */
+  char *CookieAuthFile; /**< Filesystem location of a ControlPort
+                         *   authentication cookie. */
+  char *ExtORPortCookieAuthFile; /**< Filesystem location of Extended
+                                 *   ORPort authentication cookie. */
   int CookieAuthFileGroupReadable; /**< Boolean: Is the CookieAuthFile g+r? */
   int LeaveStreamsUnattached; /**< Boolean: Does Tor attach new streams to
                           * circuits itself (0), or does it expect a controller
@@ -3753,6 +3823,7 @@ typedef struct {
     SAFELOG_SCRUB_ALL, SAFELOG_SCRUB_RELAY, SAFELOG_SCRUB_NONE
   } SafeLogging_;
 
+  int Sandbox; /**< Boolean: should sandboxing be enabled? */
   int SafeSocks; /**< Boolean: should we outright refuse application
                   * connections that use socks4 or socks5-with-local-dns? */
 #define LOG_PROTOCOL_WARN (get_options()->ProtocolWarnings ? \
@@ -3924,6 +3995,10 @@ typedef struct {
    * signatures.  Only altered on testing networks.*/
   int TestingV3AuthInitialDistDelay;
 
+  /** Offset in seconds added to the starting time for consensus
+      voting. Only altered on testing networks. */
+  int TestingV3AuthVotingStartOffset;
+
   /** If an authority has been around for less than this amount of time, it
    * does not believe its reachability information is accurate.  Only
    * altered on testing networks. */
@@ -3933,6 +4008,51 @@ typedef struct {
    * probably not have propagated to enough caches.  Only altered on testing
    * networks. */
   int TestingEstimatedDescriptorPropagationTime;
+
+  /** Schedule for when servers should download things in general.  Only
+   * altered on testing networks. */
+  smartlist_t *TestingServerDownloadSchedule;
+
+  /** Schedule for when clients should download things in general.  Only
+   * altered on testing networks. */
+  smartlist_t *TestingClientDownloadSchedule;
+
+  /** Schedule for when servers should download consensuses.  Only altered
+   * on testing networks. */
+  smartlist_t *TestingServerConsensusDownloadSchedule;
+
+  /** Schedule for when clients should download consensuses.  Only altered
+   * on testing networks. */
+  smartlist_t *TestingClientConsensusDownloadSchedule;
+
+  /** Schedule for when clients should download bridge descriptors.  Only
+   * altered on testing networks. */
+  smartlist_t *TestingBridgeDownloadSchedule;
+
+  /** When directory clients have only a few descriptors to request, they
+   * batch them until they have more, or until this amount of time has
+   * passed.  Only altered on testing networks. */
+  int TestingClientMaxIntervalWithoutRequest;
+
+  /** How long do we let a directory connection stall before expiring
+   * it?  Only altered on testing networks. */
+  int TestingDirConnectionMaxStall;
+
+  /** How many times will we try to fetch a consensus before we give
+   * up?  Only altered on testing networks. */
+  int TestingConsensusMaxDownloadTries;
+
+  /** How many times will we try to download a router's descriptor before
+   * giving up?  Only altered on testing networks. */
+  int TestingDescriptorMaxDownloadTries;
+
+  /** How many times will we try to download a microdescriptor before
+   * giving up?  Only altered on testing networks. */
+  int TestingMicrodescMaxDownloadTries;
+
+  /** How many times will we try to fetch a certificate before giving
+   * up?  Only altered on testing networks. */
+  int TestingCertMaxDownloadTries;
 
   /** If true, we take part in a testing network. Change the defaults of a
    * couple of other configuration options and allow to change the values
@@ -4099,6 +4219,9 @@ typedef struct {
 
   /** How long (seconds) do we keep a guard before picking a new one? */
   int GuardLifetime;
+
+  /** Should we send the timestamps that pre-023 hidden services want? */
+  int Support022HiddenServices;
 } or_options_t;
 
 /** Persistent state for an onion router, as saved to disk. */
@@ -4354,30 +4477,7 @@ typedef struct {
   int after_firsthop_idx;
 } network_liveness_t;
 
-/** Structure for circuit build times history */
-typedef struct {
-  /** The circular array of recorded build times in milliseconds */
-  build_time_t circuit_build_times[CBT_NCIRCUITS_TO_OBSERVE];
-  /** Current index in the circuit_build_times circular array */
-  int build_times_idx;
-  /** Total number of build times accumulated. Max CBT_NCIRCUITS_TO_OBSERVE */
-  int total_build_times;
-  /** Information about the state of our local network connection */
-  network_liveness_t liveness;
-  /** Last time we built a circuit. Used to decide to build new test circs */
-  time_t last_circ_at;
-  /** "Minimum" value of our pareto distribution (actually mode) */
-  build_time_t Xm;
-  /** alpha exponent for pareto dist. */
-  double alpha;
-  /** Have we computed a timeout? */
-  int have_computed_timeout;
-  /** The exact value for that timeout in milliseconds. Stored as a double
-   * to maintain precision from calculations to and from quantile value. */
-  double timeout_ms;
-  /** How long we wait before actually closing the circuit. */
-  double close_ms;
-} circuit_build_times_t;
+typedef struct circuit_build_times_s circuit_build_times_t;
 
 /********************************* config.c ***************************/
 

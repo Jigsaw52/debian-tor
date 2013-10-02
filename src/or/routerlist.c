@@ -37,7 +37,7 @@
 #include "routerlist.h"
 #include "routerparse.h"
 #include "routerset.h"
-
+#include "../common/sandbox.h"
 // #define DEBUG_ROUTERLIST
 
 /****************************************************************************/
@@ -629,9 +629,6 @@ authority_cert_dl_looks_uncertain(const char *id_digest)
   return n_failures >= N_AUTH_CERT_DL_FAILURES_TO_BUG_USER;
 }
 
-/** How many times will we try to fetch a certificate before giving up? */
-#define MAX_CERT_DL_FAILURES 8
-
 /** Try to download any v3 authority certificates that we may be missing.  If
  * <b>status</b> is provided, try to get all the ones that were used to sign
  * <b>status</b>.  Additionally, try to have a non-expired certificate for
@@ -703,7 +700,7 @@ authority_certs_fetch_missing(networkstatus_t *status, time_t now)
     } SMARTLIST_FOREACH_END(cert);
     if (!found &&
         download_status_is_ready(&(cl->dl_status_by_id), now,
-                                 MAX_CERT_DL_FAILURES) &&
+                                 get_options()->TestingCertMaxDownloadTries) &&
         !digestmap_get(pending_id, ds->v3_identity_digest)) {
       log_info(LD_DIR,
                "No current certificate known for authority %s "
@@ -765,7 +762,7 @@ authority_certs_fetch_missing(networkstatus_t *status, time_t now)
         }
         if (download_status_is_ready_by_sk_in_cl(
               cl, sig->signing_key_digest,
-              now, MAX_CERT_DL_FAILURES) &&
+              now, get_options()->TestingCertMaxDownloadTries) &&
             !fp_pair_map_get_by_digests(pending_cert,
                                         voter->identity_digest,
                                         sig->signing_key_digest)) {
@@ -1126,32 +1123,18 @@ router_rebuild_store(int flags, desc_store_t *store)
 static int
 router_reload_router_list_impl(desc_store_t *store)
 {
-  char *fname = NULL, *altname = NULL, *contents = NULL;
+  char *fname = NULL, *contents = NULL;
   struct stat st;
-  int read_from_old_location = 0;
   int extrainfo = (store->type == EXTRAINFO_STORE);
-  time_t now = time(NULL);
   store->journal_len = store->store_len = 0;
 
   fname = get_datadir_fname(store->fname_base);
-  if (store->fname_alt_base)
-    altname = get_datadir_fname(store->fname_alt_base);
 
   if (store->mmap) /* get rid of it first */
     tor_munmap_file(store->mmap);
   store->mmap = NULL;
 
   store->mmap = tor_mmap_file(fname);
-  if (!store->mmap && altname && file_status(altname) == FN_FILE) {
-    read_from_old_location = 1;
-    log_notice(LD_DIR, "Couldn't read %s; trying to load routers from old "
-               "location %s.", fname, altname);
-    if ((store->mmap = tor_mmap_file(altname)))
-      read_from_old_location = 1;
-  }
-  if (altname && !read_from_old_location) {
-    remove_file_if_very_old(altname, now);
-  }
   if (store->mmap) {
     store->store_len = store->mmap->size;
     if (extrainfo)
@@ -1168,14 +1151,6 @@ router_reload_router_list_impl(desc_store_t *store)
   fname = get_datadir_fname_suffix(store->fname_base, ".new");
   if (file_status(fname) == FN_FILE)
     contents = read_file_to_str(fname, RFTS_BIN|RFTS_IGNORE_MISSING, &st);
-  if (read_from_old_location) {
-    tor_free(altname);
-    altname = get_datadir_fname_suffix(store->fname_alt_base, ".new");
-    if (!contents)
-      contents = read_file_to_str(altname, RFTS_BIN|RFTS_IGNORE_MISSING, &st);
-    else
-      remove_file_if_very_old(altname, now);
-  }
   if (contents) {
     if (extrainfo)
       router_load_extrainfo_from_string(contents, NULL,SAVED_IN_JOURNAL,
@@ -1188,9 +1163,8 @@ router_reload_router_list_impl(desc_store_t *store)
   }
 
   tor_free(fname);
-  tor_free(altname);
 
-  if (store->journal_len || read_from_old_location) {
+  if (store->journal_len) {
     /* Always clear the journal on startup.*/
     router_rebuild_store(RRS_FORCE, store);
   } else if (!extrainfo) {
@@ -1827,7 +1801,7 @@ router_get_advertised_bandwidth_capped(const routerinfo_t *router)
  * doubles, convert them to uint64_t, and try to scale them linearly so as to
  * much of the range of uint64_t. If <b>total_out</b> is provided, set it to
  * the sum of all elements in the array _before_ scaling. */
-/* private */ void
+STATIC void
 scale_array_elements_to_u64(u64_dbl_t *entries, int n_entries,
                             uint64_t *total_out)
 {
@@ -1870,7 +1844,7 @@ gt_i64_timei(uint64_t a, uint64_t b)
  * value, and return the index of that element.  If all elements are 0, choose
  * an index at random. Return -1 on error.
  */
-/* private */ int
+STATIC int
 choose_array_element_by_weight(const u64_dbl_t *entries, int n_entries)
 {
   int i, i_chosen=-1, n_chosen=0;
@@ -2570,19 +2544,6 @@ router_is_named(const routerinfo_t *router)
           tor_memeq(digest, router->cache_info.identity_digest, DIGEST_LEN));
 }
 
-/** Return true iff the digest of <b>router</b>'s identity key,
- * encoded in hexadecimal, matches <b>hexdigest</b> (which is
- * optionally prefixed with a single dollar sign).  Return false if
- * <b>hexdigest</b> is malformed, or it doesn't match.  */
-static INLINE int
-router_hex_digest_matches(const routerinfo_t *router, const char *hexdigest)
-{
-  return hex_digest_nickname_matches(hexdigest,
-                                     router->cache_info.identity_digest,
-                                     router->nickname,
-                                     router_is_named(router));
-}
-
 /** Return true iff <b>digest</b> is the digest of the identity key of a
  * trusted directory matching at least one bit of <b>type</b>.  If <b>type</b>
  * is zero, any authority is okay. */
@@ -2777,7 +2738,6 @@ router_get_routerlist(void)
     routerlist->extra_info_map = eimap_new();
 
     routerlist->desc_store.fname_base = "cached-descriptors";
-    routerlist->desc_store.fname_alt_base = "cached-routers";
     routerlist->extrainfo_store.fname_base = "cached-extrainfo";
 
     routerlist->desc_store.type = ROUTER_STORE;
@@ -4487,12 +4447,8 @@ initiate_descriptor_downloads(const routerstatus_t *source,
  * try to split our requests into at least this many requests. */
 #define MIN_REQUESTS 3
 /** If we want fewer than this many descriptors, wait until we
- * want more, or until MAX_CLIENT_INTERVAL_WITHOUT_REQUEST has
- * passed. */
+ * want more, or until TestingClientMaxIntervalWithoutRequest has passed. */
 #define MAX_DL_TO_DELAY 16
-/** When directory clients have only a few servers to request, they batch
- * them until they have more, or until this amount of time has passed. */
-#define MAX_CLIENT_INTERVAL_WITHOUT_REQUEST (10*60)
 
 /** Given a <b>purpose</b> (FETCH_MICRODESC or FETCH_SERVERDESC) and a list of
  * router descriptor digests or microdescriptor digest256s in
@@ -4524,7 +4480,7 @@ launch_descriptor_downloads(int purpose,
       should_delay = 0;
     } else {
       should_delay = (last_descriptor_download_attempted +
-                      MAX_CLIENT_INTERVAL_WITHOUT_REQUEST) > now;
+                      options->TestingClientMaxIntervalWithoutRequest) > now;
       if (!should_delay && n_downloadable) {
         if (last_descriptor_download_attempted) {
           log_info(LD_DIR,
@@ -4797,7 +4753,7 @@ update_consensus_router_descriptor_downloads(time_t now, int is_vote,
         continue; /* We have an in-progress download. */
       }
       if (!download_status_is_ready(&rs->dl_status, now,
-                                    MAX_ROUTERDESC_DOWNLOAD_FAILURES)) {
+                          options->TestingDescriptorMaxDownloadTries)) {
         ++n_delayed; /* Not ready for retry. */
         continue;
       }
@@ -4957,7 +4913,7 @@ update_extrainfo_downloads(time_t now)
         continue;
       }
       if (!download_status_is_ready(&sd->ei_dl_status, now,
-                                    MAX_ROUTERDESC_DOWNLOAD_FAILURES)) {
+                          options->TestingDescriptorMaxDownloadTries)) {
         ++n_delay;
         continue;
       }

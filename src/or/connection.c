@@ -10,6 +10,7 @@
  * on connections.
  **/
 
+#define CONNECTION_PRIVATE
 #include "or.h"
 #include "buffers.h"
 /*
@@ -33,6 +34,7 @@
 #include "dns.h"
 #include "dnsserv.h"
 #include "entrynodes.h"
+#include "ext_orport.h"
 #include "geoip.h"
 #include "main.h"
 #include "policies.h"
@@ -44,6 +46,7 @@
 #include "router.h"
 #include "transports.h"
 #include "routerparse.h"
+#include "transports.h"
 
 #ifdef USE_BUFFEREVENTS
 #include <event2/event.h>
@@ -97,6 +100,7 @@ static smartlist_t *outgoing_addrs = NULL;
 
 #define CASE_ANY_LISTENER_TYPE \
     case CONN_TYPE_OR_LISTENER: \
+    case CONN_TYPE_EXT_OR_LISTENER: \
     case CONN_TYPE_AP_LISTENER: \
     case CONN_TYPE_DIR_LISTENER: \
     case CONN_TYPE_CONTROL_LISTENER: \
@@ -128,6 +132,8 @@ conn_type_to_string(int type)
     case CONN_TYPE_CPUWORKER: return "CPU worker";
     case CONN_TYPE_CONTROL_LISTENER: return "Control listener";
     case CONN_TYPE_CONTROL: return "Control";
+    case CONN_TYPE_EXT_OR: return "Extended OR";
+    case CONN_TYPE_EXT_OR_LISTENER: return "Extended OR listener";
     default:
       log_warn(LD_BUG, "unknown connection type %d", type);
       tor_snprintf(buf, sizeof(buf), "unknown [%d]", type);
@@ -162,6 +168,18 @@ conn_state_to_string(int type, int state)
         case OR_CONN_STATE_OR_HANDSHAKING_V3:
           return "handshaking (Tor, v3 handshake)";
         case OR_CONN_STATE_OPEN: return "open";
+      }
+      break;
+    case CONN_TYPE_EXT_OR:
+      switch (state) {
+        case EXT_OR_CONN_STATE_AUTH_WAIT_AUTH_TYPE:
+          return "waiting for authentication type";
+        case EXT_OR_CONN_STATE_AUTH_WAIT_CLIENT_NONCE:
+          return "waiting for client nonce";
+        case EXT_OR_CONN_STATE_AUTH_WAIT_CLIENT_HASH:
+          return "waiting for client hash";
+        case EXT_OR_CONN_STATE_OPEN: return "open";
+        case EXT_OR_CONN_STATE_FLUSHING: return "flushing final OKAY";
       }
       break;
     case CONN_TYPE_EXIT:
@@ -228,6 +246,7 @@ connection_type_uses_bufferevent(connection_t *conn)
     case CONN_TYPE_DIR:
     case CONN_TYPE_CONTROL:
     case CONN_TYPE_OR:
+    case CONN_TYPE_EXT_OR:
     case CONN_TYPE_CPUWORKER:
       return 1;
     default:
@@ -258,13 +277,17 @@ dir_connection_new(int socket_family)
  * Set active_circuit_pqueue_last_recalibrated to current cell_ewma tick.
  */
 or_connection_t *
-or_connection_new(int socket_family)
+or_connection_new(int type, int socket_family)
 {
   or_connection_t *or_conn = tor_malloc_zero(sizeof(or_connection_t));
   time_t now = time(NULL);
-  connection_init(now, TO_CONN(or_conn), CONN_TYPE_OR, socket_family);
+  tor_assert(type == CONN_TYPE_OR || type == CONN_TYPE_EXT_OR);
+  connection_init(now, TO_CONN(or_conn), type, socket_family);
 
   or_conn->timestamp_last_added_nonpadding = time(NULL);
+
+  if (type == CONN_TYPE_EXT_OR)
+    connection_or_set_ext_or_identifier(or_conn);
 
   return or_conn;
 }
@@ -334,7 +357,8 @@ connection_new(int type, int socket_family)
 {
   switch (type) {
     case CONN_TYPE_OR:
-      return TO_CONN(or_connection_new(socket_family));
+    case CONN_TYPE_EXT_OR:
+      return TO_CONN(or_connection_new(type, socket_family));
 
     case CONN_TYPE_EXIT:
       return TO_CONN(edge_connection_new(type, socket_family));
@@ -376,6 +400,7 @@ connection_init(time_t now, connection_t *conn, int type, int socket_family)
 
   switch (type) {
     case CONN_TYPE_OR:
+    case CONN_TYPE_EXT_OR:
       conn->magic = OR_CONNECTION_MAGIC;
       break;
     case CONN_TYPE_EXIT:
@@ -434,7 +459,7 @@ connection_link_connections(connection_t *conn_a, connection_t *conn_b)
  * necessary, close its socket if necessary, and mark the directory as dirty
  * if <b>conn</b> is an OR or OP connection.
  */
-static void
+STATIC void
 connection_free_(connection_t *conn)
 {
   void *mem;
@@ -444,6 +469,7 @@ connection_free_(connection_t *conn)
 
   switch (conn->type) {
     case CONN_TYPE_OR:
+    case CONN_TYPE_EXT_OR:
       tor_assert(conn->magic == OR_CONNECTION_MAGIC);
       mem = TO_OR_CONN(conn);
       memlen = sizeof(or_connection_t);
@@ -574,6 +600,13 @@ connection_free_(connection_t *conn)
     log_warn(LD_BUG, "called on OR conn with non-zeroed identity_digest");
     connection_or_remove_from_identity_map(TO_OR_CONN(conn));
   }
+  if (conn->type == CONN_TYPE_OR || conn->type == CONN_TYPE_EXT_OR) {
+    connection_or_remove_from_ext_or_id_map(TO_OR_CONN(conn));
+    tor_free(TO_OR_CONN(conn)->ext_or_conn_id);
+    tor_free(TO_OR_CONN(conn)->ext_or_auth_correct_client_hash);
+    tor_free(TO_OR_CONN(conn)->ext_or_transport);
+  }
+
 #ifdef USE_BUFFEREVENTS
   if (conn->type == CONN_TYPE_OR && TO_OR_CONN(conn)->bucket_cfg) {
     ev_token_bucket_cfg_free(TO_OR_CONN(conn)->bucket_cfg);
@@ -637,6 +670,7 @@ connection_about_to_close_connection(connection_t *conn)
       connection_dir_about_to_close(TO_DIR_CONN(conn));
       break;
     case CONN_TYPE_OR:
+    case CONN_TYPE_EXT_OR:
       connection_or_about_to_close(TO_OR_CONN(conn));
       break;
     case CONN_TYPE_AP:
@@ -876,8 +910,11 @@ check_location_for_unix_socket(const or_options_t *options, const char *path)
   int r = -1;
   char *p = tor_strdup(path);
   cpd_check_t flags = CPD_CHECK_MODE_ONLY;
-  if (get_parent_directory(p)<0)
+  if (get_parent_directory(p)<0 || p[0] != '/') {
+    log_warn(LD_GENERAL, "Bad unix socket address '%s'.  Tor does not support "
+             "relative paths for unix sockets.", path);
     goto done;
+  }
 
   if (options->ControlSocketsGroupWritable)
     flags |= CPD_GROUP_OK;
@@ -926,6 +963,27 @@ make_socket_reuseable(tor_socket_t sock)
 #endif
 }
 
+/** Max backlog to pass to listen.  We start at */
+static int listen_limit = INT_MAX;
+
+/* Listen on <b>fd</b> with appropriate backlog. Return as for listen. */
+static int
+tor_listen(tor_socket_t fd)
+{
+  int r;
+
+  if ((r = listen(fd, listen_limit)) < 0) {
+    if (listen_limit == SOMAXCONN)
+      return r;
+    if ((r = listen(fd, SOMAXCONN)) == 0) {
+      listen_limit = SOMAXCONN;
+      log_warn(LD_NET, "Setting listen backlog to INT_MAX connections "
+               "didn't work, but SOMAXCONN did. Lowering backlog limit.");
+    }
+  }
+  return r;
+}
+
 /** Bind a new non-blocking socket listening to the socket described
  * by <b>listensockaddr</b>.
  *
@@ -939,8 +997,8 @@ connection_listener_new(const struct sockaddr *listensockaddr,
                            const port_cfg_t *port_cfg)
 {
   listener_connection_t *lis_conn;
-  connection_t *conn;
-  tor_socket_t s; /* the socket we're going to make */
+  connection_t *conn = NULL;
+  tor_socket_t s = TOR_INVALID_SOCKET;  /* the socket we're going to make */
   or_options_t const *options = get_options();
 #if defined(HAVE_PWD_H) && defined(HAVE_SYS_UN_H)
   struct passwd *pw = NULL;
@@ -966,7 +1024,7 @@ connection_listener_new(const struct sockaddr *listensockaddr,
     log_notice(LD_NET, "Opening %s on %s",
                conn_type_to_string(type), fmt_addrport(&addr, usePort));
 
-    s = tor_open_socket(tor_addr_family(&addr),
+    s = tor_open_socket_nonblocking(tor_addr_family(&addr),
                         is_tcp ? SOCK_STREAM : SOCK_DGRAM,
                         is_tcp ? IPPROTO_TCP: IPPROTO_UDP);
     if (!SOCKET_OK(s)) {
@@ -988,7 +1046,7 @@ connection_listener_new(const struct sockaddr *listensockaddr,
       /* We need to set IPV6_V6ONLY so that this socket can't get used for
        * IPv4 connections. */
       if (setsockopt(s,IPPROTO_IPV6, IPV6_V6ONLY,
-                     (void*)&one, sizeof(one))<0) {
+                     (void*)&one, sizeof(one)) < 0) {
         int e = tor_socket_errno(s);
         log_warn(LD_NET, "Error setting IPV6_V6ONLY flag: %s",
                  tor_socket_strerror(e));
@@ -1004,15 +1062,13 @@ connection_listener_new(const struct sockaddr *listensockaddr,
         helpfulhint = ". Is Tor already running?";
       log_warn(LD_NET, "Could not bind to %s:%u: %s%s", address, usePort,
                tor_socket_strerror(e), helpfulhint);
-      tor_close_socket(s);
       goto err;
     }
 
     if (is_tcp) {
-      if (listen(s,SOMAXCONN) < 0) {
+      if (tor_listen(s) < 0) {
         log_warn(LD_NET, "Could not listen on %s:%u: %s", address, usePort,
                  tor_socket_strerror(tor_socket_errno(s)));
-        tor_close_socket(s);
         goto err;
       }
     }
@@ -1052,7 +1108,7 @@ connection_listener_new(const struct sockaddr *listensockaddr,
                        strerror(errno));
       goto err;
     }
-    s = tor_open_socket(AF_UNIX, SOCK_STREAM, 0);
+    s = tor_open_socket_nonblocking(AF_UNIX, SOCK_STREAM, 0);
     if (! SOCKET_OK(s)) {
       log_warn(LD_NET,"Socket creation failed: %s.", strerror(errno));
       goto err;
@@ -1061,7 +1117,6 @@ connection_listener_new(const struct sockaddr *listensockaddr,
     if (bind(s, listensockaddr, (socklen_t)sizeof(struct sockaddr_un)) == -1) {
       log_warn(LD_NET,"Bind to %s failed: %s.", address,
                tor_socket_strerror(tor_socket_errno(s)));
-      tor_close_socket(s);
       goto err;
     }
 #ifdef HAVE_PWD_H
@@ -1070,12 +1125,10 @@ connection_listener_new(const struct sockaddr *listensockaddr,
       if (pw == NULL) {
         log_warn(LD_NET,"Unable to chown() %s socket: user %s not found.",
                  address, options->User);
-        tor_close_socket(s);
         goto err;
       } else if (chown(address, pw->pw_uid, pw->pw_gid) < 0) {
         log_warn(LD_NET,"Unable to chown() %s socket: %s.",
                  address, strerror(errno));
-        tor_close_socket(s);
         goto err;
       }
     }
@@ -1085,35 +1138,29 @@ connection_listener_new(const struct sockaddr *listensockaddr,
        * platforms. */
       if (chmod(address, 0660) < 0) {
         log_warn(LD_FS,"Unable to make %s group-writable.", address);
-        tor_close_socket(s);
         goto err;
       }
     }
 
-    if (listen(s,SOMAXCONN) < 0) {
+    if (listen(s, SOMAXCONN) < 0) {
       log_warn(LD_NET, "Could not listen on %s: %s", address,
                tor_socket_strerror(tor_socket_errno(s)));
-      tor_close_socket(s);
       goto err;
     }
 #else
     (void)options;
 #endif /* HAVE_SYS_UN_H */
   } else {
-      log_err(LD_BUG,"Got unexpected address family %d.",
-              listensockaddr->sa_family);
-      tor_assert(0);
-  }
-
-  if (set_socket_nonblocking(s) == -1) {
-    tor_close_socket(s);
-    goto err;
+    log_err(LD_BUG, "Got unexpected address family %d.",
+            listensockaddr->sa_family);
+    tor_assert(0);
   }
 
   lis_conn = listener_connection_new(type, listensockaddr->sa_family);
   conn = TO_CONN(lis_conn);
   conn->socket_family = listensockaddr->sa_family;
   conn->s = s;
+  s = TOR_INVALID_SOCKET; /* Prevent double-close */
   conn->address = tor_strdup(address);
   conn->port = gotPort;
   tor_addr_copy(&conn->addr, &addr);
@@ -1149,7 +1196,6 @@ connection_listener_new(const struct sockaddr *listensockaddr,
 
   if (connection_add(conn) < 0) { /* no space, forget it */
     log_warn(LD_NET,"connection_add for listener failed. Giving up.");
-    connection_free(conn);
     goto err;
   }
 
@@ -1168,6 +1214,11 @@ connection_listener_new(const struct sockaddr *listensockaddr,
   return conn;
 
  err:
+  if (SOCKET_OK(s))
+    tor_close_socket(s);
+  if (conn)
+    connection_free(conn);
+
   return NULL;
 }
 
@@ -1252,7 +1303,7 @@ connection_handle_listener_read(connection_t *conn, int new_type)
   tor_assert((size_t)remotelen >= sizeof(struct sockaddr_in));
   memset(&addrbuf, 0, sizeof(addrbuf));
 
-  news = tor_accept_socket(conn->s,remote,&remotelen);
+  news = tor_accept_socket_nonblocking(conn->s,remote,&remotelen);
   if (!SOCKET_OK(news)) { /* accept() error */
     int e = tor_socket_errno(conn->s);
     if (ERRNO_IS_ACCEPT_EAGAIN(e)) {
@@ -1272,10 +1323,6 @@ connection_handle_listener_read(connection_t *conn, int new_type)
             (int)news,(int)conn->s);
 
   make_socket_reuseable(news);
-  if (set_socket_nonblocking(news) == -1) {
-    tor_close_socket(news);
-    return 0;
-  }
 
   if (options->ConstrainedSockets)
     set_constrained_socket_buffers(news, (int)options->ConstrainedSockSize);
@@ -1374,6 +1421,9 @@ connection_init_accepted_conn(connection_t *conn,
   connection_start_reading(conn);
 
   switch (conn->type) {
+    case CONN_TYPE_EXT_OR:
+      /* Initiate Extended ORPort authentication. */
+      return connection_ext_or_start_auth(TO_OR_CONN(conn));
     case CONN_TYPE_OR:
       control_event_or_conn_status(TO_OR_CONN(conn), OR_CONN_EVENT_NEW, 0);
       rv = connection_tls_start_handshake(TO_OR_CONN(conn), 1);
@@ -1467,7 +1517,7 @@ connection_connect(connection_t *conn, const char *address,
     return -1;
   }
 
-  s = tor_open_socket(protocol_family,SOCK_STREAM,IPPROTO_TCP);
+  s = tor_open_socket_nonblocking(protocol_family,SOCK_STREAM,IPPROTO_TCP);
   if (! SOCKET_OK(s)) {
     *socket_error = tor_socket_errno(-1);
     log_warn(LD_NET,"Error creating network socket: %s",
@@ -1507,12 +1557,6 @@ connection_connect(connection_t *conn, const char *address,
         }
       }
     }
-  }
-
-  if (set_socket_nonblocking(s) == -1) {
-    *socket_error = tor_socket_errno(s);
-    tor_close_socket(s);
-    return -1;
   }
 
   if (options->ConstrainedSockets)
@@ -1580,6 +1624,32 @@ connection_proxy_state_to_string(int state)
   return states[state];
 }
 
+/** Returns the global proxy type used by tor. Use this function for
+ *  logging or high-level purposes, don't use it to fill the
+ *  <b>proxy_type</b> field of or_connection_t; use the actual proxy
+ *  protocol instead.*/
+static int
+get_proxy_type(void)
+{
+  const or_options_t *options = get_options();
+
+  if (options->HTTPSProxy)
+    return PROXY_CONNECT;
+  else if (options->Socks4Proxy)
+    return PROXY_SOCKS4;
+  else if (options->Socks5Proxy)
+    return PROXY_SOCKS5;
+  else if (options->ClientTransportPlugin)
+    return PROXY_PLUGGABLE;
+  else
+    return PROXY_NONE;
+}
+
+/* One byte for the version, one for the command, two for the
+   port, and four for the addr... and, one more for the
+   username NUL: */
+#define SOCKS4_STANDARD_BUFFER_SIZE (1 + 1 + 2 + 4 + 1)
+
 /** Write a proxy request of <b>type</b> (socks4, socks5, https) to conn
  * for conn->addr:conn->port, authenticating with the auth details given
  * in the configuration (if available). SOCKS 5 and HTTP CONNECT proxies
@@ -1634,16 +1704,44 @@ connection_proxy_connect(connection_t *conn, int type)
     }
 
     case PROXY_SOCKS4: {
-      unsigned char buf[9];
+      unsigned char *buf;
       uint16_t portn;
       uint32_t ip4addr;
+      size_t buf_size = 0;
+      char *socks_args_string = NULL;
 
-      /* Send a SOCKS4 connect request with empty user id */
+      /* Send a SOCKS4 connect request */
 
       if (tor_addr_family(&conn->addr) != AF_INET) {
         log_warn(LD_NET, "SOCKS4 client is incompatible with IPv6");
         return -1;
       }
+
+      { /* If we are here because we are trying to connect to a
+           pluggable transport proxy, check if we have any SOCKS
+           arguments to transmit. If we do, compress all arguments to
+           a single string in 'socks_args_string': */
+
+        if (get_proxy_type() == PROXY_PLUGGABLE) {
+          socks_args_string =
+            pt_get_socks_args_for_proxy_addrport(&conn->addr, conn->port);
+          if (socks_args_string)
+            log_debug(LD_NET, "Sending out '%s' as our SOCKS argument string.",
+                      socks_args_string);
+        }
+      }
+
+      { /* Figure out the buffer size we need for the SOCKS message: */
+
+        buf_size = SOCKS4_STANDARD_BUFFER_SIZE;
+
+        /* If we have a SOCKS argument string, consider its size when
+           calculating the buffer size: */
+        if (socks_args_string)
+          buf_size += strlen(socks_args_string);
+      }
+
+      buf = tor_malloc_zero(buf_size);
 
       ip4addr = tor_addr_to_ipv4n(&conn->addr);
       portn = htons(conn->port);
@@ -1652,9 +1750,23 @@ connection_proxy_connect(connection_t *conn, int type)
       buf[1] = SOCKS_COMMAND_CONNECT; /* command */
       memcpy(buf + 2, &portn, 2); /* port */
       memcpy(buf + 4, &ip4addr, 4); /* addr */
-      buf[8] = 0; /* userid (empty) */
 
-      connection_write_to_buf((char *)buf, sizeof(buf), conn);
+      /* Next packet field is the userid. If we have pluggable
+         transport SOCKS arguments, we have to embed them
+         there. Otherwise, we use an empty userid.  */
+      if (socks_args_string) { /* place the SOCKS args string: */
+        tor_assert(strlen(socks_args_string) > 0);
+        tor_assert(buf_size >=
+                   SOCKS4_STANDARD_BUFFER_SIZE + strlen(socks_args_string));
+        strlcpy((char *)buf + 8, socks_args_string, buf_size - 8);
+        tor_free(socks_args_string);
+      } else {
+        buf[8] = 0; /* no userid */
+      }
+
+      connection_write_to_buf((char *)buf, buf_size, conn);
+      tor_free(buf);
+
       conn->proxy_state = PROXY_SOCKS4_WANT_CONNECT_OK;
       break;
     }
@@ -1666,8 +1778,13 @@ connection_proxy_connect(connection_t *conn, int type)
 
       buf[0] = 5; /* version */
 
+      /* We have to use SOCKS5 authentication, if we have a
+         Socks5ProxyUsername or if we want to pass arguments to our
+         pluggable transport proxy: */
+      if ((options->Socks5ProxyUsername) ||
+          (get_proxy_type() == PROXY_PLUGGABLE &&
+           (get_socks_args_by_bridge_addrport(&conn->addr, conn->port)))) {
       /* number of auth methods */
-      if (options->Socks5ProxyUsername) {
         buf[1] = 2;
         buf[2] = 0x00; /* no authentication */
         buf[3] = 0x02; /* rfc1929 Username/Passwd auth */
@@ -1861,15 +1978,49 @@ connection_read_proxy_handshake(connection_t *conn)
         unsigned char buf[1024];
         size_t reqsize, usize, psize;
         const char *user, *pass;
+        char *socks_args_string = NULL;
 
-        user = get_options()->Socks5ProxyUsername;
-        pass = get_options()->Socks5ProxyPassword;
-        tor_assert(user && pass);
+        if (get_proxy_type() == PROXY_PLUGGABLE) {
+          socks_args_string =
+            pt_get_socks_args_for_proxy_addrport(&conn->addr, conn->port);
+          if (!socks_args_string) {
+            log_warn(LD_NET, "Could not create SOCKS args string.");
+            ret = -1;
+            break;
+          }
 
-        /* XXX len of user and pass must be <= 255 !!! */
-        usize = strlen(user);
-        psize = strlen(pass);
-        tor_assert(usize <= 255 && psize <= 255);
+          log_debug(LD_NET, "SOCKS5 arguments: %s", socks_args_string);
+          tor_assert(strlen(socks_args_string) > 0);
+          tor_assert(strlen(socks_args_string) <= MAX_SOCKS5_AUTH_SIZE_TOTAL);
+
+          if (strlen(socks_args_string) > MAX_SOCKS5_AUTH_FIELD_SIZE) {
+            user = socks_args_string;
+            usize = MAX_SOCKS5_AUTH_FIELD_SIZE;
+            pass = socks_args_string + MAX_SOCKS5_AUTH_FIELD_SIZE;
+            psize = strlen(socks_args_string) - MAX_SOCKS5_AUTH_FIELD_SIZE;
+          } else {
+            user = socks_args_string;
+            usize = strlen(socks_args_string);
+            pass = "\0";
+            psize = 1;
+          }
+        } else if (get_options()->Socks5ProxyUsername) {
+          user = get_options()->Socks5ProxyUsername;
+          pass = get_options()->Socks5ProxyPassword;
+          tor_assert(user && pass);
+          usize = strlen(user);
+          psize = strlen(pass);
+        } else {
+          log_err(LD_BUG, "We entered %s for no reason!", __func__);
+          tor_fragile_assert();
+          ret = -1;
+          break;
+        }
+
+        /* Username and password lengths should have been checked
+           above and during torrc parsing. */
+        tor_assert(usize <= MAX_SOCKS5_AUTH_FIELD_SIZE &&
+                   psize <= MAX_SOCKS5_AUTH_FIELD_SIZE);
         reqsize = 3 + usize + psize;
 
         buf[0] = 1; /* negotiation version */
@@ -1877,6 +2028,9 @@ connection_read_proxy_handshake(connection_t *conn)
         memcpy(buf + 2, user, usize);
         buf[2 + usize] = psize;
         memcpy(buf + 3 + usize, pass, psize);
+
+        if (socks_args_string)
+          tor_free(socks_args_string);
 
         connection_write_to_buf((char *)buf, reqsize, conn);
 
@@ -2776,6 +2930,8 @@ connection_handle_read_impl(connection_t *conn)
   switch (conn->type) {
     case CONN_TYPE_OR_LISTENER:
       return connection_handle_listener_read(conn, CONN_TYPE_OR);
+    case CONN_TYPE_EXT_OR_LISTENER:
+      return connection_handle_listener_read(conn, CONN_TYPE_EXT_OR);
     case CONN_TYPE_AP_LISTENER:
     case CONN_TYPE_AP_TRANS_LISTENER:
     case CONN_TYPE_AP_NATD_LISTENER:
@@ -3288,8 +3444,8 @@ connection_outbuf_too_full(connection_t *conn)
 
 /** Try to flush more bytes onto <b>conn</b>-\>s.
  *
- * This function gets called either from conn_write() in main.c
- * when poll() has declared that conn wants to write, or below
+ * This function gets called either from conn_write_callback() in main.c
+ * when libevent tells us that conn wants to write, or below
  * from connection_write_to_buf() when an entire TLS record is ready.
  *
  * Update <b>conn</b>-\>timestamp_lastwritten to now, and call flush_buf
@@ -3566,9 +3722,9 @@ connection_flush(connection_t *conn)
  * it all, so we don't end up with many megabytes of controller info queued at
  * once.
  */
-void
-connection_write_to_buf_impl_(const char *string, size_t len,
-                              connection_t *conn, int zlib)
+MOCK_IMPL(void,
+connection_write_to_buf_impl_,(const char *string, size_t len,
+                               connection_t *conn, int zlib))
 {
   /* XXXX This function really needs to return -1 on failure. */
   int r;
@@ -3808,6 +3964,7 @@ int
 connection_is_listener(connection_t *conn)
 {
   if (conn->type == CONN_TYPE_OR_LISTENER ||
+      conn->type == CONN_TYPE_EXT_OR_LISTENER ||
       conn->type == CONN_TYPE_AP_LISTENER ||
       conn->type == CONN_TYPE_AP_TRANS_LISTENER ||
       conn->type == CONN_TYPE_AP_DNS_LISTENER ||
@@ -3830,6 +3987,7 @@ connection_state_is_open(connection_t *conn)
     return 0;
 
   if ((conn->type == CONN_TYPE_OR && conn->state == OR_CONN_STATE_OPEN) ||
+      (conn->type == CONN_TYPE_EXT_OR) ||
       (conn->type == CONN_TYPE_AP && conn->state == AP_CONN_STATE_OPEN) ||
       (conn->type == CONN_TYPE_EXIT && conn->state == EXIT_CONN_STATE_OPEN) ||
       (conn->type == CONN_TYPE_CONTROL &&
@@ -3999,6 +4157,8 @@ connection_process_inbuf(connection_t *conn, int package_partial)
   switch (conn->type) {
     case CONN_TYPE_OR:
       return connection_or_process_inbuf(TO_OR_CONN(conn));
+    case CONN_TYPE_EXT_OR:
+      return connection_ext_or_process_inbuf(TO_OR_CONN(conn));
     case CONN_TYPE_EXIT:
     case CONN_TYPE_AP:
       return connection_edge_process_inbuf(TO_EDGE_CONN(conn),
@@ -4059,6 +4219,8 @@ connection_finished_flushing(connection_t *conn)
   switch (conn->type) {
     case CONN_TYPE_OR:
       return connection_or_finished_flushing(TO_OR_CONN(conn));
+    case CONN_TYPE_EXT_OR:
+      return connection_ext_or_finished_flushing(TO_OR_CONN(conn));
     case CONN_TYPE_AP:
     case CONN_TYPE_EXIT:
       return connection_edge_finished_flushing(TO_EDGE_CONN(conn));
@@ -4114,6 +4276,7 @@ connection_reached_eof(connection_t *conn)
 {
   switch (conn->type) {
     case CONN_TYPE_OR:
+    case CONN_TYPE_EXT_OR:
       return connection_or_reached_eof(TO_OR_CONN(conn));
     case CONN_TYPE_AP:
     case CONN_TYPE_EXIT:
@@ -4200,6 +4363,7 @@ assert_connection_ok(connection_t *conn, time_t now)
 
   switch (conn->type) {
     case CONN_TYPE_OR:
+    case CONN_TYPE_EXT_OR:
       tor_assert(conn->magic == OR_CONNECTION_MAGIC);
       break;
     case CONN_TYPE_AP:
@@ -4305,6 +4469,10 @@ assert_connection_ok(connection_t *conn, time_t now)
       tor_assert(conn->state >= OR_CONN_STATE_MIN_);
       tor_assert(conn->state <= OR_CONN_STATE_MAX_);
       break;
+    case CONN_TYPE_EXT_OR:
+      tor_assert(conn->state >= EXT_OR_CONN_STATE_MIN_);
+      tor_assert(conn->state <= EXT_OR_CONN_STATE_MAX_);
+      break;
     case CONN_TYPE_EXIT:
       tor_assert(conn->state >= EXIT_CONN_STATE_MIN_);
       tor_assert(conn->state <= EXIT_CONN_STATE_MAX_);
@@ -4366,7 +4534,7 @@ get_proxy_addrport(tor_addr_t *addr, uint16_t *port, int *proxy_type,
              options->Bridges) {
     const transport_t *transport = NULL;
     int r;
-    r = find_transport_by_bridge_addrport(&conn->addr, conn->port, &transport);
+    r = get_transport_by_bridge_addrport(&conn->addr, conn->port, &transport);
     if (r<0)
       return -1;
     if (transport) { /* transport found */
@@ -4379,24 +4547,6 @@ get_proxy_addrport(tor_addr_t *addr, uint16_t *port, int *proxy_type,
 
   *proxy_type = PROXY_NONE;
   return 0;
-}
-
-/** Returns the global proxy type used by tor. */
-static int
-get_proxy_type(void)
-{
-  const or_options_t *options = get_options();
-
-  if (options->HTTPSProxy)
-    return PROXY_CONNECT;
-  else if (options->Socks4Proxy)
-    return PROXY_SOCKS4;
-  else if (options->Socks5Proxy)
-    return PROXY_SOCKS5;
-  else if (options->ClientTransportPlugin)
-    return PROXY_PLUGGABLE;
-  else
-    return PROXY_NONE;
 }
 
 /** Log a failed connection to a proxy server.
@@ -4455,6 +4605,7 @@ connection_free_all(void)
 
   /* Unlink everything from the identity map. */
   connection_or_clear_identity_map();
+  connection_or_clear_ext_or_id_map();
 
   /* Clear out our list of broken connections */
   clear_broken_connection_map(0);

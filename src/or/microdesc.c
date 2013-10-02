@@ -139,7 +139,7 @@ get_microdesc_cache(void)
  * ending at <b>eos</b>, and store them in <b>cache</b>.  If <b>no_save</b>,
  * mark them as non-writable to disk.  If <b>where</b> is SAVED_IN_CACHE,
  * leave their bodies as pointers to the mmap'd cache.  If where is
- * <b>SAVED_NOWHERE</b>, do not allow annotations.  If listed_at is positive,
+ * <b>SAVED_NOWHERE</b>, do not allow annotations.  If listed_at is not -1,
  * set the last_listed field of every microdesc to listed_at.  If
  * requested_digests is non-null, then it contains a list of digests we mean
  * to allow, so we should reject any non-requested microdesc with a different
@@ -159,7 +159,7 @@ microdescs_add_to_cache(microdesc_cache_t *cache,
   descriptors = microdescs_parse_from_string(s, eos,
                                              allow_annotations,
                                              copy_body);
-  if (listed_at > 0) {
+  if (listed_at != (time_t)-1) {
     SMARTLIST_FOREACH(descriptors, microdesc_t *, md,
                       md->last_listed = listed_at);
   }
@@ -213,7 +213,6 @@ microdescs_add_list_to_cache(microdesc_cache_t *cache,
     if (fd < 0) {
       log_warn(LD_DIR, "Couldn't append to journal in %s: %s",
                cache->journal_fname, strerror(errno));
-      return NULL;
     }
   }
 
@@ -238,11 +237,11 @@ microdescs_add_list_to_cache(microdesc_cache_t *cache,
       if (size < 0) {
         /* we already warned in dump_microdescriptor */
         abort_writing_to_file(open_file);
-        smartlist_clear(added);
-        return added;
+        fd = -1;
+      } else {
+        md->saved_location = SAVED_IN_JOURNAL;
+        cache->journal_len += size;
       }
-      md->saved_location = SAVED_IN_JOURNAL;
-      cache->journal_len += size;
     } else {
       md->saved_location = where;
     }
@@ -687,7 +686,7 @@ microdesc_list_missing_digest256(networkstatus_t *ns, microdesc_cache_t *cache,
       continue;
     if (downloadable_only &&
         !download_status_is_ready(&rs->dl_status, now,
-                                  MAX_MICRODESC_DOWNLOAD_FAILURES))
+                  get_options()->TestingMicrodescMaxDownloadTries))
       continue;
     if (skip && digestmap_get(skip, rs->descriptor_digest))
       continue;

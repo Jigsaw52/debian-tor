@@ -214,8 +214,10 @@ test_dir_formats(void)
   strlcat(buf2, "signing-key\n", sizeof(buf2));
   strlcat(buf2, pk1_str, sizeof(buf2));
   strlcat(buf2, "hidden-service-dir\n", sizeof(buf2));
+#ifdef CURVE25519_ENABLED
   strlcat(buf2, "ntor-onion-key "
           "skyinAnvardNostarsNomoonNowindormistsorsnow=\n", sizeof(buf2));
+#endif
   strlcat(buf2, "accept *:80\nreject 18.0.0.0/8:24\n", sizeof(buf2));
   strlcat(buf2, "router-signature\n", sizeof(buf2));
 
@@ -235,9 +237,11 @@ test_dir_formats(void)
   test_eq(rp2->bandwidthrate, r2->bandwidthrate);
   test_eq(rp2->bandwidthburst, r2->bandwidthburst);
   test_eq(rp2->bandwidthcapacity, r2->bandwidthcapacity);
+#ifdef CURVE25519_ENABLED
   test_memeq(rp2->onion_curve25519_pkey->public_key,
              r2->onion_curve25519_pkey->public_key,
              CURVE25519_PUBKEY_LEN);
+#endif
   test_assert(crypto_pk_cmp_keys(rp2->onion_pkey, pk2) == 0);
   test_assert(crypto_pk_cmp_keys(rp2->identity_pkey, pk1) == 0);
 
@@ -2317,9 +2321,9 @@ test_dir_v2_dir(void *arg)
 
   /* Make a directory so there's somewhere to store the thing */
 #ifdef _WIN32
-  mkdir(get_fname("cached-status"));
+  tt_int_op(mkdir(get_fname("cached-status")), ==, 0);
 #else
-  mkdir(get_fname("cached-status"), 0700);
+  tt_int_op(mkdir(get_fname("cached-status"), 0700), ==, 0);
 #endif
 
   v2 = generate_v2_networkstatus_opinion();
@@ -2364,6 +2368,74 @@ test_dir_fmt_control_ns(void *arg)
   tor_free(s);
 }
 
+static void
+test_dir_http_handling(void *args)
+{
+  char *url = NULL;
+  (void)args;
+
+  /* Parse http url tests: */
+  /* Good headers */
+  test_eq(parse_http_url("GET /tor/a/b/c.txt HTTP/1.1\r\n"
+                           "Host: example.com\r\n"
+                           "User-Agent: Mozilla/5.0 (Windows;"
+                           " U; Windows NT 6.1; en-US; rv:1.9.1.5)\r\n",
+                           &url), 0);
+  test_streq(url, "/tor/a/b/c.txt");
+  tor_free(url);
+
+  test_eq(parse_http_url("GET /tor/a/b/c.txt HTTP/1.0\r\n", &url), 0);
+  test_streq(url, "/tor/a/b/c.txt");
+  tor_free(url);
+
+  test_eq(parse_http_url("GET /tor/a/b/c.txt HTTP/1.600\r\n", &url), 0);
+  test_streq(url, "/tor/a/b/c.txt");
+  tor_free(url);
+
+  /* Should prepend '/tor/' to url if required */
+  test_eq(parse_http_url("GET /a/b/c.txt HTTP/1.1\r\n"
+                           "Host: example.com\r\n"
+                           "User-Agent: Mozilla/5.0 (Windows;"
+                           " U; Windows NT 6.1; en-US; rv:1.9.1.5)\r\n",
+                           &url), 0);
+  test_streq(url, "/tor/a/b/c.txt");
+  tor_free(url);
+
+  /* Bad headers -- no HTTP/1.x*/
+  test_eq(parse_http_url("GET /a/b/c.txt\r\n"
+                           "Host: example.com\r\n"
+                           "User-Agent: Mozilla/5.0 (Windows;"
+                           " U; Windows NT 6.1; en-US; rv:1.9.1.5)\r\n",
+                           &url), -1);
+  tt_assert(!url);
+
+  /* Bad headers */
+  test_eq(parse_http_url("GET /a/b/c.txt\r\n"
+                           "Host: example.com\r\n"
+                           "User-Agent: Mozilla/5.0 (Windows;"
+                           " U; Windows NT 6.1; en-US; rv:1.9.1.5)\r\n",
+                           &url), -1);
+  tt_assert(!url);
+
+  test_eq(parse_http_url("GET /tor/a/b/c.txt", &url), -1);
+  tt_assert(!url);
+
+  test_eq(parse_http_url("GET /tor/a/b/c.txt HTTP/1.1", &url), -1);
+  tt_assert(!url);
+
+  test_eq(parse_http_url("GET /tor/a/b/c.txt HTTP/1.1x\r\n", &url), -1);
+  tt_assert(!url);
+
+  test_eq(parse_http_url("GET /tor/a/b/c.txt HTTP/1.", &url), -1);
+  tt_assert(!url);
+
+  test_eq(parse_http_url("GET /tor/a/b/c.txt HTTP/1.\r", &url), -1);
+  tt_assert(!url);
+
+ done:
+  tor_free(url);
+}
+
 #define DIR_LEGACY(name)                                                   \
   { #name, legacy_test_helper, TT_FORK, &legacy_setup, test_dir_ ## name }
 
@@ -2386,6 +2458,7 @@ struct testcase_t dir_tests[] = {
   DIR_LEGACY(clip_unmeasured_bw_kb_alt),
   DIR(v2_dir, TT_FORK),
   DIR(fmt_control_ns, 0),
+  DIR(http_handling, 0),
   END_OF_TESTCASES
 };
 

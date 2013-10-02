@@ -4,7 +4,6 @@
 /* See LICENSE for licensing information */
 
 #include "orconfig.h"
-#define CRYPTO_PRIVATE
 #define CRYPTO_CURVE25519_PRIVATE
 #include "or.h"
 #include "test.h"
@@ -13,6 +12,10 @@
 #ifdef CURVE25519_ENABLED
 #include "crypto_curve25519.h"
 #endif
+
+extern const char AUTHORITY_SIGNKEY_1[];
+extern const char AUTHORITY_SIGNKEY_1_DIGEST[];
+extern const char AUTHORITY_SIGNKEY_1_DIGEST256[];
 
 /** Run unit tests for Diffie-Hellman functionality. */
 static void
@@ -269,34 +272,6 @@ test_crypto_sha(void)
                        "96177A9CB410FF61F20015AD");
   tt_int_op(i, ==, 0);
 
-  /* Test HMAC-SHA-1 with test cases from RFC2202. */
-
-  /* Case 1. */
-  memset(key, 0x0b, 20);
-  crypto_hmac_sha1(digest, key, 20, "Hi There", 8);
-  test_streq(hex_str(digest, 20),
-             "B617318655057264E28BC0B6FB378C8EF146BE00");
-  /* Case 2. */
-  crypto_hmac_sha1(digest, "Jefe", 4, "what do ya want for nothing?", 28);
-  test_streq(hex_str(digest, 20),
-             "EFFCDF6AE5EB2FA2D27416D5F184DF9C259A7C79");
-
-  /* Case 4. */
-  base16_decode(key, 25,
-                "0102030405060708090a0b0c0d0e0f10111213141516171819", 50);
-  memset(data, 0xcd, 50);
-  crypto_hmac_sha1(digest, key, 25, data, 50);
-  test_streq(hex_str(digest, 20),
-             "4C9007F4026250C6BC8414F9BF50C86C2D7235DA");
-
-  /* Case 5. */
-  memset(key, 0xaa, 80);
-  crypto_hmac_sha1(digest, key, 80,
-                   "Test Using Larger Than Block-Size Key - Hash Key First",
-                   54);
-  test_streq(hex_str(digest, 20),
-             "AA4AE5E15272D00E95705637CE8A3B55ED402112");
-
   /* Test HMAC-SHA256 with test cases from wikipedia and RFC 4231 */
 
   /* Case empty (wikipedia) */
@@ -422,7 +397,7 @@ test_crypto_pk(void)
   char *encoded = NULL;
   char data1[1024], data2[1024], data3[1024];
   size_t size;
-  int i, j, p, len;
+  int i, len;
 
   /* Public-key ciphers */
   pk1 = pk_generate(0);
@@ -506,19 +481,16 @@ test_crypto_pk(void)
 
   /* Try with hybrid encryption wrappers. */
   crypto_rand(data1, 1024);
-  for (i = 0; i < 2; ++i) {
-    for (j = 85; j < 140; ++j) {
-      memset(data2,0,1024);
-      memset(data3,0,1024);
-      p = (i==0)?PK_PKCS1_PADDING:PK_PKCS1_OAEP_PADDING;
-      len = crypto_pk_public_hybrid_encrypt(pk1,data2,sizeof(data2),
-                                            data1,j,p,0);
-      test_assert(len>=0);
-      len = crypto_pk_private_hybrid_decrypt(pk1,data3,sizeof(data3),
-                                             data2,len,p,1);
-      test_eq(len,j);
-      test_memeq(data1,data3,j);
-    }
+  for (i = 85; i < 140; ++i) {
+    memset(data2,0,1024);
+    memset(data3,0,1024);
+    len = crypto_pk_public_hybrid_encrypt(pk1,data2,sizeof(data2),
+                                          data1,i,PK_PKCS1_OAEP_PADDING,0);
+    test_assert(len>=0);
+    len = crypto_pk_private_hybrid_decrypt(pk1,data3,sizeof(data3),
+                                           data2,len,PK_PKCS1_OAEP_PADDING,1);
+    test_eq(len,i);
+    test_memeq(data1,data3,i);
   }
 
   /* Try copy_full */
@@ -534,6 +506,35 @@ test_crypto_pk(void)
   if (pk2)
     crypto_pk_free(pk2);
   tor_free(encoded);
+}
+
+/** Sanity check for crypto pk digests  */
+static void
+test_crypto_digests(void)
+{
+  crypto_pk_t *k = NULL;
+  ssize_t r;
+  digests_t pkey_digests;
+  char digest[DIGEST_LEN];
+
+  k = crypto_pk_new();
+  test_assert(k);
+  r = crypto_pk_read_private_key_from_string(k, AUTHORITY_SIGNKEY_1, -1);
+  test_assert(!r);
+
+  r = crypto_pk_get_digest(k, digest);
+  test_assert(r == 0);
+  test_memeq(hex_str(digest, DIGEST_LEN),
+             AUTHORITY_SIGNKEY_1_DIGEST, HEX_DIGEST_LEN);
+
+  r = crypto_pk_get_all_digests(k, &pkey_digests);
+
+  test_memeq(hex_str(pkey_digests.d[DIGEST_SHA1], DIGEST_LEN),
+             AUTHORITY_SIGNKEY_1_DIGEST, HEX_DIGEST_LEN);
+  test_memeq(hex_str(pkey_digests.d[DIGEST_SHA256], DIGEST256_LEN),
+             AUTHORITY_SIGNKEY_1_DIGEST256, HEX_DIGEST256_LEN);
+ done:
+  crypto_pk_free(k);
 }
 
 /** Run unit tests for misc crypto formatting functionality (base64, base32,
@@ -630,7 +631,7 @@ test_crypto_formats(void)
     data1 = tor_strdup("ABCD1234ABCD56780000ABCD1234ABCD56780000");
     test_eq(strlen(data1), 40);
     data2 = tor_malloc(FINGERPRINT_LEN+1);
-    add_spaces_to_fp(data2, FINGERPRINT_LEN+1, data1);
+    crypto_add_spaces_to_fp(data2, FINGERPRINT_LEN+1, data1);
     test_streq(data2, "ABCD 1234 ABCD 5678 0000 ABCD 1234 ABCD 5678 0000");
     tor_free(data1);
     tor_free(data2);
@@ -1134,6 +1135,7 @@ struct testcase_t crypto_tests[] = {
   { "aes_EVP", test_crypto_aes, TT_FORK, &pass_data, (void*)"evp" },
   CRYPTO_LEGACY(sha),
   CRYPTO_LEGACY(pk),
+  CRYPTO_LEGACY(digests),
   CRYPTO_LEGACY(dh),
   CRYPTO_LEGACY(s2k),
   { "aes_iv_AES", test_crypto_aes_iv, TT_FORK, &pass_data, (void*)"aes" },

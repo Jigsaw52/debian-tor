@@ -543,7 +543,7 @@ rend_config_services(const or_options_t *options, int validate_only)
     /* XXXX it would be nicer if we had a nicer abstraction to use here,
      * so we could just iterate over the list of services to close, but
      * once again, this isn't critical-path code. */
-    for (circ = circuit_get_global_list_(); circ; circ = circ->next) {
+    TOR_LIST_FOREACH(circ, circuit_get_global_list(), head) {
       if (!circ->marked_for_close &&
           circ->state == CIRCUIT_STATE_OPEN &&
           (circ->purpose == CIRCUIT_PURPOSE_S_ESTABLISH_INTRO ||
@@ -593,6 +593,7 @@ rend_service_update_descriptor(rend_service_t *service)
   d = service->desc = tor_malloc_zero(sizeof(rend_service_descriptor_t));
   d->pk = crypto_pk_dup_key(service->private_key);
   d->timestamp = time(NULL);
+  d->timestamp -= d->timestamp % 3600; /* Round down to nearest hour */
   d->intro_nodes = smartlist_new();
   /* Support intro protocols 2 and 3. */
   d->protocols = (1 << 2) + (1 << 3);
@@ -1207,7 +1208,7 @@ rend_service_introduce(origin_circuit_t *circuit, const uint8_t *request,
   /* check for replay of PK-encrypted portion. */
   replay = replaycache_add_test_and_elapsed(
     intro_point->accepted_intro_rsa_parts,
-    parsed_req->ciphertext, (int)parsed_req->ciphertext_len,
+    parsed_req->ciphertext, parsed_req->ciphertext_len,
     &elapsed);
 
   if (replay) {
@@ -2375,7 +2376,7 @@ count_established_intro_points(const char *query)
 {
   int num_ipos = 0;
   circuit_t *circ;
-  for (circ = circuit_get_global_list_(); circ; circ = circ->next) {
+  TOR_LIST_FOREACH(circ, circuit_get_global_list(), head) {
     if (!circ->marked_for_close &&
         circ->state == CIRCUIT_STATE_OPEN &&
         (circ->purpose == CIRCUIT_PURPOSE_S_ESTABLISH_INTRO ||

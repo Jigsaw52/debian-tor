@@ -46,7 +46,7 @@ COMMAND-LINE OPTIONS
     configuration file, and by those on the command line. (Default:
     @CONFDIR@/torrc-defaults.)
 
-**--hash-password**::
+**--hash-password** __PASSWORD__::
     Generates a hashed password for control port access.
 
 **--list-fingerprint**::
@@ -124,42 +124,42 @@ option name with a forward slash.
 GENERAL OPTIONS
 ---------------
 
-**BandwidthRate** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**::
+**BandwidthRate** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
     A token bucket limits the average incoming bandwidth usage on this node to
     the specified number of bytes per second, and the average outgoing
     bandwidth usage to that same value.  If you want to run a relay in the
     public network, this needs to be _at the very least_ 30 KBytes (that is,
     30720 bytes). (Default: 1 GByte)
 
-**BandwidthBurst** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**::
+**BandwidthBurst** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
     Limit the maximum token bucket size (also known as the burst) to the given
     number of bytes in each direction. (Default: 1 GByte)
 
-**MaxAdvertisedBandwidth** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**::
+**MaxAdvertisedBandwidth** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
     If set, we will not advertise more than this amount of bandwidth for our
     BandwidthRate. Server operators who want to reduce the number of clients
     who ask to build circuits through them (since this is proportional to
     advertised bandwidth rate) can thus reduce the CPU demands on their server
     without impacting network performance.
 
-**RelayBandwidthRate** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**::
+**RelayBandwidthRate** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
     If not 0, a separate token bucket limits the average incoming bandwidth
     usage for \_relayed traffic_ on this node to the specified number of bytes
     per second, and the average outgoing bandwidth usage to that same value.
     Relayed traffic currently is calculated to include answers to directory
     requests, but that may change in future versions. (Default: 0)
 
-**RelayBandwidthBurst** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**::
+**RelayBandwidthBurst** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
     If not 0, limit the maximum token bucket size (also known as the burst) for
     \_relayed traffic_ to the given number of bytes in each direction.
     (Default: 0)
 
-**PerConnBWRate** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**::
+**PerConnBWRate** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
     If set, do separate rate limiting for each connection from a non-relay.
     You should never need to change this value, since a network-wide value is
     published in the consensus and your relay will use that value. (Default: 0)
 
-**PerConnBWBurst** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**::
+**PerConnBWBurst** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
     If set, do separate rate limiting for each connection from a non-relay.
     You should never need to change this value, since a network-wide value is
     published in the consensus and your relay will use that value. (Default: 0)
@@ -185,6 +185,20 @@ GENERAL OPTIONS
     When this option is set, Tor will suggest __IP__:__PORT__ as the
     listening address of any pluggable transport proxy that tries to
     launch __transport__.
+
+**ServerTransportOptions** __transport__ __k=v__ __k=v__ ...::
+    When this option is set, Tor will pass the __k=v__ parameters to
+    any pluggable transport proxy that tries to launch __transport__. +
+    (Example: ServerTransportOptions obfs45 shared-secret=bridgepasswd cache=/var/lib/tor/cache)
+
+**ExtORPort** \['address':]__port__|**auto**
+    Open this port to listen for Extended ORPort connections from your
+    pluggable transports.
+
+**ExtORPortCookieAuthFile** __Path__::
+    If set, this option overrides the default location and file name
+    for the Extended ORPort's cookie file -- the cookie file is needed
+    for pluggable transports to communicate through the Extended ORPort.
 
 **ConnLimit** __NUM__::
     The minimum number of file descriptors that must be available to the Tor
@@ -358,7 +372,8 @@ GENERAL OPTIONS
 
 **DisableDebuggerAttachment** **0**|**1**::
    If set to 1, Tor will attempt to prevent basic debugging attachment attempts
-   by other processes. It has no impact for users who wish to attach if they
+   by other processes. This may also keep Tor from generating core files if
+   it crashes. It has no impact for users who wish to attach if they
    have CAP_SYS_PTRACE or if they are root.  We believe that this feature
    works on modern Gnu/Linux distributions, and that it may also work on *BSD
    systems (untested).  Some modern Gnu/Linux systems such as Ubuntu have the
@@ -422,6 +437,11 @@ GENERAL OPTIONS
     authentication, as in RFC 2617. This is currently the only form of HTTPS
     proxy authentication that Tor supports; feel free to submit a patch if you
     want it to support others.
+
+**Sandbox** **0**|**1**::
+    If set to 1, Tor will run securely through the use of a syscall sandbox.
+    Otherwise the sandbox will be disabled. The option is currently an 
+    experimental feature. (Default: 0)
 
 **Socks4Proxy** __host__[:__port__]::
     Tor will make all OR connections through the SOCKS 4 proxy at host:port
@@ -1255,9 +1275,9 @@ The following options are useful only for clients (that is, if
     it too early might make your client stand out. If this option is 0, your
     Tor client won't use the ntor handshake. If it's 1, your Tor client
     will use the ntor handshake to extend circuits through servers that
-    support it. If this option is "auto" (recommended), then your client
+    support it. If this option is "auto", then your client
     will use the ntor handshake once enough directory authorities recommend
-    it. (Default: auto)
+    it. (Default: 1)
 
 **PathBiasCircThreshold** __NUM__ +
 
@@ -1336,6 +1356,15 @@ The following options are useful only for clients (that is, if
     prevent your Tor client from bootstrapping.  If this option is negative,
     Tor will use a default value chosen by the directory
     authorities. (Default: -1.)
+
+**Support022HiddenServices** **0**|**1**|**auto**::
+    Tor hidden services running versions before 0.2.3.x required clients to
+    send timestamps, which can potentially be used to distinguish clients
+    whose view of the current time is skewed. If this option is set to 0, we
+    do not send this timestamp, and hidden services on obsolete Tor versions
+    will not work.  If this option is set to 1, we send the timestamp.  If
+    this optoin is "auto", we take a recommendation from the latest consensus
+    document. (Default: auto)
 
 
 SERVER OPTIONS
@@ -1534,7 +1563,7 @@ is non-zero):
     server is still alive and doing useful things. Settings this
     to 0 will disable the heartbeat. (Default: 6 hours)
 
-**AccountingMax** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**TBytes**::
+**AccountingMax** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**|**TBytes**::
     Never send more than the specified number of bytes in a given accounting
     period, or receive more than that number in the period. For example, with
     AccountingMax set to 1 GByte, a server could send 900 MBytes and
@@ -1866,12 +1895,12 @@ DIRECTORY AUTHORITY SERVER OPTIONS
     Authoritative directories only. Like AuthDirMaxServersPerAddr, but applies
     to addresses shared with directory authorities. (Default: 5)
 
-**AuthDirFastGuarantee** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**::
+**AuthDirFastGuarantee** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
     Authoritative directories only. If non-zero, always vote the
     Fast flag for any relay advertising this amount of capacity or
     more. (Default: 100 KBytes)
 
-**AuthDirGuardBWGuarantee** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**::
+**AuthDirGuardBWGuarantee** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
     Authoritative directories only. If non-zero, this advertised capacity
     or more is always sufficient to satisfy the bandwidth requirement
     for the Guard flag. (Default: 250 KBytes)
@@ -2016,6 +2045,17 @@ The following options are used for running a testing Tor network.
        TestingV3AuthInitialDistDelay 20 seconds
        TestingAuthDirTimeToLearnReachability 0 minutes
        TestingEstimatedDescriptorPropagationTime 0 minutes
+       TestingServerDownloadSchedule 0, 0, 0, 5, 10, 15, 20, 30, 60
+       TestingClientDownloadSchedule 0, 0, 5, 10, 15, 20, 30, 60
+       TestingServerConsensusDownloadSchedule 0, 0, 5, 10, 15, 20, 30, 60
+       TestingClientConsensusDownloadSchedule 0, 0, 5, 10, 15, 20, 30, 60
+       TestingBridgeDownloadSchedule 60, 30, 30, 60
+       TestingClientMaxIntervalWithoutRequest 5 seconds
+       TestingDirConnectionMaxStall 30 seconds
+       TestingConsensusMaxDownloadTries 80
+       TestingDescriptorMaxDownloadTries 80
+       TestingMicrodescMaxDownloadTries 80
+       TestingCertMaxDownloadTries 80
 
 **TestingV3AuthInitialVotingInterval** __N__ **minutes**|**hours**::
     Like V3AuthVotingInterval, but for initial voting interval before the first
@@ -2032,6 +2072,10 @@ The following options are used for running a testing Tor network.
     the first consensus has been created. Changing this requires that
     **TestingTorNetwork** is set. (Default: 5 minutes)
 
+**TestingV3AuthVotingStartOffset** __N__ **seconds**|**minutes**|**hours**::
+    Directory authorities offset voting start time by this much.
+    Changing this requires that **TestingTorNetwork** is set. (Default: 0)
+
 **TestingAuthDirTimeToLearnReachability** __N__ **minutes**|**hours**::
     After starting as an authority, do not make claims about whether routers
     are Running until this much time has passed. Changing this requires
@@ -2042,10 +2086,60 @@ The following options are used for running a testing Tor network.
     time. Changing this requires that **TestingTorNetwork** is set. (Default:
     10 minutes)
 
-**TestingMinFastFlagThreshold** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**::
+**TestingMinFastFlagThreshold** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
     Minimum value for the Fast flag.  Overrides the ordinary minimum taken
     from the consensus when TestingTorNetwork is set. (Default: 0.)
 
+**TestingServerDownloadSchedule** __N__,__N__,__...__::
+    Schedule for when servers should download things in general. Changing this
+    requires that **TestingTorNetwork** is set. (Default: 0, 0, 0, 60, 60, 120,
+    300, 900, 2147483647)
+
+**TestingClientDownloadSchedule** __N__,__N__,__...__::
+    Schedule for when clients should download things in general. Changing this
+    requires that **TestingTorNetwork** is set. (Default: 0, 0, 60, 300, 600,
+    2147483647)
+
+**TestingServerConsensusDownloadSchedule** __N__,__N__,__...__::
+    Schedule for when servers should download consensuses. Changing this
+    requires that **TestingTorNetwork** is set. (Default: 0, 0, 60, 300, 600,
+    1800, 1800, 1800, 1800, 1800, 3600, 7200)
+
+**TestingClientConsensusDownloadSchedule** __N__,__N__,__...__::
+    Schedule for when clients should download consensuses. Changing this
+    requires that **TestingTorNetwork** is set. (Default: 0, 0, 60, 300, 600,
+    1800, 3600, 3600, 3600, 10800, 21600, 43200)
+
+**TestingBridgeDownloadSchedule** __N__,__N__,__...__::
+    Schedule for when clients should download bridge descriptors. Changing this
+    requires that **TestingTorNetwork** is set. (Default: 3600, 900, 900, 3600)
+
+**TestingClientMaxIntervalWithoutRequest** __N__ **seconds**|**minutes**::
+    When directory clients have only a few descriptors to request, they batch
+    them until they have more, or until this amount of time has passed.
+    Changing this requires that **TestingTorNetwork** is set. (Default: 10
+    minutes)
+
+**TestingDirConnectionMaxStall** __N__ **seconds**|**minutes**::
+    Let a directory connection stall this long before expiring it.
+    Changing this requires that **TestingTorNetwork** is set. (Default:
+    5 minutes)
+
+**TestingConsensusMaxDownloadTries** __NUM__::
+    Try this often to download a consensus before giving up. Changing
+    this requires that **TestingTorNetwork** is set. (Default: 8)
+
+**TestingDescriptorMaxDownloadTries** __NUM__::
+    Try this often to download a router descriptor before giving up.
+    Changing this requires that **TestingTorNetwork** is set. (Default: 8)
+
+**TestingMicrodescMaxDownloadTries** __NUM__::
+    Try this often to download a microdesc descriptor before giving up.
+    Changing this requires that **TestingTorNetwork** is set. (Default: 8)
+
+**TestingCertMaxDownloadTries** __NUM__::
+    Try this often to download a v3 authority certificate before giving up.
+    Changing this requires that **TestingTorNetwork** is set. (Default: 8)
 
 SIGNALS
 -------
