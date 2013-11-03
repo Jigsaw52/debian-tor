@@ -1,3 +1,11 @@
+tor (0.2.3.25-2) UNRELEASED; urgency=low
+
+  * backport from the 0.2.4.x package: Re-add a few 'exit 1' statements on
+    errors that got lost while updating the init script to fancy LSB style
+    output (closes: #722153).
+
+ -- Peter Palfrader <weasel@debian.org>  Sun, 03 Nov 2013 19:43:52 +0100
+
 tor (0.2.3.25-1) unstable; urgency=low
 
   * New upstream release.  The 0.2.3.x tree goes stable.
