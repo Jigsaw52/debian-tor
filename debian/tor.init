@@ -24,6 +24,7 @@ PATH=/sbin:/bin:/usr/sbin:/usr/bin
 DAEMON=/usr/bin/tor
 NAME=tor
 DESC="tor daemon"
+TORLOGDIR=/var/log/tor
 TORPIDDIR=/var/run/tor
 TORPID=$TORPIDDIR/tor.pid
 DEFAULTSFILE=/etc/default/$NAME
@@ -109,6 +110,15 @@ check_torpiddir () {
 	fi
 }
 
+check_torlogdir () {
+	if test ! -d $TORLOGDIR; then
+		mkdir -m 02750 "$TORLOGDIR"
+		chown debian-tor:adm "$TORLOGDIR"
+		! [ -x /sbin/restorecon ] || /sbin/restorecon "$TORPIDDIR"
+	fi
+}
+
+
 check_config () {
 	if ! $DAEMON $VERIFY_ARGS > /dev/null; then
 		log_failure_msg "Checking if $NAME configuration is valid"
@@ -135,6 +145,7 @@ case "$1" in
 	fi
 
 	check_torpiddir
+	check_torlogdir
 	check_config
 
 	log_action_begin_msg "Starting $DESC"

@@ -3,6 +3,8 @@ tor (0.2.4.20-1) unstable; urgency=low
   * New upstream version.
     - Avoid a crash bug when starting with a corrupted microdescriptor cache
       file. Fixes bug 10406; bugfix on 0.2.2.6-alpha (closes: #732105).
+  * init script: make /var/log/tor if it does not exist anymore
+    (closes: #732572).
 
  -- Peter Palfrader <weasel@debian.org>  Wed, 25 Dec 2013 12:07:50 +0100
 
