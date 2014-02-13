@@ -1,3 +1,9 @@
+tor (0.2.5.2-alpha-1) UNRELEASED; urgency=low
+
+  * New upstream version.
+
+ -- Peter Palfrader <weasel@debian.org>  Thu, 13 Feb 2014 23:42:25 +0100
+
 tor (0.2.5.1-alpha-1) experimental; urgency=low
 
   * New upstream tree, new upstream version.
