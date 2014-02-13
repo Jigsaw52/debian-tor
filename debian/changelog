@@ -1,6 +1,9 @@
 tor (0.2.5.2-alpha-1) UNRELEASED; urgency=low
 
   * New upstream version.
+  * From 0.2.4.20-1:
+    + init script: make /var/log/tor if it does not exist anymore
+      (closes: #732572).
 
  -- Peter Palfrader <weasel@debian.org>  Thu, 13 Feb 2014 23:42:25 +0100
 
