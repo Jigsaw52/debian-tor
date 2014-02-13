@@ -48,13 +48,13 @@
 /** Like assert(3), but send assertion failures to the log as well as to
  * stderr. */
 #define tor_assert(expr) STMT_BEGIN                                     \
-    if (PREDICT_UNLIKELY(!(expr))) {                                    \
-      log_err(LD_BUG, "%s:%d: %s: Assertion %s failed; aborting.",      \
-          SHORT_FILE__, __LINE__, __func__, #expr);                     \
-      fprintf(stderr,"%s:%d %s: Assertion %s failed; aborting.\n",      \
-              SHORT_FILE__, __LINE__, __func__, #expr);                 \
-      abort();                                                          \
-    } STMT_END
+  if (PREDICT_UNLIKELY(!(expr))) {                                      \
+    tor_assertion_failed_(SHORT_FILE__, __LINE__, __func__, #expr);     \
+    abort();                                                            \
+  } STMT_END
+
+void tor_assertion_failed_(const char *fname, unsigned int line,
+                           const char *func, const char *expr);
 
 /* If we're building with dmalloc, we want all of our memory allocation
  * functions to take an extra file/line pair of arguments.  If not, not.
@@ -253,6 +253,7 @@ int base16_decode(char *dest, size_t destlen, const char *src, size_t srclen);
 /* Time helpers */
 long tv_udiff(const struct timeval *start, const struct timeval *end);
 long tv_mdiff(const struct timeval *start, const struct timeval *end);
+int64_t tv_to_msec(const struct timeval *tv);
 int tor_timegm(const struct tm *tm, time_t *time_out);
 #define RFC1123_TIME_LEN 29
 void format_rfc1123_time(char *buf, time_t t);
@@ -365,7 +366,7 @@ typedef struct sized_chunk_t {
   size_t len;
 } sized_chunk_t;
 int write_chunks_to_file(const char *fname, const struct smartlist_t *chunks,
-                         int bin);
+                         int bin, int no_tempfile);
 int append_bytes_to_file(const char *fname, const char *str, size_t len,
                          int bin);
 int write_bytes_to_new_file(const char *fname, const char *str, size_t len,
@@ -523,7 +524,8 @@ int32_t tor_weak_random_range(tor_weak_rng_t *rng, int32_t top);
  * <b>n</b> */
 #define tor_weak_random_one_in_n(rng, n) (0==tor_weak_random_range((rng),(n)))
 
-int format_hex_number_sigsafe(unsigned int x, char *buf, int max_len);
+int format_hex_number_sigsafe(unsigned long x, char *buf, int max_len);
+int format_dec_number_sigsafe(unsigned long x, char *buf, int max_len);
 
 #ifdef UTIL_PRIVATE
 /* Prototypes for private functions only used by util.c (and unit tests) */

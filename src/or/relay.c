@@ -15,6 +15,7 @@
 #include "addressmap.h"
 #include "buffers.h"
 #include "channel.h"
+#include "circpathbias.h"
 #include "circuitbuild.h"
 #include "circuitlist.h"
 #include "circuituse.h"
@@ -734,13 +735,15 @@ connection_ap_process_end_not_open(
 
   if (rh->length > 0) {
     if (reason == END_STREAM_REASON_TORPROTOCOL ||
-        reason == END_STREAM_REASON_INTERNAL ||
         reason == END_STREAM_REASON_DESTROY) {
-      /* All three of these reasons could mean a failed tag
+      /* Both of these reasons could mean a failed tag
        * hit the exit and it complained. Do not probe.
        * Fail the circuit. */
       circ->path_state = PATH_STATE_USE_FAILED;
       return -END_CIRC_REASON_TORPROTOCOL;
+    } else if (reason == END_STREAM_REASON_INTERNAL) {
+      /* We can't infer success or failure, since older Tors report
+       * ENETUNREACH as END_STREAM_REASON_INTERNAL. */
     } else {
       /* Path bias: If we get a valid reason code from the exit,
        * it wasn't due to tagging.
@@ -1106,8 +1109,10 @@ connection_edge_process_relay_cell_not_open(
           control_event_bootstrap(BOOTSTRAP_STATUS_LOADING_STATUS, 0);
           break;
         case DIR_PURPOSE_FETCH_SERVERDESC:
-          control_event_bootstrap(BOOTSTRAP_STATUS_LOADING_DESCRIPTORS,
-                                  count_loading_descriptors_progress());
+        case DIR_PURPOSE_FETCH_MICRODESC:
+          if (TO_DIR_CONN(dirconn)->router_purpose == ROUTER_PURPOSE_GENERAL)
+            control_event_bootstrap(BOOTSTRAP_STATUS_LOADING_DESCRIPTORS,
+                                    count_loading_descriptors_progress());
           break;
       }
     }
@@ -2044,10 +2049,6 @@ static size_t total_cells_allocated = 0;
 /** A memory pool to allocate packed_cell_t objects. */
 static mp_pool_t *cell_pool = NULL;
 
-/** Memory pool to allocate insertion_time_elem_t objects used for cell
- * statistics. */
-static mp_pool_t *it_pool = NULL;
-
 /** Allocate structures to hold cells. */
 void
 init_cell_pool(void)
@@ -2056,8 +2057,8 @@ init_cell_pool(void)
   cell_pool = mp_pool_new(sizeof(packed_cell_t), 128*1024);
 }
 
-/** Free all storage used to hold cells (and insertion times if we measure
- * cell statistics). */
+/** Free all storage used to hold cells (and insertion times/commands if we
+ * measure cell statistics and/or if CELL_STATS events are enabled). */
 void
 free_cell_pool(void)
 {
@@ -2065,10 +2066,6 @@ free_cell_pool(void)
   if (cell_pool) {
     mp_pool_destroy(cell_pool);
     cell_pool = NULL;
-  }
-  if (it_pool) {
-    mp_pool_destroy(it_pool);
-    it_pool = NULL;
   }
 }
 
@@ -2142,42 +2139,23 @@ cell_queue_append(cell_queue_t *queue, packed_cell_t *cell)
   ++queue->n;
 }
 
-/** Append a newly allocated copy of <b>cell</b> to the end of <b>queue</b> */
+/** Append a newly allocated copy of <b>cell</b> to the end of the
+ * <b>exitward</b> (or app-ward) <b>queue</b> of <b>circ</b>.  If
+ * <b>use_stats</b> is true, record statistics about the cell.
+ */
 void
-cell_queue_append_packed_copy(cell_queue_t *queue, const cell_t *cell,
+cell_queue_append_packed_copy(circuit_t *circ, cell_queue_t *queue,
+                              int exitward, const cell_t *cell,
                               int wide_circ_ids, int use_stats)
 {
+  struct timeval now;
   packed_cell_t *copy = packed_cell_copy(cell, wide_circ_ids);
-  /* Remember the time when this cell was put in the queue. */
-  if (get_options()->CellStatistics && use_stats) {
-    struct timeval now;
-    uint32_t added;
-    insertion_time_queue_t *it_queue = queue->insertion_times;
-    if (!it_pool)
-      it_pool = mp_pool_new(sizeof(insertion_time_elem_t), 1024);
-    tor_gettimeofday_cached(&now);
-#define SECONDS_IN_A_DAY 86400L
-    added = (uint32_t)(((now.tv_sec % SECONDS_IN_A_DAY) * 100L)
-            + ((uint32_t)now.tv_usec / (uint32_t)10000L));
-    if (!it_queue) {
-      it_queue = tor_malloc_zero(sizeof(insertion_time_queue_t));
-      queue->insertion_times = it_queue;
-    }
-    if (it_queue->last && it_queue->last->insertion_time == added) {
-      it_queue->last->counter++;
-    } else {
-      insertion_time_elem_t *elem = mp_pool_get(it_pool);
-      elem->next = NULL;
-      elem->insertion_time = added;
-      elem->counter = 1;
-      if (it_queue->last) {
-        it_queue->last->next = elem;
-        it_queue->last = elem;
-      } else {
-        it_queue->first = it_queue->last = elem;
-      }
-    }
-  }
+  (void)circ;
+  (void)exitward;
+  (void)use_stats;
+  tor_gettimeofday_cached(&now);
+  copy->inserted_time = (uint32_t)tv_to_msec(&now);
+
   cell_queue_append(queue, copy);
 }
 
@@ -2200,14 +2178,6 @@ cell_queue_clear(cell_queue_t *queue)
   }
   TOR_SIMPLEQ_INIT(&queue->head);
   queue->n = 0;
-  if (queue->insertion_times) {
-    while (queue->insertion_times->first) {
-      insertion_time_elem_t *elem = queue->insertion_times->first;
-      queue->insertion_times->first = elem->next;
-      mp_pool_release(elem);
-    }
-    tor_free(queue->insertion_times);
-  }
 }
 
 /** Extract and return the cell at the head of <b>queue</b>; return NULL if
@@ -2228,9 +2198,7 @@ cell_queue_pop(cell_queue_t *queue)
 size_t
 packed_cell_mem_cost(void)
 {
-  return sizeof(packed_cell_t) + MP_POOL_ITEM_OVERHEAD +
-    get_options()->CellStatistics ?
-    (sizeof(insertion_time_elem_t)+MP_POOL_ITEM_OVERHEAD) : 0;
+  return sizeof(packed_cell_t) + MP_POOL_ITEM_OVERHEAD;
 }
 
 /** Check whether we've got too much space used for cells.  If so,
@@ -2360,6 +2328,17 @@ set_streams_blocked_on_circ(circuit_t *circ, channel_t *chan,
   return n;
 }
 
+/** Extract the command from a packed cell. */
+static uint8_t
+packed_cell_get_command(const packed_cell_t *cell, int wide_circ_ids)
+{
+  if (wide_circ_ids) {
+    return get_uint8(cell->body+4);
+  } else {
+    return get_uint8(cell->body+2);
+  }
+}
+
 /** Pull as many cells as possible (but no more than <b>max</b>) from the
  * queue of the first active circuit on <b>chan</b>, and write them to
  * <b>chan</b>-&gt;outbuf.  Return the number of cells written.  Advance
@@ -2419,35 +2398,32 @@ channel_flush_from_first_active_circuit(channel_t *chan, int max)
     cell = cell_queue_pop(queue);
 
     /* Calculate the exact time that this cell has spent in the queue. */
-    if (get_options()->CellStatistics && !CIRCUIT_IS_ORIGIN(circ)) {
+    if (get_options()->CellStatistics ||
+        get_options()->TestingEnableCellStatsEvent) {
+      uint32_t msec_waiting;
       struct timeval tvnow;
-      uint32_t flushed;
-      uint32_t cell_waiting_time;
-      insertion_time_queue_t *it_queue = queue->insertion_times;
       tor_gettimeofday_cached(&tvnow);
-      flushed = (uint32_t)((tvnow.tv_sec % SECONDS_IN_A_DAY) * 100L +
-                 (uint32_t)tvnow.tv_usec / (uint32_t)10000L);
-      if (!it_queue || !it_queue->first) {
-        log_info(LD_GENERAL, "Cannot determine insertion time of cell. "
-                             "Looks like the CellStatistics option was "
-                             "recently enabled.");
-      } else {
-        insertion_time_elem_t *elem = it_queue->first;
+      msec_waiting = ((uint32_t)tv_to_msec(&tvnow)) - cell->inserted_time;
+
+      if (get_options()->CellStatistics && !CIRCUIT_IS_ORIGIN(circ)) {
         or_circ = TO_OR_CIRCUIT(circ);
-        cell_waiting_time =
-            (uint32_t)((flushed * 10L + SECONDS_IN_A_DAY * 1000L -
-                        elem->insertion_time * 10L) %
-                       (SECONDS_IN_A_DAY * 1000L));
-#undef SECONDS_IN_A_DAY
-        elem->counter--;
-        if (elem->counter < 1) {
-          it_queue->first = elem->next;
-          if (elem == it_queue->last)
-            it_queue->last = NULL;
-          mp_pool_release(elem);
-        }
-        or_circ->total_cell_waiting_time += cell_waiting_time;
+        or_circ->total_cell_waiting_time += msec_waiting;
         or_circ->processed_cells++;
+      }
+
+      if (get_options()->TestingEnableCellStatsEvent) {
+        uint8_t command = packed_cell_get_command(cell, chan->wide_circ_ids);
+
+        testing_cell_stats_entry_t *ent =
+          tor_malloc_zero(sizeof(testing_cell_stats_entry_t));
+        ent->command = command;
+        ent->waiting_time = msec_waiting / 10;
+        ent->removed = 1;
+        if (circ->n_chan == chan)
+          ent->exitward = 1;
+        if (!circ->testing_cell_stats)
+          circ->testing_cell_stats = smartlist_new();
+        smartlist_add(circ->testing_cell_stats, ent);
       }
     }
 
@@ -2522,10 +2498,12 @@ append_cell_to_circuit_queue(circuit_t *circ, channel_t *chan,
   uint32_t tgt_max_middle_cells, p_len, n_len, tmp, hard_max_middle_cells;
 #endif
 
+  int exitward;
   if (circ->marked_for_close)
     return;
 
-  if (direction == CELL_DIRECTION_OUT) {
+  exitward = (direction == CELL_DIRECTION_OUT);
+  if (exitward) {
     queue = &circ->n_chan_cells;
     streams_blocked = circ->streams_blocked_on_n_chan;
   } else {
@@ -2616,7 +2594,8 @@ append_cell_to_circuit_queue(circuit_t *circ, channel_t *chan,
   }
 #endif
 
-  cell_queue_append_packed_copy(queue, cell, chan->wide_circ_ids, 1);
+  cell_queue_append_packed_copy(circ, queue, exitward, cell,
+                                chan->wide_circ_ids, 1);
 
   if (PREDICT_UNLIKELY(cell_queues_check_size())) {
     /* We ran the OOM handler */

@@ -31,6 +31,7 @@ const char tor_git_revision[] = "";
 #define GEOIP_PRIVATE
 #define ROUTER_PRIVATE
 #define CIRCUITSTATS_PRIVATE
+#define CIRCUITLIST_PRIVATE
 
 /*
  * Linux doesn't provide lround in math.h by default, but mac os does...
@@ -426,10 +427,12 @@ test_onion_queues(void)
 
   test_eq(0, onion_num_pending(ONION_HANDSHAKE_TYPE_TAP));
   test_eq(0, onion_pending_add(circ1, create1));
+  create1 = NULL;
   test_eq(1, onion_num_pending(ONION_HANDSHAKE_TYPE_TAP));
 
   test_eq(0, onion_num_pending(ONION_HANDSHAKE_TYPE_NTOR));
   test_eq(0, onion_pending_add(circ2, create2));
+  create2 = NULL;
   test_eq(1, onion_num_pending(ONION_HANDSHAKE_TYPE_NTOR));
 
   test_eq_ptr(circ2, onion_next_task(&onionskin));
@@ -441,11 +444,10 @@ test_onion_queues(void)
   test_eq(0, onion_num_pending(ONION_HANDSHAKE_TYPE_NTOR));
 
  done:
-  ;
-//  circuit_free(circ1);
-//  circuit_free(circ2);
-  /* and free create1 and create2 */
-  /* XXX leaks everything here */
+  circuit_free(TO_CIRCUIT(circ1));
+  circuit_free(TO_CIRCUIT(circ2));
+  tor_free(create1);
+  tor_free(create2);
 }
 
 static void
@@ -873,6 +875,7 @@ test_policies(void)
   {
     int i;
     char *policy = NULL;
+    short_policy_t *parsed;
     smartlist_t *chunks = smartlist_new();
     smartlist_add(chunks, tor_strdup("accept "));
     for (i=1; i<10000; ++i)
@@ -881,8 +884,9 @@ test_policies(void)
     policy = smartlist_join_strings(chunks, "", 0, NULL);
     SMARTLIST_FOREACH(chunks, char *, ch, tor_free(ch));
     smartlist_free(chunks);
-    tt_ptr_op(NULL, ==, parse_short_policy(policy));/* shouldn't be accepted */
-    tor_free(policy); /* could leak. */
+    parsed = parse_short_policy(policy);/* shouldn't be accepted */
+    tor_free(policy);
+    tt_ptr_op(NULL, ==, parsed);
   }
 
   /* truncation ports */
@@ -1620,6 +1624,11 @@ extern struct testcase_t cell_queue_tests[];
 extern struct testcase_t options_tests[];
 extern struct testcase_t socks_tests[];
 extern struct testcase_t extorport_tests[];
+extern struct testcase_t controller_event_tests[];
+extern struct testcase_t logging_tests[];
+extern struct testcase_t backtrace_tests[];
+extern struct testcase_t hs_tests[];
+extern struct testcase_t nodelist_tests[];
 
 static struct testgroup_t testgroups[] = {
   { "", test_array },
@@ -1629,6 +1638,7 @@ static struct testgroup_t testgroups[] = {
   { "crypto/", crypto_tests },
   { "container/", container_tests },
   { "util/", util_tests },
+  { "util/logging/", logging_tests },
   { "cellfmt/", cell_format_tests },
   { "cellqueue/", cell_queue_tests },
   { "dir/", dir_tests },
@@ -1641,6 +1651,9 @@ static struct testgroup_t testgroups[] = {
   { "circuitmux/", circuitmux_tests },
   { "options/", options_tests },
   { "extorport/", extorport_tests },
+  { "control/", controller_event_tests },
+  { "hs/", hs_tests },
+  { "nodelist/", nodelist_tests },
   END_OF_GROUPS
 };
 
@@ -1653,6 +1666,7 @@ main(int c, const char **v)
   char *errmsg = NULL;
   int i, i_out;
   int loglevel = LOG_ERR;
+  int accel_crypto = 0;
 
 #ifdef USE_DMALLOC
   {
@@ -1675,6 +1689,8 @@ main(int c, const char **v)
       loglevel = LOG_INFO;
     } else if (!strcmp(v[i], "--debug")) {
       loglevel = LOG_DEBUG;
+    } else if (!strcmp(v[i], "--accel")) {
+      accel_crypto = 1;
     } else {
       v[i_out++] = v[i];
     }
@@ -1689,7 +1705,7 @@ main(int c, const char **v)
   }
 
   options->command = CMD_RUN_UNITTESTS;
-  if (crypto_global_init(0, NULL, NULL)) {
+  if (crypto_global_init(accel_crypto, NULL, NULL)) {
     printf("Can't initialize crypto subsystem; exiting.\n");
     return 1;
   }

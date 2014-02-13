@@ -13,6 +13,7 @@
 #define MAIN_PRIVATE
 #include "or.h"
 #include "addressmap.h"
+#include "backtrace.h"
 #include "buffers.h"
 #include "channel.h"
 #include "channeltls.h"
@@ -351,6 +352,8 @@ connection_remove(connection_t *conn)
   log_debug(LD_NET,"removing socket %d (type %s), n_conns now %d",
             (int)conn->s, conn_type_to_string(conn->type),
             smartlist_len(connection_array));
+
+  control_event_conn_bandwidth(conn);
 
   tor_assert(conn->conn_array_index >= 0);
   current_index = conn->conn_array_index;
@@ -1370,11 +1373,6 @@ run_scheduled_events(time_t now)
         next_time_to_write_stats_files = next_write;
     }
     time_to_write_stats_files = next_time_to_write_stats_files;
-
-    /* Also commandeer this opportunity to log how our circuit handshake
-     * stats have been doing. */
-    if (public_server_mode(options))
-      rep_hist_log_circuit_handshake_stats(now);
   }
 
   /* 1h. Check whether we should write bridge statistics to disk.
@@ -1460,8 +1458,6 @@ run_scheduled_events(time_t now)
 
     /* If any networkstatus documents are no longer recent, we need to
      * update all the descriptors' running status. */
-    /* purge obsolete entries */
-    networkstatus_v2_list_clean(now);
     /* Remove dead routers. */
     routerlist_remove_old_routers();
   }
@@ -1668,6 +1664,9 @@ second_elapsed_callback(periodic_timer_t *timer, void *arg)
 
   control_event_bandwidth_used((uint32_t)bytes_read,(uint32_t)bytes_written);
   control_event_stream_bandwidth_used();
+  control_event_conn_bandwidth_used();
+  control_event_circ_bandwidth_used();
+  control_event_circuit_cell_stats();
 
   if (server_mode(options) &&
       !net_is_disabled() &&
@@ -1946,9 +1945,6 @@ do_main_loop(void)
   if (trusted_dirs_reload_certs()) {
     log_warn(LD_DIR,
              "Couldn't load all cached v3 certificates. Starting anyway.");
-  }
-  if (router_reload_v2_networkstatus()) {
-    return -1;
   }
   if (router_reload_consensus_networkstatus()) {
     return -1;
@@ -2325,13 +2321,14 @@ handle_signals(int is_parent)
 int
 tor_init(int argc, char *argv[])
 {
-  char buf[256];
+  char progname[256];
   int quiet = 0;
+
   time_of_process_start = time(NULL);
   init_connection_lists();
   /* Have the log set up with our application name. */
-  tor_snprintf(buf, sizeof(buf), "Tor %s", get_version());
-  log_set_application_name(buf);
+  tor_snprintf(progname, sizeof(progname), "Tor %s", get_version());
+  log_set_application_name(progname);
   /* Initialize the history structures. */
   rep_hist_init();
   /* Initialize the service cache. */
@@ -2355,8 +2352,10 @@ tor_init(int argc, char *argv[])
       if (!strcmp(cl->key, "--version") || !strcmp(cl->key, "--digests") ||
           !strcmp(cl->key, "--list-torrc-options") ||
           !strcmp(cl->key, "--library-versions") ||
-          !strcmp(cl->key, "-h") || !strcmp(cl->key, "--help"))
-        quiet = 1;
+          !strcmp(cl->key, "-h") || !strcmp(cl->key, "--help")) {
+        if (quiet < 1)
+          quiet = 1;
+      }
     }
     config_free_lines(opts);
     config_free_lines(cmdline_opts);
@@ -2831,6 +2830,8 @@ tor_main(int argc, char *argv[])
     if (setdeppolicy) setdeppolicy(1); /* PROCESS_DEP_ENABLE */
   }
 #endif
+
+  configure_backtrace_handler(get_version());
 
   update_approx_time(time(NULL));
   tor_threads_init();

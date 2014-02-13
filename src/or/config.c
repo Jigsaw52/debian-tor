@@ -137,7 +137,7 @@ static config_var_t option_vars_[] = {
   V(AllowSingleHopExits,         BOOL,     "0"),
   V(AlternateBridgeAuthority,    LINELIST, NULL),
   V(AlternateDirAuthority,       LINELIST, NULL),
-  V(AlternateHSAuthority,        LINELIST, NULL),
+  OBSOLETE("AlternateHSAuthority"),
   V(AssumeReachable,             BOOL,     "0"),
   V(AuthDirBadDir,               LINELIST, NULL),
   V(AuthDirBadDirCCs,            CSV,      ""),
@@ -215,11 +215,14 @@ static config_var_t option_vars_[] = {
   V(DisableAllSwap,              BOOL,     "0"),
   V(DisableDebuggerAttachment,   BOOL,     "1"),
   V(DisableIOCP,                 BOOL,     "1"),
-  V(DisableV2DirectoryInfo_,     BOOL,     "0"),
+  OBSOLETE("DisableV2DirectoryInfo_"),
   V(DynamicDHGroups,             BOOL,     "0"),
   VPORT(DNSPort,                     LINELIST, NULL),
   V(DNSListenAddress,            LINELIST, NULL),
   V(DownloadExtraInfo,           BOOL,     "0"),
+  V(TestingEnableConnBwEvent,    BOOL,     "0"),
+  V(TestingEnableCellStatsEvent, BOOL,     "0"),
+  V(TestingEnableTbEmptyEvent,   BOOL,     "0"),
   V(EnforceDistinctSubnets,      BOOL,     "1"),
   V(EntryNodes,                  ROUTERSET,   NULL),
   V(EntryStatistics,             BOOL,     "0"),
@@ -239,13 +242,13 @@ static config_var_t option_vars_[] = {
   OBSOLETE("FallbackNetworkstatusFile"),
   V(FascistFirewall,             BOOL,     "0"),
   V(FirewallPorts,               CSV,      ""),
-  V(FastFirstHopPK,              BOOL,     "1"),
+  V(FastFirstHopPK,              AUTOBOOL, "auto"),
   V(FetchDirInfoEarly,           BOOL,     "0"),
   V(FetchDirInfoExtraEarly,      BOOL,     "0"),
   V(FetchServerDescriptors,      BOOL,     "1"),
   V(FetchHidServDescriptors,     BOOL,     "1"),
   V(FetchUselessDescriptors,     BOOL,     "0"),
-  V(FetchV2Networkstatus,        BOOL,     "0"),
+  OBSOLETE("FetchV2Networkstatus"),
   V(GeoIPExcludeUnknown,         AUTOBOOL, "auto"),
 #ifdef _WIN32
   V(GeoIPFile,                   FILENAME, "<default>"),
@@ -273,7 +276,7 @@ static config_var_t option_vars_[] = {
   VAR("HiddenServiceVersion",LINELIST_S, RendConfigLines,    NULL),
   VAR("HiddenServiceAuthorizeClient",LINELIST_S,RendConfigLines, NULL),
   V(HidServAuth,                 LINELIST, NULL),
-  V(HSAuthoritativeDir,          BOOL,     "0"),
+  OBSOLETE("HSAuthoritativeDir"),
   OBSOLETE("HSAuthorityRecordStats"),
   V(CloseHSClientCircuitsImmediatelyOnTimeout, BOOL, "0"),
   V(CloseHSServiceRendCircuitsImmediatelyOnTimeout, BOOL, "0"),
@@ -405,6 +408,7 @@ static config_var_t option_vars_[] = {
   OBSOLETE("TrafficShaping"),
   V(TransListenAddress,          LINELIST, NULL),
   VPORT(TransPort,                   LINELIST, NULL),
+  V(TransProxyType,              STRING,   "default"),
   V(TunnelDirConns,              BOOL,     "1"),
   V(UpdateBridgesFromAuthority,  BOOL,     "0"),
   V(UseBridges,                  BOOL,     "0"),
@@ -415,7 +419,7 @@ static config_var_t option_vars_[] = {
   V(User,                        STRING,   NULL),
   V(UserspaceIOCPBuffers,        BOOL,     "0"),
   VAR("V1AuthoritativeDirectory",BOOL, V1AuthoritativeDir,   "0"),
-  VAR("V2AuthoritativeDirectory",BOOL, V2AuthoritativeDir,   "0"),
+  OBSOLETE("V2AuthoritativeDirectory"),
   VAR("V3AuthoritativeDirectory",BOOL, V3AuthoritativeDir,   "0"),
   V(TestingV3AuthInitialVotingInterval, INTERVAL, "30 minutes"),
   V(TestingV3AuthInitialVoteDelay, INTERVAL, "5 minutes"),
@@ -458,6 +462,7 @@ static config_var_t option_vars_[] = {
   V(TestingDescriptorMaxDownloadTries, UINT, "8"),
   V(TestingMicrodescMaxDownloadTries, UINT, "8"),
   V(TestingCertMaxDownloadTries, UINT, "8"),
+  V(TestingDirAuthVoteGuard, ROUTERSET, NULL),
   VAR("___UsingTestNetworkDefaults", BOOL, UsingTestNetworkDefaults_, "0"),
 
   { NULL, CONFIG_TYPE_OBSOLETE, 0, NULL }
@@ -502,6 +507,9 @@ static const config_var_t testing_tor_network_defaults[] = {
   V(TestingDescriptorMaxDownloadTries, UINT, "80"),
   V(TestingMicrodescMaxDownloadTries, UINT, "80"),
   V(TestingCertMaxDownloadTries, UINT, "80"),
+  V(TestingEnableConnBwEvent,    BOOL,     "1"),
+  V(TestingEnableCellStatsEvent, BOOL,     "1"),
+  V(TestingEnableTbEmptyEvent,   BOOL,     "1"),
   VAR("___UsingTestNetworkDefaults", BOOL, UsingTestNetworkDefaults_, "1"),
 
   { NULL, CONFIG_TYPE_OBSOLETE, 0, NULL }
@@ -833,30 +841,30 @@ add_default_trusted_dir_authorities(dirinfo_type_t type)
 {
   int i;
   const char *authorities[] = {
-    "moria1 orport=9101 no-v2 "
+    "moria1 orport=9101 "
       "v3ident=D586D18309DED4CD6D57C18FDB97EFA96D330566 "
       "128.31.0.39:9131 9695 DFC3 5FFE B861 329B 9F1A B04C 4639 7020 CE31",
     "tor26 v1 orport=443 v3ident=14C131DFC5C6F93646BE72FA1401C02A8DF2E8B4 "
       "86.59.21.38:80 847B 1F85 0344 D787 6491 A548 92F9 0493 4E4E B85D",
     "dizum orport=443 v3ident=E8A9C45EDE6D711294FADF8E7951F4DE6CA56B58 "
       "194.109.206.212:80 7EA6 EAD6 FD83 083C 538F 4403 8BBF A077 587D D755",
-    "Tonga orport=443 bridge no-v2 82.94.251.203:80 "
+    "Tonga orport=443 bridge 82.94.251.203:80 "
       "4A0C CD2D DC79 9508 3D73 F5D6 6710 0C8A 5831 F16D",
-    "turtles orport=9090 no-v2 "
+    "turtles orport=9090 "
       "v3ident=27B6B5996C426270A5C95488AA5BCEB6BCC86956 "
       "76.73.17.194:9030 F397 038A DC51 3361 35E7 B80B D99C A384 4360 292B",
-    "gabelmoo orport=443 no-v2 "
+    "gabelmoo orport=443 "
       "v3ident=ED03BB616EB2F60BEC80151114BB25CEF515B226 "
       "212.112.245.170:80 F204 4413 DAC2 E02E 3D6B CF47 35A1 9BCA 1DE9 7281",
-    "dannenberg orport=443 no-v2 "
+    "dannenberg orport=443 "
       "v3ident=585769C78764D58426B8B52B6651A5A71137189A "
       "193.23.244.244:80 7BE6 83E6 5D48 1413 21C5 ED92 F075 C553 64AC 7123",
-    "urras orport=80 no-v2 v3ident=80550987E1D626E3EBA5E5E75A458DE0626D088C "
+    "urras orport=80 v3ident=80550987E1D626E3EBA5E5E75A458DE0626D088C "
       "208.83.223.34:443 0AD3 FA88 4D18 F89E EA2D 89C0 1937 9E0E 7FD9 4417",
-    "maatuska orport=80 no-v2 "
+    "maatuska orport=80 "
       "v3ident=49015F787433103580E3B66A1707A00E60F2D15B "
       "171.25.193.9:443 BD6A 8292 55CB 08E6 6FBE 7D37 4836 3586 E46B 3810",
-    "Faravahar orport=443 no-v2 "
+    "Faravahar orport=443 "
       "v3ident=EFCBE720AB3A82B99F9E953CD5BF50F7EEFC7B97 "
       "154.35.32.5:80 CF6D 0AAF B385 BE71 B8E1 11FC 5CFF 4B47 9237 33BC",
     NULL
@@ -896,8 +904,7 @@ validate_dir_servers(or_options_t *options, or_options_t *old_options)
   config_line_t *cl;
 
   if (options->DirAuthorities &&
-      (options->AlternateDirAuthority || options->AlternateBridgeAuthority ||
-       options->AlternateHSAuthority)) {
+      (options->AlternateDirAuthority || options->AlternateBridgeAuthority)) {
     log_warn(LD_CONFIG,
              "You cannot set both DirAuthority and Alternate*Authority.");
     return -1;
@@ -933,9 +940,6 @@ validate_dir_servers(or_options_t *options, or_options_t *old_options)
   for (cl = options->AlternateDirAuthority; cl; cl = cl->next)
     if (parse_dir_authority_line(cl->value, NO_DIRINFO, 1)<0)
       return -1;
-  for (cl = options->AlternateHSAuthority; cl; cl = cl->next)
-    if (parse_dir_authority_line(cl->value, NO_DIRINFO, 1)<0)
-      return -1;
   for (cl = options->FallbackDir; cl; cl = cl->next)
     if (parse_dir_fallback_line(cl->value, 1)<0)
       return -1;
@@ -958,9 +962,7 @@ consider_adding_dir_servers(const or_options_t *options,
     !config_lines_eq(options->AlternateBridgeAuthority,
                      old_options->AlternateBridgeAuthority) ||
     !config_lines_eq(options->AlternateDirAuthority,
-                     old_options->AlternateDirAuthority) ||
-    !config_lines_eq(options->AlternateHSAuthority,
-                     old_options->AlternateHSAuthority);
+                     old_options->AlternateDirAuthority);
 
   if (!need_to_update)
     return 0; /* all done */
@@ -974,10 +976,8 @@ consider_adding_dir_servers(const or_options_t *options,
     if (!options->AlternateBridgeAuthority)
       type |= BRIDGE_DIRINFO;
     if (!options->AlternateDirAuthority)
-      type |= V1_DIRINFO | V2_DIRINFO | V3_DIRINFO | EXTRAINFO_DIRINFO |
+      type |= V1_DIRINFO | V3_DIRINFO | EXTRAINFO_DIRINFO |
         MICRODESC_DIRINFO;
-    if (!options->AlternateHSAuthority)
-      type |= HIDSERV_DIRINFO;
     add_default_trusted_dir_authorities(type);
   }
   if (!options->FallbackDir)
@@ -990,9 +990,6 @@ consider_adding_dir_servers(const or_options_t *options,
     if (parse_dir_authority_line(cl->value, NO_DIRINFO, 0)<0)
       return -1;
   for (cl = options->AlternateDirAuthority; cl; cl = cl->next)
-    if (parse_dir_authority_line(cl->value, NO_DIRINFO, 0)<0)
-      return -1;
-  for (cl = options->AlternateHSAuthority; cl; cl = cl->next)
     if (parse_dir_authority_line(cl->value, NO_DIRINFO, 0)<0)
       return -1;
   for (cl = options->FallbackDir; cl; cl = cl->next)
@@ -1128,23 +1125,6 @@ options_act_reversible(const or_options_t *old_options, char **msg)
     /* No need to roll back, since you can't change the value. */
   }
 
-  /* Write control ports to disk as appropriate */
-  control_ports_write_to_file();
-
-  if (directory_caches_v2_dir_info(options)) {
-    char *fn = NULL;
-    tor_asprintf(&fn, "%s"PATH_SEPARATOR"cached-status",
-                 options->DataDirectory);
-    if (check_private_dir(fn, running_tor ? CPD_CREATE : CPD_CHECK,
-                          options->User) < 0) {
-      tor_asprintf(msg,
-                "Couldn't access/create private data directory \"%s\"", fn);
-      tor_free(fn);
-      goto done;
-    }
-    tor_free(fn);
-  }
-
   /* Bail out at this point if we're not going to be a client or server:
    * we don't run Tor itself. */
   if (!running_tor)
@@ -1157,8 +1137,6 @@ options_act_reversible(const or_options_t *old_options, char **msg)
     goto rollback;
   }
 
-  sandbox_set_debugging_fd(get_err_logging_fd());
-
  commit:
   r = 0;
   if (logs_marked) {
@@ -1168,6 +1146,7 @@ options_act_reversible(const or_options_t *old_options, char **msg)
     add_callback_log(severity, control_event_logmsg);
     control_adjust_event_log_severity();
     tor_free(severity);
+    tor_log_update_sigsafe_err_fds();
   }
   if (get_min_log_level() >= LOG_INFO &&
       get_min_log_level() != old_min_log_level) {
@@ -1328,6 +1307,9 @@ options_act(const or_options_t *old_options)
       warned_debugger_attach = 1;
     }
   }
+
+  /* Write control ports to disk as appropriate */
+  control_ports_write_to_file();
 
   if (running_tor && !have_lockfile()) {
     if (try_locking(options, 1) < 0)
@@ -1809,6 +1791,7 @@ static const struct {
   int takes_argument;
 } CMDLINE_ONLY_OPTIONS[] = {
   { "-f",                     1 },
+  { "--allow-missing-torrc",  0 },
   { "--defaults-torrc",       1 },
   { "--hash-password",        1 },
   { "--dump-config",          1 },
@@ -2351,7 +2334,7 @@ ensure_bandwidth_cap(uint64_t *value, const char *desc, char **msg)
 
 /** Parse an authority type from <b>options</b>-\>PublishServerDescriptor
  * and write it to <b>options</b>-\>PublishServerDescriptor_. Treat "1"
- * as "v2,v3" unless BridgeRelay is 1, in which case treat it as "bridge".
+ * as "v3" unless BridgeRelay is 1, in which case treat it as "bridge".
  * Treat "0" as "".
  * Return 0 on success or -1 if not a recognized authority type (in which
  * case the value of PublishServerDescriptor_ is undefined). */
@@ -2370,9 +2353,9 @@ compute_publishserverdescriptor(or_options_t *options)
       if (options->BridgeRelay)
         *auth |= BRIDGE_DIRINFO;
       else
-        *auth |= V2_DIRINFO | V3_DIRINFO;
+        *auth |= V3_DIRINFO;
     else if (!strcasecmp(string, "v2"))
-      *auth |= V2_DIRINFO;
+      /* obsolete */;
     else if (!strcasecmp(string, "v3"))
       *auth |= V3_DIRINFO;
     else if (!strcasecmp(string, "bridge"))
@@ -2523,19 +2506,36 @@ options_validate(or_options_t *old_options, or_options_t *options,
         "undefined, and there aren't any hidden services configured.  "
         "Tor will still run, but probably won't do anything.");
 
-#ifndef USE_TRANSPARENT
-  /* XXXX024 I think we can remove this TransListenAddress */
-  if (options->TransPort_set || options->TransListenAddress)
-    REJECT("TransPort and TransListenAddress are disabled in this build.");
+  options->TransProxyType_parsed = TPT_DEFAULT;
+#ifdef USE_TRANSPARENT
+  if (options->TransProxyType) {
+    if (!strcasecmp(options->TransProxyType, "default")) {
+      options->TransProxyType_parsed = TPT_DEFAULT;
+    } else if (!strcasecmp(options->TransProxyType, "tproxy")) {
+#ifndef __linux__
+      REJECT("TPROXY is a Linux-specific feature.");
+#else
+      options->TransProxyType_parsed = TPT_TPROXY;
+#endif
+    } else {
+      REJECT("Unrecognized value for TransProxyType");
+    }
+
+    if (strcasecmp(options->TransProxyType, "default") &&
+        !options->TransPort_set) {
+      REJECT("Cannot use TransProxyType without any valid TransPort or "
+             "TransListenAddress.");
+    }
+  }
+#else
+  if (options->TransPort_set)
+    REJECT("TransPort and TransListenAddress are disabled "
+           "in this build.");
 #endif
 
   if (options->TokenBucketRefillInterval <= 0
       || options->TokenBucketRefillInterval > 1000) {
     REJECT("TokenBucketRefillInterval must be between 1 and 1000 inclusive.");
-  }
-
-  if (options->DisableV2DirectoryInfo_ && ! authdir_mode(options)) {
-    REJECT("DisableV2DirectoryInfo_ set, but we aren't an authority.");
   }
 
   if (options->ExcludeExitNodes || options->ExcludeNodes) {
@@ -2594,11 +2594,11 @@ options_validate(or_options_t *old_options, or_options_t *options,
                "extra-info documents. Setting DownloadExtraInfo.");
       options->DownloadExtraInfo = 1;
     }
-    if (!(options->BridgeAuthoritativeDir || options->HSAuthoritativeDir ||
-          options->V1AuthoritativeDir || options->V2AuthoritativeDir ||
+    if (!(options->BridgeAuthoritativeDir ||
+          options->V1AuthoritativeDir ||
           options->V3AuthoritativeDir))
       REJECT("AuthoritativeDir is set, but none of "
-             "(Bridge/HS/V1/V2/V3)AuthoritativeDir is set.");
+             "(Bridge/V1/V3)AuthoritativeDir is set.");
     /* If we have a v3bandwidthsfile and it's broken, complain on startup */
     if (options->V3BandwidthsFile && !old_options) {
       dirserv_read_measured_bandwidths(options->V3BandwidthsFile, NULL);
@@ -2617,10 +2617,6 @@ options_validate(or_options_t *old_options, or_options_t *options,
   if (options->FetchDirInfoExtraEarly && !options->FetchDirInfoEarly)
     REJECT("FetchDirInfoExtraEarly requires that you also set "
            "FetchDirInfoEarly");
-
-  if (options->HSAuthoritativeDir && proxy_mode(options))
-    REJECT("Running as authoritative v0 HS directory, but also configured "
-           "as a client.");
 
   if (options->ConnLimit <= 0) {
     tor_asprintf(msg,
@@ -2808,7 +2804,7 @@ options_validate(or_options_t *old_options, or_options_t *options,
   if ((options->BridgeRelay
         || options->PublishServerDescriptor_ & BRIDGE_DIRINFO)
       && (options->PublishServerDescriptor_
-          & (V1_DIRINFO|V2_DIRINFO|V3_DIRINFO))) {
+          & (V1_DIRINFO|V3_DIRINFO))) {
     REJECT("Bridges are not supposed to publish router descriptors to the "
            "directory authorities. Please correct your "
            "PublishServerDescriptor line.");
@@ -3258,6 +3254,17 @@ options_validate(or_options_t *old_options, or_options_t *options,
     smartlist_free(options_sl);
   }
 
+  /* If we are a bridge with a pluggable transport proxy but no
+     Extended ORPort, inform the user that she is missing out. */
+  if (server_mode(options) && options->ServerTransportPlugin &&
+      !options->ExtORPort_lines) {
+    log_notice(LD_CONFIG, "We are a bridge with a pluggable transport "
+               "proxy but the Extended ORPort is disabled. The "
+               "Extended ORPort helps Tor communicate with the pluggable "
+               "transport proxy. Please enable it using the ExtORPort "
+               "torrc option.");
+  }
+
   if (options->ConstrainedSockets) {
     /* If the user wants to constrain socket buffer use, make sure the desired
      * limit is between MIN|MAX_TCPSOCK_BUFFER in k increments. */
@@ -3339,8 +3346,8 @@ options_validate(or_options_t *old_options, or_options_t *options,
         (options->AlternateDirAuthority &&
          options->AlternateBridgeAuthority))) {
     REJECT("TestingTorNetwork may only be configured in combination with "
-           "a non-default set of DirServer or both of AlternateDirAuthority "
-           "and AlternateBridgeAuthority configured.");
+           "a non-default set of DirAuthority or both of "
+           "AlternateDirAuthority and AlternateBridgeAuthority configured.");
   }
 
   if (options->AllowSingleHopExits && !options->DirAuthorities) {
@@ -3453,6 +3460,24 @@ options_validate(or_options_t *old_options, or_options_t *options,
     REJECT("TestingCertMaxDownloadTries must be greater than 1.");
   } else if (options->TestingCertMaxDownloadTries > 800) {
     COMPLAIN("TestingCertMaxDownloadTries is insanely high.");
+  }
+
+  if (options->TestingEnableConnBwEvent &&
+      !options->TestingTorNetwork && !options->UsingTestNetworkDefaults_) {
+    REJECT("TestingEnableConnBwEvent may only be changed in testing "
+           "Tor networks!");
+  }
+
+  if (options->TestingEnableCellStatsEvent &&
+      !options->TestingTorNetwork && !options->UsingTestNetworkDefaults_) {
+    REJECT("TestingEnableCellStatsEvent may only be changed in testing "
+           "Tor networks!");
+  }
+
+  if (options->TestingEnableTbEmptyEvent &&
+      !options->TestingTorNetwork && !options->UsingTestNetworkDefaults_) {
+    REJECT("TestingEnableTbEmptyEvent may only be changed in testing "
+           "Tor networks!");
   }
 
   if (options->TestingTorNetwork) {
@@ -3980,8 +4005,13 @@ options_init_from_torrc(int argc, char **argv)
   } else {
     cf_defaults = load_torrc_from_disk(cmdline_only_options, 1);
     cf = load_torrc_from_disk(cmdline_only_options, 0);
-    if (!cf)
-      goto err;
+    if (!cf) {
+      if (config_line_find(cmdline_only_options, "--allow-missing-torrc")) {
+        cf = tor_strdup("");
+      } else {
+        goto err;
+      }
+    }
   }
 
   retval = options_init_from_string(cf_defaults, cf, command, command_arg,
@@ -4556,7 +4586,8 @@ parse_bridge_line(const char *line)
  * <b>line</b>. Return 0 if the line is well-formed, and -1 if it
  * isn't.
  *
- * If <b>validate_only</b> is 0, and the line is well-formed:
+ * If <b>validate_only</b> is 0, the line is well-formed, and the
+ * transport is needed by some bridge:
  * - If it's an external proxy line, add the transport described in the line to
  * our internal transport list.
  * - If it's a managed proxy line, launch the managed proxy. */
@@ -4578,7 +4609,8 @@ parse_client_transport_line(const char *line, int validate_only)
   int is_managed=0;
   char **proxy_argv=NULL;
   char **tmp=NULL;
-  int proxy_argc,i;
+  int proxy_argc, i;
+  int is_useless_proxy=1;
 
   int line_length;
 
@@ -4600,11 +4632,16 @@ parse_client_transport_line(const char *line, int validate_only)
   smartlist_split_string(transport_list, transports, ",",
                          SPLIT_SKIP_SPACE|SPLIT_IGNORE_BLANK, 0);
   SMARTLIST_FOREACH_BEGIN(transport_list, const char *, transport_name) {
+    /* validate transport names */
     if (!string_is_C_identifier(transport_name)) {
       log_warn(LD_CONFIG, "Transport name is not a C identifier (%s).",
                transport_name);
       goto err;
     }
+
+    /* see if we actually need the transports provided by this proxy */
+    if (!validate_only && transport_is_needed(transport_name))
+      is_useless_proxy = 0;
   } SMARTLIST_FOREACH_END(transport_name);
 
   /* field2 is either a SOCKS version or "exec" */
@@ -4623,9 +4660,15 @@ parse_client_transport_line(const char *line, int validate_only)
   }
 
   if (is_managed) { /* managed */
-    if (!validate_only) {  /* if we are not just validating, use the
-                             rest of the line as the argv of the proxy
-                             to be launched */
+    if (!validate_only && is_useless_proxy) {
+      log_warn(LD_GENERAL, "Pluggable transport proxy (%s) does not provide "
+               "any needed transports and will not be launched.", line);
+    }
+
+    /* If we are not just validating, use the rest of the line as the
+       argv of the proxy to be launched. Also, make sure that we are
+       only launching proxies that contribute useful transports.  */
+    if (!validate_only && !is_useless_proxy) {
       proxy_argc = line_length-2;
       tor_assert(proxy_argc > 0);
       proxy_argv = tor_malloc_zero(sizeof(char*)*(proxy_argc+1));
@@ -4972,15 +5015,14 @@ parse_dir_authority_line(const char *line, dirinfo_type_t required_type,
   uint16_t dir_port = 0, or_port = 0;
   char digest[DIGEST_LEN];
   char v3_digest[DIGEST_LEN];
-  dirinfo_type_t type = V2_DIRINFO;
-  int is_not_hidserv_authority = 0, is_not_v2_authority = 0;
+  dirinfo_type_t type = 0;
   double weight = 1.0;
 
   items = smartlist_new();
   smartlist_split_string(items, line, NULL,
                          SPLIT_SKIP_SPACE|SPLIT_IGNORE_BLANK, -1);
   if (smartlist_len(items) < 1) {
-    log_warn(LD_CONFIG, "No arguments on DirServer line.");
+    log_warn(LD_CONFIG, "No arguments on DirAuthority line.");
     goto err;
   }
 
@@ -4994,21 +5036,22 @@ parse_dir_authority_line(const char *line, dirinfo_type_t required_type,
     if (TOR_ISDIGIT(flag[0]))
       break;
     if (!strcasecmp(flag, "v1")) {
-      type |= (V1_DIRINFO | HIDSERV_DIRINFO);
-    } else if (!strcasecmp(flag, "hs")) {
-      type |= HIDSERV_DIRINFO;
-    } else if (!strcasecmp(flag, "no-hs")) {
-      is_not_hidserv_authority = 1;
+      type |= V1_DIRINFO;
+    } else if (!strcasecmp(flag, "hs") ||
+               !strcasecmp(flag, "no-hs")) {
+      log_warn(LD_CONFIG, "The DirAuthority options 'hs' and 'no-hs' are "
+               "obsolete; you don't need them any more.");
     } else if (!strcasecmp(flag, "bridge")) {
       type |= BRIDGE_DIRINFO;
     } else if (!strcasecmp(flag, "no-v2")) {
-      is_not_v2_authority = 1;
+      /* obsolete, but may still be contained in DirAuthority lines generated
+         by various tools */;
     } else if (!strcasecmpstart(flag, "orport=")) {
       int ok;
       char *portstring = flag + strlen("orport=");
       or_port = (uint16_t) tor_parse_long(portstring, 10, 1, 65535, &ok, NULL);
       if (!ok)
-        log_warn(LD_CONFIG, "Invalid orport '%s' on DirServer line.",
+        log_warn(LD_CONFIG, "Invalid orport '%s' on DirAuthority line.",
                  portstring);
     } else if (!strcmpstart(flag, "weight=")) {
       int ok;
@@ -5022,41 +5065,37 @@ parse_dir_authority_line(const char *line, dirinfo_type_t required_type,
       char *idstr = flag + strlen("v3ident=");
       if (strlen(idstr) != HEX_DIGEST_LEN ||
           base16_decode(v3_digest, DIGEST_LEN, idstr, HEX_DIGEST_LEN)<0) {
-        log_warn(LD_CONFIG, "Bad v3 identity digest '%s' on DirServer line",
+        log_warn(LD_CONFIG, "Bad v3 identity digest '%s' on DirAuthority line",
                  flag);
       } else {
         type |= V3_DIRINFO|EXTRAINFO_DIRINFO|MICRODESC_DIRINFO;
       }
     } else {
-      log_warn(LD_CONFIG, "Unrecognized flag '%s' on DirServer line",
+      log_warn(LD_CONFIG, "Unrecognized flag '%s' on DirAuthority line",
                flag);
     }
     tor_free(flag);
     smartlist_del_keeporder(items, 0);
   }
-  if (is_not_hidserv_authority)
-    type &= ~HIDSERV_DIRINFO;
-  if (is_not_v2_authority)
-    type &= ~V2_DIRINFO;
 
   if (smartlist_len(items) < 2) {
-    log_warn(LD_CONFIG, "Too few arguments to DirServer line.");
+    log_warn(LD_CONFIG, "Too few arguments to DirAuthority line.");
     goto err;
   }
   addrport = smartlist_get(items, 0);
   smartlist_del_keeporder(items, 0);
   if (addr_port_lookup(LOG_WARN, addrport, &address, NULL, &dir_port)<0) {
-    log_warn(LD_CONFIG, "Error parsing DirServer address '%s'", addrport);
+    log_warn(LD_CONFIG, "Error parsing DirAuthority address '%s'", addrport);
     goto err;
   }
   if (!dir_port) {
-    log_warn(LD_CONFIG, "Missing port in DirServer address '%s'",addrport);
+    log_warn(LD_CONFIG, "Missing port in DirAuthority address '%s'",addrport);
     goto err;
   }
 
   fingerprint = smartlist_join_strings(items, "", 0, NULL);
   if (strlen(fingerprint) != HEX_DIGEST_LEN) {
-    log_warn(LD_CONFIG, "Key digest '%s' for DirServer is wrong length %d.",
+    log_warn(LD_CONFIG, "Key digest '%s' for DirAuthority is wrong length %d.",
              fingerprint, (int)strlen(fingerprint));
     goto err;
   }
@@ -5069,7 +5108,7 @@ parse_dir_authority_line(const char *line, dirinfo_type_t required_type,
     goto err;
   }
   if (base16_decode(digest, DIGEST_LEN, fingerprint, HEX_DIGEST_LEN)<0) {
-    log_warn(LD_CONFIG, "Unable to decode DirServer key digest.");
+    log_warn(LD_CONFIG, "Unable to decode DirAuthority key digest.");
     goto err;
   }
 

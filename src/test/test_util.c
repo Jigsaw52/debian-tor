@@ -102,6 +102,107 @@ test_util_read_file_eof_zero_bytes(void *arg)
   test_util_read_until_eof_impl("tor_test_fifo_empty", 0, 10000);
 }
 
+/* Test the basic expected behaviour for write_chunks_to_file.
+ * NOTE: This will need to be updated if we ever change the tempfile location
+ * or extension */
+static void
+test_util_write_chunks_to_file(void *arg)
+{
+  char *fname = NULL;
+  char *tempname = NULL;
+  char *str = NULL;
+  int r;
+  struct stat st;
+
+  /* These should be two different sizes to ensure the data is different
+   * between the data file and the temp file's 'known string' */
+  int temp_str_len = 1024;
+  int data_str_len = 512;
+  char *data_str = tor_malloc(data_str_len);
+  char *temp_str = tor_malloc(temp_str_len);
+
+  smartlist_t *chunks = smartlist_new();
+  sized_chunk_t c = {data_str, data_str_len/2};
+  sized_chunk_t c2 = {data_str + data_str_len/2, data_str_len/2};
+  (void)arg;
+
+  crypto_rand(temp_str, temp_str_len);
+  crypto_rand(data_str, data_str_len);
+
+  // Ensure it can write multiple chunks
+
+  smartlist_add(chunks, &c);
+  smartlist_add(chunks, &c2);
+
+  /*
+  * Check if it writes using a tempfile
+  */
+  fname = tor_strdup(get_fname("write_chunks_with_tempfile"));
+  tor_asprintf(&tempname, "%s.tmp", fname);
+
+  // write a known string to a file where the tempfile will be
+  r = write_bytes_to_file(tempname, temp_str, temp_str_len, 1);
+  tt_int_op(r, ==, 0);
+
+  // call write_chunks_to_file
+  r = write_chunks_to_file(fname, chunks, 1, 0);
+  tt_int_op(r, ==, 0);
+
+  // assert the file has been written (expected size)
+  str = read_file_to_str(fname, RFTS_BIN, &st);
+  tt_assert(str != NULL);
+  tt_int_op(st.st_size, ==, data_str_len);
+  test_mem_op(data_str, ==, str, data_str_len);
+  tor_free(str);
+
+  // assert that the tempfile is removed (should not leave artifacts)
+  str = read_file_to_str(tempname, RFTS_BIN|RFTS_IGNORE_MISSING, &st);
+  tt_assert(str == NULL);
+
+  // Remove old testfile for second test
+  r = unlink(fname);
+  tt_int_op(r, ==, 0);
+  tor_free(fname);
+  tor_free(tempname);
+
+  /*
+  *  Check if it skips using a tempfile with flags
+  */
+  fname = tor_strdup(get_fname("write_chunks_with_no_tempfile"));
+  tor_asprintf(&tempname, "%s.tmp", fname);
+
+  // write a known string to a file where the tempfile will be
+  r = write_bytes_to_file(tempname, temp_str, temp_str_len, 1);
+  tt_int_op(r, ==, 0);
+
+  // call write_chunks_to_file with no_tempfile = true
+  r = write_chunks_to_file(fname, chunks, 1, 1);
+  tt_int_op(r, ==, 0);
+
+  // assert the file has been written (expected size)
+  str = read_file_to_str(fname, RFTS_BIN, &st);
+  tt_assert(str != NULL);
+  tt_int_op(st.st_size, ==, data_str_len);
+  test_mem_op(data_str, ==, str, data_str_len);
+  tor_free(str);
+
+  // assert the tempfile still contains the known string
+  str = read_file_to_str(tempname, RFTS_BIN, &st);
+  tt_assert(str != NULL);
+  tt_int_op(st.st_size, ==, temp_str_len);
+  test_mem_op(temp_str, ==, str, temp_str_len);
+
+ done:
+  unlink(fname);
+  unlink(tempname);
+  smartlist_free(chunks);
+  tor_free(fname);
+  tor_free(tempname);
+  tor_free(str);
+  tor_free(data_str);
+  tor_free(temp_str);
+}
+
 static void
 test_util_time(void)
 {
@@ -926,6 +1027,8 @@ test_util_strmisc(void)
   test_eq(0L,   tor_parse_long("10",-2,0,100,NULL,NULL));
   test_eq(68284L, tor_parse_long("10abc",16,0,70000,NULL,NULL));
   test_eq(68284L, tor_parse_long("10ABC",16,0,70000,NULL,NULL));
+  test_eq(0, tor_parse_long("10ABC",-1,0,70000,&i,NULL));
+  test_eq(i, 0);
 
   /* Test parse_ulong */
   test_eq(0UL, tor_parse_ulong("",10,0,100,NULL,NULL));
@@ -937,6 +1040,8 @@ test_util_strmisc(void)
   test_eq(0UL, tor_parse_ulong("8",8,0,100,NULL,NULL));
   test_eq(50UL, tor_parse_ulong("50",10,50,100,NULL,NULL));
   test_eq(0UL, tor_parse_ulong("-50",10,-100,100,NULL,NULL));
+  test_eq(0UL, tor_parse_ulong("50",-1,50,100,&i,NULL));
+  test_eq(0, i);
 
   /* Test parse_uint64 */
   test_assert(U64_LITERAL(10) == tor_parse_uint64("10 x",10,0,100, &i, &cp));
@@ -948,6 +1053,9 @@ test_util_strmisc(void)
   test_streq(cp, "");
   test_assert(U64_LITERAL(0) ==
               tor_parse_uint64("12345678901",10,500,INT32_MAX, &i, &cp));
+  test_eq(0, i);
+  test_assert(U64_LITERAL(0) ==
+              tor_parse_uint64("123",-1,0,INT32_MAX, &i, &cp));
   test_eq(0, i);
 
   {
@@ -2312,6 +2420,7 @@ test_util_exit_status(void *ptr)
   n = format_helper_exit_status(0xFF, -0x80000000, hex_errno);
   test_streq("FF/-80000000\n", hex_errno);
   test_eq(n, strlen(hex_errno));
+  test_eq(n, HEX_ERRNO_SIZE);
 
   clear_hex_errno(hex_errno);
   n = format_helper_exit_status(0x7F, 0, hex_errno);
@@ -2666,6 +2775,56 @@ test_util_format_hex_number(void *ptr)
   test_streq(buf, "FFFF");
   test_eq(0, format_hex_number_sigsafe(0xffff, buf, 4));
   test_eq(0, format_hex_number_sigsafe(0, buf, 1));
+
+ done:
+  return;
+}
+
+/**
+ * Test for format_hex_number_sigsafe()
+ */
+
+static void
+test_util_format_dec_number(void *ptr)
+{
+  int i, len;
+  char buf[33];
+  const struct {
+    const char *str;
+    unsigned int x;
+  } test_data[] = {
+    {"0", 0},
+    {"1", 1},
+    {"1234", 1234},
+    {"12345678", 12345678},
+    {"99999999",  99999999},
+    {"100000000", 100000000},
+    {"4294967295", 4294967295u},
+#if UINT_MAX > 0xffffffff
+    {"18446744073709551615", 18446744073709551615u },
+#endif
+    {NULL, 0}
+  };
+
+  (void)ptr;
+
+  for (i = 0; test_data[i].str != NULL; ++i) {
+    len = format_dec_number_sigsafe(test_data[i].x, buf, sizeof(buf));
+    test_neq(len, 0);
+    test_eq(len, strlen(buf));
+    test_streq(buf, test_data[i].str);
+
+    len = format_dec_number_sigsafe(test_data[i].x, buf,
+                                    (int)(strlen(test_data[i].str) + 1));
+    test_eq(len, strlen(buf));
+    test_streq(buf, test_data[i].str);
+  }
+
+  test_eq(4, format_dec_number_sigsafe(7331, buf, 5));
+  test_streq(buf, "7331");
+  test_eq(0, format_dec_number_sigsafe(7331, buf, 4));
+  test_eq(1, format_dec_number_sigsafe(0, buf, 2));
+  test_eq(0, format_dec_number_sigsafe(0, buf, 1));
 
  done:
   return;
@@ -3491,6 +3650,7 @@ struct testcase_t util_tests[] = {
   UTIL_TEST(spawn_background_fail, 0),
   UTIL_TEST(spawn_background_partial_read, 0),
   UTIL_TEST(format_hex_number, 0),
+  UTIL_TEST(format_dec_number, 0),
   UTIL_TEST(join_win_cmdline, 0),
   UTIL_TEST(split_lines, 0),
   UTIL_TEST(n_bits_set, 0),
@@ -3502,6 +3662,7 @@ struct testcase_t util_tests[] = {
   UTIL_TEST(read_file_eof_tiny_limit, 0),
   UTIL_TEST(read_file_eof_two_loops, 0),
   UTIL_TEST(read_file_eof_zero_bytes, 0),
+  UTIL_TEST(write_chunks_to_file, 0),
   UTIL_TEST(mathlog, 0),
   UTIL_TEST(weak_random, 0),
   UTIL_TEST(socket, TT_FORK),

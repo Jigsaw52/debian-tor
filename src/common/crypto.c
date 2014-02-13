@@ -168,8 +168,8 @@ log_engine(const char *fn, ENGINE *e)
     const char *name, *id;
     name = ENGINE_get_name(e);
     id = ENGINE_get_id(e);
-    log_notice(LD_CRYPTO, "Using OpenSSL engine %s [%s] for %s",
-        name?name:"?", id?id:"?", fn);
+    log_notice(LD_CRYPTO, "Default OpenSSL engine for %s is %s [%s]",
+               fn, name?name:"?", id?id:"?");
   } else {
     log_info(LD_CRYPTO, "Using default implementation for %s", fn);
   }
@@ -307,15 +307,39 @@ crypto_global_init(int useAccel, const char *accelName, const char *accelDir)
                  " setting default ciphers.");
         ENGINE_set_default(e, ENGINE_METHOD_ALL);
       }
+      /* Log, if available, the intersection of the set of algorithms
+         used by Tor and the set of algorithms available in the engine */
       log_engine("RSA", ENGINE_get_default_RSA());
       log_engine("DH", ENGINE_get_default_DH());
+      log_engine("ECDH", ENGINE_get_default_ECDH());
+      log_engine("ECDSA", ENGINE_get_default_ECDSA());
       log_engine("RAND", ENGINE_get_default_RAND());
+      log_engine("RAND (which we will not use)", ENGINE_get_default_RAND());
       log_engine("SHA1", ENGINE_get_digest_engine(NID_sha1));
-      log_engine("3DES", ENGINE_get_cipher_engine(NID_des_ede3_ecb));
-      log_engine("AES", ENGINE_get_cipher_engine(NID_aes_128_ecb));
+      log_engine("3DES-CBC", ENGINE_get_cipher_engine(NID_des_ede3_cbc));
+      log_engine("AES-128-ECB", ENGINE_get_cipher_engine(NID_aes_128_ecb));
+      log_engine("AES-128-CBC", ENGINE_get_cipher_engine(NID_aes_128_cbc));
+#ifdef NID_aes_128_ctr
+      log_engine("AES-128-CTR", ENGINE_get_cipher_engine(NID_aes_128_ctr));
+#endif
+#ifdef NID_aes_128_gcm
+      log_engine("AES-128-GCM", ENGINE_get_cipher_engine(NID_aes_128_gcm));
+#endif
+      log_engine("AES-256-CBC", ENGINE_get_cipher_engine(NID_aes_256_cbc));
+#ifdef NID_aes_256_gcm
+      log_engine("AES-256-GCM", ENGINE_get_cipher_engine(NID_aes_256_gcm));
+#endif
+
 #endif
     } else {
       log_info(LD_CRYPTO, "NOT using OpenSSL engine support.");
+    }
+
+    if (RAND_get_rand_method() != RAND_SSLeay()) {
+      log_notice(LD_CRYPTO, "It appears that one of our engines has provided "
+                 "a replacement the OpenSSL RNG. Resetting it to the default "
+                 "implementation.");
+      RAND_set_rand_method(RAND_SSLeay());
     }
 
     evaluate_evp_for_aes(-1);
@@ -500,7 +524,7 @@ crypto_pk_generate_key_with_bits(crypto_pk_t *env, int bits)
     r = NULL;
   done:
     if (e)
-      BN_free(e);
+      BN_clear_free(e);
     if (r)
       RSA_free(r);
   }
@@ -1900,7 +1924,7 @@ crypto_set_tls_dh_prime(const char *dynamic_dh_modulus_fname)
 
   /* If the space is occupied, free the previous TLS DH prime */
   if (dh_param_p_tls) {
-    BN_free(dh_param_p_tls);
+    BN_clear_free(dh_param_p_tls);
     dh_param_p_tls = NULL;
   }
 
@@ -2062,8 +2086,8 @@ crypto_dh_generate_public(crypto_dh_t *dh)
     log_warn(LD_CRYPTO, "Weird! Our own DH key was invalid.  I guess once-in-"
              "the-universe chances really do happen.  Trying again.");
     /* Free and clear the keys, so OpenSSL will actually try again. */
-    BN_free(dh->dh->pub_key);
-    BN_free(dh->dh->priv_key);
+    BN_clear_free(dh->dh->pub_key);
+    BN_clear_free(dh->dh->priv_key);
     dh->dh->pub_key = dh->dh->priv_key = NULL;
     goto again;
   }
@@ -2125,10 +2149,10 @@ tor_check_dh_key(int severity, BIGNUM *bn)
     log_fn(severity, LD_CRYPTO, "DH key must be at most p-2.");
     goto err;
   }
-  BN_free(x);
+  BN_clear_free(x);
   return 0;
  err:
-  BN_free(x);
+  BN_clear_free(x);
   s = BN_bn2hex(bn);
   log_fn(severity, LD_CRYPTO, "Rejecting insecure DH key [%s]", s);
   OPENSSL_free(s);
@@ -2187,7 +2211,7 @@ crypto_dh_compute_secret(int severity, crypto_dh_t *dh,
  done:
   crypto_log_errors(LOG_WARN, "completing DH handshake");
   if (pubkey_bn)
-    BN_free(pubkey_bn);
+    BN_clear_free(pubkey_bn);
   if (secret_tmp) {
     memwipe(secret_tmp, 0, secret_tmp_len);
     tor_free(secret_tmp);
@@ -3096,11 +3120,11 @@ crypto_global_cleanup(void)
   ERR_free_strings();
 
   if (dh_param_p)
-    BN_free(dh_param_p);
+    BN_clear_free(dh_param_p);
   if (dh_param_p_tls)
-    BN_free(dh_param_p_tls);
+    BN_clear_free(dh_param_p_tls);
   if (dh_param_g)
-    BN_free(dh_param_g);
+    BN_clear_free(dh_param_g);
 
 #ifndef DISABLE_ENGINES
   ENGINE_cleanup();

@@ -14,7 +14,9 @@
 #include "router.h"
 #include "circuitlist.h"
 #include "main.h"
+#include "rephist.h"
 #include "hibernate.h"
+#include "rephist.h"
 #include "statefile.h"
 
 static void log_accounting(const time_t now, const or_options_t *options);
@@ -127,6 +129,9 @@ log_heartbeat(time_t now)
     double overhead = ( r - 1.0 ) * 100.0;
     log_notice(LD_HEARTBEAT, "TLS write overhead: %.f%%", overhead);
   }
+
+  if (public_server_mode(options))
+    rep_hist_log_circuit_handshake_stats(now);
 
   tor_free(uptime);
   tor_free(bw_sent);

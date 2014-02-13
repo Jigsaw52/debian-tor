@@ -3143,7 +3143,7 @@ dirvote_compute_consensuses(void)
     });
 
   votefile = get_datadir_fname("v3-status-votes");
-  write_chunks_to_file(votefile, votestrings, 0);
+  write_chunks_to_file(votefile, votestrings, 0, 0);
   tor_free(votefile);
   SMARTLIST_FOREACH(votestrings, sized_chunk_t *, c, tor_free(c));
   smartlist_free(votestrings);
@@ -3592,7 +3592,8 @@ dirvote_create_microdescriptor(const routerinfo_t *ri, int consensus_method)
 
   {
     smartlist_t *lst = microdescs_parse_from_string(output,
-                                                 output+strlen(output), 0, 1);
+                                                 output+strlen(output), 0,
+                                                    SAVED_NOWHERE);
     if (smartlist_len(lst) != 1) {
       log_warn(LD_DIR, "We generated a microdescriptor we couldn't parse.");
       SMARTLIST_FOREACH(lst, microdesc_t *, md, microdesc_free(md));

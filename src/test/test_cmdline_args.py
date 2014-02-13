@@ -6,11 +6,20 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
-TOR = "./src/or/tor-cov"
-TOPDIR = "."
+TOR = "./src/or/tor"
+TOP_SRCDIR = "."
+
+if len(sys.argv) > 1:
+    TOR = sys.argv[1]
+    del sys.argv[1]
+
+if len(sys.argv) > 1:
+    TOP_SRCDIR = sys.argv[1]
+    del sys.argv[1]
 
 class UnexpectedSuccess(Exception):
     pass
@@ -50,6 +59,16 @@ def strip_log_junk(line):
     if not m:
         return ""+line
     return m.group(2).strip()
+
+def randstring(entropy_bytes):
+    s = os.urandom(entropy_bytes)
+    return binascii.b2a_hex(s)
+
+def findLineContaining(lines, s):
+    for ln in lines:
+        if s in ln:
+            return True
+    return False
 
 class CmdlineTests(unittest.TestCase):
 
@@ -110,7 +129,7 @@ class CmdlineTests(unittest.TestCase):
         self.assertEquals(hashlib.sha1(inp).digest(), hashed)
 
     def test_digests(self):
-        main_c = os.path.join(TOPDIR, "src", "or", "main.c")
+        main_c = os.path.join(TOP_SRCDIR, "src", "or", "main.c")
 
         if os.stat(TOR).st_mtime < os.stat(main_c).st_mtime:
             self.skipTest(TOR+" not up to date")
@@ -154,9 +173,9 @@ class CmdlineTests(unittest.TestCase):
 
         out_fl = lines(out_fl)
         self.assert_(len(out_fl) > 100)
-        self.assertIn("SocksPort 9999", out_fl)
-        self.assertIn("SafeLogging 0", out_fl)
-        self.assertIn("ClientOnly 0", out_fl)
+        self.assert_("SocksPort 9999" in out_fl)
+        self.assert_("SafeLogging 0" in out_fl)
+        self.assert_("ClientOnly 0" in out_fl)
 
         self.assert_(out_verif.endswith("Configuration was valid\n"))
 
@@ -237,6 +256,18 @@ class CmdlineTests(unittest.TestCase):
                            "ORPort 9001",
                            "ORPort 9003",
                            "SocksPort 9090"])
+
+    def test_missing_torrc(self):
+        fname = "nonexistent_file_"+randstring(8)
+        out = run_tor(["-f", fname, "--verify-config"], failure=True)
+        ln = [ strip_log_junk(l) for l in lines(out) ]
+        self.assert_("Unable to open configuration file" in ln[-2])
+        self.assert_("Reading config failed" in ln[-1])
+
+        out = run_tor(["-f", fname, "--verify-config", "--ignore-missing-torrc"])
+        ln = [ strip_log_junk(l) for l in lines(out) ]
+        self.assert_(findLineContaining(ln, ", using reasonable defaults"))
+        self.assert_("Configuration was valid" in ln[-1])
 
 if __name__ == '__main__':
     unittest.main()

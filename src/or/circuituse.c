@@ -12,6 +12,7 @@
 #include "or.h"
 #include "addressmap.h"
 #include "channel.h"
+#include "circpathbias.h"
 #include "circuitbuild.h"
 #include "circuitlist.h"
 #include "circuitstats.h"
@@ -823,7 +824,7 @@ circuit_stream_is_being_handled(entry_connection_t *conn,
       cpath_build_state_t *build_state = origin_circ->build_state;
       if (build_state->is_internal || build_state->onehop_tunnel)
         continue;
-      if (!origin_circ->unusable_for_new_conns)
+      if (origin_circ->unusable_for_new_conns)
         continue;
 
       exitnode = build_state_get_exit_node(build_state);
@@ -1377,10 +1378,11 @@ circuit_build_failed(origin_circuit_t *circ)
     failed_at_last_hop = 1;
   }
   if (circ->cpath &&
-      circ->cpath->state != CPATH_STATE_OPEN) {
-    /* We failed at the first hop. If there's an OR connection
-     * to blame, blame it. Also, avoid this relay for a while, and
-     * fail any one-hop directory fetches destined for it. */
+      circ->cpath->state != CPATH_STATE_OPEN &&
+      ! circ->base_.received_destroy) {
+    /* We failed at the first hop for some reason other than a DESTROY cell.
+     * If there's an OR connection to blame, blame it. Also, avoid this relay
+     * for a while, and fail any one-hop directory fetches destined for it. */
     const char *n_chan_id = circ->cpath->extend_info->identity_digest;
     int already_marked = 0;
     if (circ->base_.n_chan) {

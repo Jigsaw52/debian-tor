@@ -24,7 +24,8 @@
 #include "torint.h"
 #include "container.h"
 #include "address.h"
-#include "../common/sandbox.h"
+#include "sandbox.h"
+#include "backtrace.h"
 
 #ifdef _WIN32
 #include <io.h>
@@ -93,6 +94,23 @@
 #ifdef HAVE_SYS_WAIT_H
 #include <sys/wait.h>
 #endif
+
+/* =====
+ * Assertion helper.
+ * ===== */
+/** Helper for tor_assert: report the assertion failure. */
+void
+tor_assertion_failed_(const char *fname, unsigned int line,
+                      const char *func, const char *expr)
+{
+  char buf[256];
+  log_err(LD_BUG, "%s:%u: %s: Assertion %s failed; aborting.",
+          fname, line, func, expr);
+  tor_snprintf(buf, sizeof(buf),
+               "Assertion %s failed in %s at %s:%u",
+               expr, func, fname, line);
+  log_backtrace(LOG_ERR, LD_BUG, buf);
+}
 
 /* =====
  * Memory management
@@ -1303,6 +1321,18 @@ tv_mdiff(const struct timeval *start, const struct timeval *end)
   return mdiff;
 }
 
+/**
+ * Converts timeval to milliseconds.
+ */
+int64_t
+tv_to_msec(const struct timeval *tv)
+{
+  int64_t conv = ((int64_t)tv->tv_sec)*1000L;
+  /* Round ghetto-style */
+  conv += ((int64_t)tv->tv_usec+500)/1000L;
+  return conv;
+}
+
 /** Yield true iff <b>y</b> is a leap-year. */
 #define IS_LEAPYEAR(y) (!(y % 4) && ((y % 100) || !(y % 400)))
 /** Helper: Return the number of leap-days between Jan 1, y1 and Jan 1, y2. */
@@ -2036,8 +2066,10 @@ start_writing_to_file(const char *fname, int open_flags, int mode,
     open_flags &= ~O_EXCL;
     new_file->rename_on_close = 1;
   }
+#if O_BINARY != 0
   if (open_flags & O_BINARY)
     new_file->binary = 1;
+#endif
 
   new_file->fd = tor_open_cloexec(open_name, open_flags, mode);
   if (new_file->fd < 0) {
@@ -2191,12 +2223,20 @@ write_chunks_to_file_impl(const char *fname, const smartlist_t *chunks,
   return -1;
 }
 
-/** Given a smartlist of sized_chunk_t, write them atomically to a file
- * <b>fname</b>, overwriting or creating the file as necessary. */
+/** Given a smartlist of sized_chunk_t, write them to a file
+ * <b>fname</b>, overwriting or creating the file as necessary.
+ * If <b>no_tempfile</b> is 0 then the file will be written
+ * atomically. */
 int
-write_chunks_to_file(const char *fname, const smartlist_t *chunks, int bin)
+write_chunks_to_file(const char *fname, const smartlist_t *chunks, int bin,
+                     int no_tempfile)
 {
   int flags = OPEN_FLAGS_REPLACE|(bin?O_BINARY:O_TEXT);
+
+  if (no_tempfile) {
+    /* O_APPEND stops write_chunks_to_file from using tempfiles */
+    flags |= O_APPEND;
+  }
   return write_chunks_to_file_impl(fname, chunks, flags);
 }
 
@@ -3380,6 +3420,51 @@ tor_join_win_cmdline(const char *argv[])
   return joined_argv;
 }
 
+/* As format_{hex,dex}_number_sigsafe, but takes a <b>radix</b> argument
+ * in range 2..16 inclusive. */
+static int
+format_number_sigsafe(unsigned long x, char *buf, int buf_len,
+                      unsigned int radix)
+{
+  unsigned long tmp;
+  int len;
+  char *cp;
+
+  /* NOT tor_assert. This needs to be safe to run from within a signal handler,
+   * and from within the 'tor_assert() has failed' code. */
+  if (radix < 2 || radix > 16)
+    return 0;
+
+  /* Count how many digits we need. */
+  tmp = x;
+  len = 1;
+  while (tmp >= radix) {
+    tmp /= radix;
+    ++len;
+  }
+
+  /* Not long enough */
+  if (!buf || len >= buf_len)
+    return 0;
+
+  cp = buf + len;
+  *cp = '\0';
+  do {
+    unsigned digit = x % radix;
+    tor_assert(cp > buf);
+    --cp;
+    *cp = "0123456789ABCDEF"[digit];
+    x /= radix;
+  } while (x);
+
+  /* NOT tor_assert; see above. */
+  if (cp != buf) {
+    abort();
+  }
+
+  return len;
+}
+
 /**
  * Helper function to output hex numbers from within a signal handler.
  *
@@ -3402,45 +3487,16 @@ tor_join_win_cmdline(const char *argv[])
  * arbitrary C functions.
  */
 int
-format_hex_number_sigsafe(unsigned int x, char *buf, int buf_len)
+format_hex_number_sigsafe(unsigned long x, char *buf, int buf_len)
 {
-  int len;
-  unsigned int tmp;
-  char *cur;
+  return format_number_sigsafe(x, buf, buf_len, 16);
+}
 
-  /* Sanity check */
-  if (!buf || buf_len <= 1)
-    return 0;
-
-  /* How many chars do we need for x? */
-  if (x > 0) {
-    len = 0;
-    tmp = x;
-    while (tmp > 0) {
-      tmp >>= 4;
-      ++len;
-    }
-  } else {
-    len = 1;
-  }
-
-  /* Bail if we would go past the end of the buffer */
-  if (len+1 > buf_len)
-    return 0;
-
-  /* Point to last one */
-  cur = buf + len - 1;
-
-  /* Convert x to hex */
-  do {
-    *cur-- = "0123456789ABCDEF"[x & 0xf];
-    x >>= 4;
-  } while (x != 0 && cur >= buf);
-
-  buf[len] = '\0';
-
-  /* Return len */
-  return len;
+/** As format_hex_number_sigsafe, but format the number in base 10. */
+int
+format_dec_number_sigsafe(unsigned long x, char *buf, int buf_len)
+{
+  return format_number_sigsafe(x, buf, buf_len, 10);
 }
 
 #ifndef _WIN32
@@ -3448,10 +3504,10 @@ format_hex_number_sigsafe(unsigned int x, char *buf, int buf_len)
  * <b>hex_errno</b>.  Called between fork and _exit, so must be signal-handler
  * safe.
  *
- * <b>hex_errno</b> must have at least HEX_ERRNO_SIZE bytes available.
+ * <b>hex_errno</b> must have at least HEX_ERRNO_SIZE+1 bytes available.
  *
  * The format of <b>hex_errno</b> is: "CHILD_STATE/ERRNO\n", left-padded
- * with spaces. Note that there is no trailing \0. CHILD_STATE indicates where
+ * with spaces. CHILD_STATE indicates where
  * in the processs of starting the child process did the failure occur (see
  * CHILD_STATE_* macros for definition), and SAVED_ERRNO is the value of
  * errno when the failure occurred.
@@ -3486,7 +3542,7 @@ format_helper_exit_status(unsigned char child_state, int saved_errno,
    * Count how many chars of space we have left, and keep a pointer into the
    * current point in the buffer.
    */
-  left = HEX_ERRNO_SIZE;
+  left = HEX_ERRNO_SIZE+1;
   cur = hex_errno;
 
   /* Emit child_state */
@@ -3529,8 +3585,8 @@ format_helper_exit_status(unsigned char child_state, int saved_errno,
   left -= written;
   cur += written;
 
-  /* Check that we have enough space left for a newline */
-  if (left <= 0)
+  /* Check that we have enough space left for a newline and a NUL */
+  if (left <= 1)
     goto err;
 
   /* Emit the newline and NUL */
@@ -3747,7 +3803,7 @@ tor_spawn_background(const char *const filename, const char **argv,
                  TRUE,          // handles are inherited
   /*(TODO: set CREATE_NEW CONSOLE/PROCESS_GROUP to make GetExitCodeProcess()
    * work?) */
-                 0,             // creation flags
+                 CREATE_NO_WINDOW,             // creation flags
                  (env==NULL) ? NULL : env->windows_environment_block,
                  NULL,          // use parent's current directory
                  &siStartInfo,  // STARTUPINFO pointer
@@ -3786,7 +3842,7 @@ tor_spawn_background(const char *const filename, const char **argv,
      this is used for printing out the error message */
   unsigned char child_state = CHILD_STATE_INIT;
 
-  char hex_errno[HEX_ERRNO_SIZE];
+  char hex_errno[HEX_ERRNO_SIZE + 2]; /* + 1 should be sufficient actually */
 
   static int max_fd = -1;
 
