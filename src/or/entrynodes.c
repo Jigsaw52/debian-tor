@@ -13,6 +13,7 @@
  **/
 
 #include "or.h"
+#include "circpathbias.h"
 #include "circuitbuild.h"
 #include "circuitstats.h"
 #include "config.h"
@@ -349,7 +350,7 @@ control_event_guard_deferred(void)
  * Else, put the one we pick at the end of the list. */
 static const node_t *
 add_an_entry_guard(const node_t *chosen, int reset_status, int prepend,
-                   int for_directory)
+                   int for_discovery, int for_directory)
 {
   const node_t *node;
   entry_guard_t *entry;
@@ -408,6 +409,18 @@ add_an_entry_guard(const node_t *chosen, int reset_status, int prepend,
    * this guard. For details, see the Jan 2010 or-dev thread. */
   entry->chosen_on_date = time(NULL) - crypto_rand_int(3600*24*30);
   entry->chosen_by_version = tor_strdup(VERSION);
+
+  /* Are we picking this guard because all of our current guards are
+   * down so we need another one (for_discovery is 1), or because we
+   * decided we need more variety in our guard list (for_discovery is 0)?
+   *
+   * Currently we hack this behavior into place by setting "made_contact"
+   * for guards of the latter variety, so we'll be willing to use any of
+   * them right off the bat.
+   */
+  if (!for_discovery)
+    entry->made_contact = 1;
+
   ((node_t*)node)->using_as_guard = 1;
   if (prepend)
     smartlist_insert(entry_guards, 0, entry);
@@ -441,7 +454,7 @@ pick_entry_guards(const or_options_t *options, int for_directory)
   tor_assert(entry_guards);
 
   while (num_live_entry_guards(for_directory) < num_needed) {
-    if (!add_an_entry_guard(NULL, 0, 0, for_directory))
+    if (!add_an_entry_guard(NULL, 0, 0, 0, for_directory))
       break;
     changed = 1;
   }
@@ -584,6 +597,25 @@ remove_dead_entry_guards(time_t now)
       ++i;
   }
   return changed ? 1 : 0;
+}
+
+/** Remove all currently listed entry guards. So new ones will be chosen. */
+void
+remove_all_entry_guards(void)
+{
+  char dbuf[HEX_DIGEST_LEN+1];
+
+  while (smartlist_len(entry_guards)) {
+    entry_guard_t *entry = smartlist_get(entry_guards, 0);
+    base16_encode(dbuf, sizeof(dbuf), entry->identity, DIGEST_LEN);
+    log_info(LD_CIRC, "Entry guard '%s' (%s) has been dropped.",
+             entry->nickname, dbuf);
+    control_event_guard(entry->nickname, entry->identity, "DROPPED");
+    entry_guard_free(entry);
+    smartlist_del(entry_guards, 0);
+  }
+  log_entry_guards(LOG_INFO);
+  entry_guards_changed();
 }
 
 /** A new directory or router-status has arrived; update the down/listed
@@ -874,7 +906,7 @@ entry_guards_set_from_config(const or_options_t *options)
 
   /* Next, the rest of EntryNodes */
   SMARTLIST_FOREACH_BEGIN(entry_nodes, const node_t *, node) {
-    add_an_entry_guard(node, 0, 0, 0);
+    add_an_entry_guard(node, 0, 0, 1, 0);
     if (smartlist_len(entry_guards) > options->NumEntryGuards * 10)
       break;
   } SMARTLIST_FOREACH_END(node);
@@ -1058,7 +1090,7 @@ choose_random_entry_impl(cpath_build_state_t *state, int for_directory,
       /* XXX if guard doesn't imply fast and stable, then we need
        * to tell add_an_entry_guard below what we want, or it might
        * be a long time til we get it. -RD */
-      node = add_an_entry_guard(NULL, 0, 0, for_directory);
+      node = add_an_entry_guard(NULL, 0, 0, 1, for_directory);
       if (node) {
         entry_guards_changed();
         /* XXX we start over here in case the new node we added shares
@@ -1625,7 +1657,8 @@ get_configured_bridge_by_orports_digest(const char *digest,
 
 /** If we have a bridge configured whose digest matches <b>digest</b>, or a
  * bridge with no known digest whose address matches <b>addr</b>:<b>/port</b>,
- * return that bridge.  Else return NULL. */
+ * return that bridge.  Else return NULL. If <b>digest</b> is NULL, check for
+ * address/port matches only. */
 static bridge_info_t *
 get_configured_bridge_by_addr_port_digest(const tor_addr_t *addr,
                                           uint16_t port,
@@ -1635,7 +1668,7 @@ get_configured_bridge_by_addr_port_digest(const tor_addr_t *addr,
     return NULL;
   SMARTLIST_FOREACH_BEGIN(bridge_list, bridge_info_t *, bridge)
     {
-      if (tor_digest_is_zero(bridge->identity) &&
+      if ((tor_digest_is_zero(bridge->identity) || digest == NULL) &&
           !tor_addr_compare(&bridge->addr, addr, CMP_EXACT) &&
           bridge->port == port)
         return bridge;
@@ -1768,6 +1801,23 @@ bridge_resolve_conflicts(const tor_addr_t *addr, uint16_t port,
       }
     }
   } SMARTLIST_FOREACH_END(bridge);
+}
+
+/** Return True if we have a bridge that uses a transport with name
+ *  <b>transport_name</b>. */
+int
+transport_is_needed(const char *transport_name)
+{
+  if (!bridge_list)
+    return 0;
+
+  SMARTLIST_FOREACH_BEGIN(bridge_list, const bridge_info_t *, bridge) {
+    if (bridge->transport_name &&
+        !strcmp(bridge->transport_name, transport_name))
+      return 1;
+  } SMARTLIST_FOREACH_END(bridge);
+
+  return 0;
 }
 
 /** Register the bridge information in <b>bridge_line</b> to the
@@ -2136,7 +2186,7 @@ learned_bridge_descriptor(routerinfo_t *ri, int from_cache)
       node = node_get_mutable_by_id(ri->cache_info.identity_digest);
       tor_assert(node);
       rewrite_node_address_for_bridge(bridge, node);
-      add_an_entry_guard(node, 1, 1, 0);
+      add_an_entry_guard(node, 1, 1, 0, 0);
 
       log_notice(LD_DIR, "new bridge descriptor '%s' (%s): %s", ri->nickname,
                  from_cache ? "cached" : "fresh", router_describe(ri));

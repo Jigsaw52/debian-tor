@@ -13,9 +13,9 @@
 #include "crypto_curve25519.h"
 #endif
 
-extern const char AUTHORITY_SIGNKEY_1[];
-extern const char AUTHORITY_SIGNKEY_1_DIGEST[];
-extern const char AUTHORITY_SIGNKEY_1_DIGEST256[];
+extern const char AUTHORITY_SIGNKEY_3[];
+extern const char AUTHORITY_SIGNKEY_A_DIGEST[];
+extern const char AUTHORITY_SIGNKEY_A_DIGEST256[];
 
 /** Run unit tests for Diffie-Hellman functionality. */
 static void
@@ -519,20 +519,20 @@ test_crypto_digests(void)
 
   k = crypto_pk_new();
   test_assert(k);
-  r = crypto_pk_read_private_key_from_string(k, AUTHORITY_SIGNKEY_1, -1);
+  r = crypto_pk_read_private_key_from_string(k, AUTHORITY_SIGNKEY_3, -1);
   test_assert(!r);
 
   r = crypto_pk_get_digest(k, digest);
   test_assert(r == 0);
   test_memeq(hex_str(digest, DIGEST_LEN),
-             AUTHORITY_SIGNKEY_1_DIGEST, HEX_DIGEST_LEN);
+             AUTHORITY_SIGNKEY_A_DIGEST, HEX_DIGEST_LEN);
 
   r = crypto_pk_get_all_digests(k, &pkey_digests);
 
   test_memeq(hex_str(pkey_digests.d[DIGEST_SHA1], DIGEST_LEN),
-             AUTHORITY_SIGNKEY_1_DIGEST, HEX_DIGEST_LEN);
+             AUTHORITY_SIGNKEY_A_DIGEST, HEX_DIGEST_LEN);
   test_memeq(hex_str(pkey_digests.d[DIGEST_SHA256], DIGEST256_LEN),
-             AUTHORITY_SIGNKEY_1_DIGEST256, HEX_DIGEST256_LEN);
+             AUTHORITY_SIGNKEY_A_DIGEST256, HEX_DIGEST256_LEN);
  done:
   crypto_pk_free(k);
 }
@@ -731,11 +731,13 @@ test_crypto_aes_iv(void *arg)
   /* Decrypt with the wrong key. */
   decrypted_size = crypto_cipher_decrypt_with_iv(key2, decrypted2, 4095,
                                              encrypted1, encrypted_size);
+  test_eq(decrypted_size, 4095);
   test_memneq(plain, decrypted2, decrypted_size);
   /* Alter the initialization vector. */
   encrypted1[0] += 42;
   decrypted_size = crypto_cipher_decrypt_with_iv(key1, decrypted1, 4095,
                                              encrypted1, encrypted_size);
+  test_eq(decrypted_size, 4095);
   test_memneq(plain, decrypted2, 4095);
   /* Special length case: 1. */
   encrypted_size = crypto_cipher_encrypt_with_iv(key1, encrypted1, 16 + 1,

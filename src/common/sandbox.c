@@ -250,6 +250,7 @@ static int
 sb_mmap2(scmp_filter_ctx ctx, sandbox_cfg_t *filter)
 {
   int rc = 0;
+  (void)filter;
 
   rc = seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(mmap2), 2,
        SCMP_CMP(2, SCMP_CMP_EQ, PROT_READ),
@@ -405,6 +406,13 @@ sb_socket(scmp_filter_ctx ctx, sandbox_cfg_t *filter)
 
   rc = seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(socket), 3,
       SCMP_CMP(0, SCMP_CMP_EQ, PF_INET),
+      SCMP_CMP(1, SCMP_CMP_EQ, SOCK_STREAM|SOCK_CLOEXEC|SOCK_NONBLOCK),
+      SCMP_CMP(2, SCMP_CMP_EQ, IPPROTO_TCP));
+  if (rc)
+    return rc;
+
+  rc = seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(socket), 3,
+      SCMP_CMP(0, SCMP_CMP_EQ, PF_INET),
       SCMP_CMP(1, SCMP_CMP_EQ, SOCK_DGRAM|SOCK_CLOEXEC|SOCK_NONBLOCK),
       SCMP_CMP(2, SCMP_CMP_EQ, IPPROTO_IP));
   if (rc)
@@ -467,6 +475,14 @@ sb_setsockopt(scmp_filter_ctx ctx, sandbox_cfg_t *filter)
   if (rc)
     return rc;
 
+#ifdef IP_TRANSPARENT
+  rc = seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(setsockopt), 2,
+      SCMP_CMP(1, SCMP_CMP_EQ, SOL_IP),
+      SCMP_CMP(2, SCMP_CMP_EQ, IP_TRANSPARENT));
+  if (rc)
+    return rc;
+#endif
+
   return 0;
 }
 
@@ -504,6 +520,7 @@ static int
 sb_fcntl64(scmp_filter_ctx ctx, sandbox_cfg_t *filter)
 {
   int rc = 0;
+  (void) filter;
 
   rc = seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(fcntl64), 1,
       SCMP_CMP(1, SCMP_CMP_EQ, F_GETFL));
@@ -1290,16 +1307,6 @@ install_syscall_filter(sandbox_cfg_t* cfg)
   return (rc < 0 ? -rc : rc);
 }
 
-/** Additional file descriptor to use when logging seccomp2 failures */
-static int sigsys_debugging_fd = -1;
-
-/** Use the file descriptor <b>fd</b> to log seccomp2 failures. */
-static void
-sigsys_set_debugging_fd(int fd)
-{
-  sigsys_debugging_fd = fd;
-}
-
 /**
  * Function called when a SIGSYS is caught by the application. It notifies the
  * user that an error has occurred and either terminates or allows the
@@ -1309,8 +1316,8 @@ static void
 sigsys_debugging(int nr, siginfo_t *info, void *void_context)
 {
   ucontext_t *ctx = (ucontext_t *) (void_context);
-  char message[256];
-  int rv = 0, syscall, length, err;
+  char number[32];
+  int syscall;
   (void) nr;
 
   if (info->si_code != SYS_SECCOMP)
@@ -1321,24 +1328,11 @@ sigsys_debugging(int nr, siginfo_t *info, void *void_context)
 
   syscall = ctx->uc_mcontext.gregs[REG_SYSCALL];
 
-  strlcpy(message, "\n\n(Sandbox) Caught a bad syscall attempt (syscall 0x",
-          sizeof(message));
-  (void) format_hex_number_sigsafe(syscall, message+strlen(message),
-                                   sizeof(message)-strlen(message));
-  strlcat(message, ")\n", sizeof(message));
-  length = strlen(message);
-
-  err = 0;
-  if (sigsys_debugging_fd >= 0) {
-    rv = write(sigsys_debugging_fd, message, length);
-    err += rv != length;
-  }
-
-  rv = write(STDOUT_FILENO, message, length);
-  err += rv != length;
-
-  if (err)
-    _exit(2);
+  format_dec_number_sigsafe(syscall, number, sizeof(number));
+  tor_log_err_sigsafe("(Sandbox) Caught a bad syscall attempt (syscall ",
+                      number,
+                      ")\n",
+                      NULL);
 
 #if defined(DEBUGGING_CLOSE)
   _exit(1);
@@ -1450,16 +1444,6 @@ sandbox_init(sandbox_cfg_t *cfg)
   log_warn(LD_BUG,"Sandboxing is not implemented for your platform. The "
       "feature is currently disabled");
   return 0;
-#endif
-}
-
-void
-sandbox_set_debugging_fd(int fd)
-{
-#ifdef USE_LIBSECCOMP
-  sigsys_set_debugging_fd(fd);
-#else
-  (void)fd;
 #endif
 }
 

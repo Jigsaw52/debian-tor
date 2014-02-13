@@ -3,7 +3,7 @@ dnl Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson
 dnl Copyright (c) 2007-2013, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
-AC_INIT([tor],[0.2.5.1-alpha])
+AC_INIT([tor],[0.2.5.2-alpha])
 AC_CONFIG_SRCDIR([src/or/main.c])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE
@@ -158,11 +158,28 @@ fi])
 AC_ARG_ENABLE(bufferevents,
      AS_HELP_STRING(--enable-bufferevents, use Libevent's buffered IO.))
 
+AC_ARG_ENABLE(tool-name-check,
+     AS_HELP_STRING(--disable-tool-name-check, check for sanely named toolchain when cross-compiling))
+
 dnl check for the correct "ar" when cross-compiling
 AN_MAKEVAR([AR], [AC_PROG_AR])
 AN_PROGRAM([ar], [AC_PROG_AR])
 AC_DEFUN([AC_PROG_AR], [AC_CHECK_TOOL([AR], [ar], [ar])])
 AC_PROG_AR
+
+dnl Check whether the above macro has settled for a simply named tool even
+dnl though we're cross compiling. We must do this before running AC_PROG_CC,
+dnl because that will find any cc on the system, not only the cross-compiler,
+dnl and then verify that a binary built with this compiler runs on the
+dnl build system. It will then come to the false conclusion that we're not
+dnl cross-compiling.
+if test x$enable_tool_name_check != xno; then
+    if test x$ac_tool_warned = xyes; then
+        AC_MSG_ERROR([We are cross compiling but could not find a properly named toolchain. Do you have your cross-compiling toolchain in PATH? (You can --disable-tool-name-check to ignore this.)])
+	elif test "x$ac_ct_AR" != x -a x$cross_compiling = xmaybe; then
+		AC_MSG_ERROR([We think we are cross compiling but could not find a properly named toolchain. Do you have your cross-compiling toolchain in PATH? (You can --disable-tool-name-check to ignore this.)])
+	fi
+fi
 
 AC_PROG_CC
 AC_PROG_CPP
@@ -182,6 +199,13 @@ AM_CONDITIONAL(USE_FW_HELPER, test x$natpmp = xtrue || test x$upnp = xtrue)
 AM_CONDITIONAL(NAT_PMP, test x$natpmp = xtrue)
 AM_CONDITIONAL(MINIUPNPC, test x$upnp = xtrue)
 AM_PROG_CC_C_O
+
+AC_ARG_VAR(PYTHON)
+AC_CHECK_PROGS(PYTHON, [python python2 python3])
+if test "x$PYTHON" = "x"; then
+  AC_MSG_WARN([Python unavailable; some tests will not be run.])
+fi
+AM_CONDITIONAL(USEPYTHON, [test "x$PYTHON" != "x"])
 
 ifdef([AC_C_FLEXIBLE_ARRAY_MEMBER], [
 AC_C_FLEXIBLE_ARRAY_MEMBER
@@ -302,6 +326,8 @@ dnl exports strlcpy without defining it in a header.
 AC_CHECK_FUNCS(
         _NSGetEnviron \
         accept4 \
+        backtrace \
+        backtrace_symbols_fd \
         clock_gettime \
         flock \
         ftime \
@@ -319,6 +345,7 @@ AC_CHECK_FUNCS(
         memmem \
         prctl \
         rint \
+        sigaction \
         socketpair \
         strlcat \
         strlcpy \
@@ -582,7 +609,16 @@ if test x$enable_gcc_hardening != xno; then
     if test x$have_clang = xyes; then
         TOR_CHECK_CFLAGS(-Qunused-arguments)
     fi
-    TOR_CHECK_CFLAGS(-fstack-protector-all)
+    TOR_CHECK_CFLAGS(-fstack-protector-all, also_link)
+    AS_VAR_PUSHDEF([can_compile], [tor_cv_cflags_-fstack-protector-all])
+    AS_VAR_PUSHDEF([can_link], [tor_can_link_-fstack-protector-all])
+    AS_VAR_IF(can_compile, [yes],
+        AS_VAR_IF(can_link, [yes],
+                  [],
+                  AC_MSG_ERROR([We tried to build with stack protection; it looks like your compiler supports it but your libc does not provide it. Are you missing libssp? (You can --disable-gcc-hardening to ignore this error.)]))
+        )
+    AS_VAR_POPDEF([can_link])
+    AS_VAR_POPDEF([can_compile])
     TOR_CHECK_CFLAGS(-Wstack-protector)
     TOR_CHECK_CFLAGS(-fwrapv)
     TOR_CHECK_CFLAGS(--param ssp-buffer-size=1)
@@ -595,6 +631,9 @@ fi
 if test x$enable_linker_hardening != xno; then
     TOR_CHECK_LDFLAGS(-z relro -z now, "$all_ldflags_for_check", "$all_libs_for_check")
 fi
+
+# For backtrace support
+TOR_CHECK_LDFLAGS(-rdynamic)
 
 dnl ------------------------------------------------------
 dnl Now see if we have a -fomit-frame-pointer compiler option.
@@ -808,6 +847,7 @@ dnl These headers are not essential
 AC_CHECK_HEADERS(
         arpa/inet.h \
         crt_externs.h \
+        execinfo.h \
         grp.h \
         ifaddrs.h \
         inttypes.h \
@@ -935,6 +975,8 @@ AC_CHECK_SIZEOF(size_t)
 AC_CHECK_SIZEOF(pid_t)
 
 AC_CHECK_TYPES([uint, u_char, ssize_t])
+
+AC_PC_FROM_UCONTEXT([/bin/true])
 
 dnl used to include sockaddr_storage, but everybody has that.
 AC_CHECK_TYPES([struct in6_addr, struct sockaddr_in6, sa_family_t], , ,
@@ -1413,6 +1455,12 @@ if test x$enable_gcc_warnings = xyes || test x$enable_gcc_warnings_advisory = xy
 #error
 #endif])], have_gcc43=yes, have_gcc43=no)
 
+  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([], [
+#if !defined(__GNUC__) || (__GNUC__ < 4) || (__GNUC__ == 4 && __GNUC_MINOR__ < 6)
+#error
+#endif])], have_gcc46=yes, have_gcc46=no)
+
+
   save_CFLAGS="$CFLAGS"
   CFLAGS="$CFLAGS -Wshorten-64-to-32"
   AC_COMPILE_IFELSE([AC_LANG_PROGRAM([], [])], have_shorten64_flag=yes,
@@ -1464,9 +1512,17 @@ if test x$enable_gcc_warnings = xyes || test x$enable_gcc_warnings_advisory = xy
     CFLAGS="$CFLAGS -Wextra -Warray-bounds"
   fi
 
+  if test x$have_gcc46 = xyes ; then
+    # This warning was added in gcc 4.3, but it appears to generate
+    # spurious warnings in gcc 4.4.  I don't know if it works in 4.5.
+    CFLAGS="$CFLAGS -Wlogical-op"
+  fi
+
   if test x$have_shorten64_flag = xyes ; then
     CFLAGS="$CFLAGS -Wshorten-64-to-32"
   fi
+
+
 
 ##This will break the world on some 64-bit architectures
 # CFLAGS="$CFLAGS -Winline"

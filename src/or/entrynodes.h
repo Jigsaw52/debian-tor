@@ -77,6 +77,8 @@ int num_live_entry_guards(int for_directory);
 
 #endif
 
+void remove_all_entry_guards(void);
+
 void entry_guards_compute_status(const or_options_t *options, time_t now);
 int entry_guard_register_connect_status(const char *digest, int succeeded,
                                         int mark_relay_status, time_t now);
@@ -121,6 +123,7 @@ struct transport_t;
 int get_transport_by_bridge_addrport(const tor_addr_t *addr, uint16_t port,
                                       const struct transport_t **transport);
 
+int transport_is_needed(const char *transport_name);
 int validate_pluggable_transports_config(void);
 
 double pathbias_get_close_success_count(entry_guard_t *guard);
