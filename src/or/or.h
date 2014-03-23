@@ -400,13 +400,10 @@ typedef enum {
 #define CONTROL_CONN_STATE_NEEDAUTH 2
 #define CONTROL_CONN_STATE_MAX_ 2
 
-#define DIR_PURPOSE_MIN_ 3
-/** A connection to a directory server: download a rendezvous
- * descriptor. */
-#define DIR_PURPOSE_FETCH_RENDDESC 3
-/** A connection to a directory server: set after a rendezvous
+#define DIR_PURPOSE_MIN_ 4
+/** A connection to a directory server: set after a v2 rendezvous
  * descriptor is downloaded. */
-#define DIR_PURPOSE_HAS_FETCHED_RENDDESC 4
+#define DIR_PURPOSE_HAS_FETCHED_RENDDESC_V2 4
 /** A connection to a directory server: download one or more server
  * descriptors. */
 #define DIR_PURPOSE_FETCH_SERVERDESC 6
@@ -415,9 +412,6 @@ typedef enum {
 #define DIR_PURPOSE_FETCH_EXTRAINFO 7
 /** A connection to a directory server: upload a server descriptor. */
 #define DIR_PURPOSE_UPLOAD_DIR 8
-/** A connection to a directory server: upload a rendezvous
- * descriptor. */
-#define DIR_PURPOSE_UPLOAD_RENDDESC 9
 /** A connection to a directory server: upload a v3 networkstatus vote. */
 #define DIR_PURPOSE_UPLOAD_VOTE 10
 /** A connection to a directory server: upload a v3 consensus signature */
@@ -451,7 +445,6 @@ typedef enum {
  * directory server. */
 #define DIR_PURPOSE_IS_UPLOAD(p)                \
   ((p)==DIR_PURPOSE_UPLOAD_DIR ||               \
-   (p)==DIR_PURPOSE_UPLOAD_RENDDESC ||          \
    (p)==DIR_PURPOSE_UPLOAD_VOTE ||              \
    (p)==DIR_PURPOSE_UPLOAD_SIGNATURES)
 
@@ -2016,7 +2009,6 @@ typedef int16_t country_t;
 /** Information about another onion router in the network. */
 typedef struct {
   signed_descriptor_t cache_info;
-  char *address; /**< Location of OR: either a hostname or an IP address. */
   char *nickname; /**< Human-readable OR name. */
 
   uint32_t addr; /**< IPv4 address of OR, in host order. */
@@ -2599,8 +2591,6 @@ typedef enum {
   V1_DIRINFO      = 1 << 0,
   /** Serves/signs v3 directory information: votes, consensuses, certs */
   V3_DIRINFO      = 1 << 2,
-  /** Serves hidden service descriptors. */
-  HIDSERV_DIRINFO = 1 << 3,
   /** Serves bridge descriptors. */
   BRIDGE_DIRINFO  = 1 << 4,
   /** Serves extrainfo documents. */
@@ -2824,6 +2814,9 @@ typedef struct circuit_t {
    * circuit-level sendme cells to indicate that we're willing to accept
    * more. */
   int deliver_window;
+
+  /** Temporary field used during circuits_handle_oom. */
+  uint32_t age_tmp;
 
   /** For storage while n_chan is pending (state CIRCUIT_STATE_CHAN_WAIT). */
   struct create_cell_t *n_chan_create_cell;
@@ -3478,9 +3471,8 @@ typedef struct {
   config_line_t *DirPort_lines;
   config_line_t *DNSPort_lines; /**< Ports to listen on for DNS requests. */
 
-  uint64_t MaxMemInCellQueues; /**< If we have more memory than this allocated
-                                * for circuit cell queues, run the OOM handler
-                                */
+  uint64_t MaxMemInQueues; /**< If we have more memory than this allocated
+                            * for queues and buffers, run the OOM handler */
 
   /** @name port booleans
    *
@@ -3646,6 +3638,10 @@ typedef struct {
                          * a new one? */
   int MaxCircuitDirtiness; /**< Never use circs that were first used more than
                                 this interval ago. */
+  int PredictedPortsRelevanceTime; /** How long after we've requested a
+                                    * connection for a given port, do we want
+                                    * to continue to pick exits that support
+                                    * that port?  */
   uint64_t BandwidthRate; /**< How much bandwidth, on average, are we willing
                            * to use in a second? */
   uint64_t BandwidthBurst; /**< How much bandwidth, at maximum, are we willing
@@ -4845,9 +4841,9 @@ typedef struct rend_service_descriptor_t {
   crypto_pk_t *pk; /**< This service's public key. */
   int version; /**< Version of the descriptor format: 0 or 2. */
   time_t timestamp; /**< Time when the descriptor was generated. */
-  /** Bitmask: which rendezvous protocols are supported?
-   * (We allow bits '0', '1', and '2' to be set.) */
-  int protocols : REND_PROTOCOL_VERSION_BITMASK_WIDTH;
+  /** Bitmask: which introduce/rendezvous protocols are supported?
+   * (We allow bits '0', '1', '2' and '3' to be set.) */
+  unsigned protocols : REND_PROTOCOL_VERSION_BITMASK_WIDTH;
   /** List of the service's introduction points.  Elements are removed if
    * introduction attempts fail. */
   smartlist_t *intro_nodes;

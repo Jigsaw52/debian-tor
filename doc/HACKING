@@ -93,7 +93,7 @@ down bugs.
 Jenkins
 ~~~~~~~
 
-http://jenkins.torproject.org
+https://jenkins.torproject.org
 
 Dmalloc
 ~~~~~~~
@@ -473,6 +473,10 @@ interesting and understandable.
    Avoid starting lines with open-paren
 
    Present and imperative tense: not past.
+
+   'Relays', not 'servers' or 'nodes' or 'Tor relays'.
+
+   "Stop FOOing", not "Fix a bug where we would FOO".
 
    Try not to let any given section be longer than about a page. Break up
    long sections into subsections by some sort of common subtopic. This

@@ -1195,8 +1195,7 @@ router_parse_entry_from_string(const char *s, const char *end,
     log_warn(LD_DIR,"Router nickname is invalid");
     goto err;
   }
-  router->address = tor_strdup(tok->args[1]);
-  if (!tor_inet_aton(router->address, &in)) {
+  if (!tor_inet_aton(tok->args[1], &in)) {
     log_warn(LD_DIR,"Router address is not an IP address.");
     goto err;
   }
@@ -2038,14 +2037,6 @@ routerstatus_parse_entry_from_string(memarea_t *area,
   *s = eos;
 
   return rs;
-}
-
-/** Helper to sort a smartlist of pointers to routerstatus_t */
-int
-compare_routerstatus_entries(const void **_a, const void **_b)
-{
-  const routerstatus_t *a = *_a, *b = *_b;
-  return fast_memcmp(a->identity_digest, b->identity_digest, DIGEST_LEN);
 }
 
 int

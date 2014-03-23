@@ -638,7 +638,7 @@ test_policy_summary_helper(const char *policy_str,
   line.value = (char *)policy_str;
   line.next = NULL;
 
-  r = policies_parse_exit_policy(&line, &policy, 1, 0, NULL, 1);
+  r = policies_parse_exit_policy(&line, &policy, 1, 0, 0, 1);
   test_eq(r, 0);
   summary = policy_summarize(policy, AF_INET);
 
@@ -671,6 +671,7 @@ test_policies(void)
   config_line_t line;
   smartlist_t *sm = NULL;
   char *policy_str = NULL;
+  short_policy_t *short_parsed = NULL;
 
   policy = smartlist_new();
 
@@ -695,7 +696,7 @@ test_policies(void)
   test_assert(ADDR_POLICY_REJECTED ==
           compare_tor_addr_to_addr_policy(&tar, 2, policy));
 
-  test_assert(0 == policies_parse_exit_policy(NULL, &policy2, 1, 1, NULL, 1));
+  test_assert(0 == policies_parse_exit_policy(NULL, &policy2, 1, 1, 0, 1));
   test_assert(policy2);
 
   policy3 = smartlist_new();
@@ -782,7 +783,7 @@ test_policies(void)
   line.key = (char*)"foo";
   line.value = (char*)"accept *:80,reject private:*,reject *:*";
   line.next = NULL;
-  test_assert(0 == policies_parse_exit_policy(&line, &policy, 1, 0, NULL, 1));
+  test_assert(0 == policies_parse_exit_policy(&line, &policy, 1, 0, 0, 1));
   test_assert(policy);
   //test_streq(policy->string, "accept *:80");
   //test_streq(policy->next->string, "reject *:*");
@@ -858,24 +859,28 @@ test_policies(void)
   test_short_policy_parse("reject ,1-10,,,,30-40", "reject 1-10,30-40");
 
   /* Try parsing various broken short policies */
-  tt_ptr_op(NULL, ==, parse_short_policy("accept 200-199"));
-  tt_ptr_op(NULL, ==, parse_short_policy(""));
-  tt_ptr_op(NULL, ==, parse_short_policy("rejekt 1,2,3"));
-  tt_ptr_op(NULL, ==, parse_short_policy("reject "));
-  tt_ptr_op(NULL, ==, parse_short_policy("reject"));
-  tt_ptr_op(NULL, ==, parse_short_policy("rej"));
-  tt_ptr_op(NULL, ==, parse_short_policy("accept 2,3,100000"));
-  tt_ptr_op(NULL, ==, parse_short_policy("accept 2,3x,4"));
-  tt_ptr_op(NULL, ==, parse_short_policy("accept 2,3x,4"));
-  tt_ptr_op(NULL, ==, parse_short_policy("accept 2-"));
-  tt_ptr_op(NULL, ==, parse_short_policy("accept 2-x"));
-  tt_ptr_op(NULL, ==, parse_short_policy("accept 1-,3"));
-  tt_ptr_op(NULL, ==, parse_short_policy("accept 1-,3"));
+#define TT_BAD_SHORT_POLICY(s)                                          \
+  do {                                                                  \
+    tt_ptr_op(NULL, ==, (short_parsed = parse_short_policy((s))));      \
+  } while (0)
+  TT_BAD_SHORT_POLICY("accept 200-199");
+  TT_BAD_SHORT_POLICY("");
+  TT_BAD_SHORT_POLICY("rejekt 1,2,3");
+  TT_BAD_SHORT_POLICY("reject ");
+  TT_BAD_SHORT_POLICY("reject");
+  TT_BAD_SHORT_POLICY("rej");
+  TT_BAD_SHORT_POLICY("accept 2,3,100000");
+  TT_BAD_SHORT_POLICY("accept 2,3x,4");
+  TT_BAD_SHORT_POLICY("accept 2,3x,4");
+  TT_BAD_SHORT_POLICY("accept 2-");
+  TT_BAD_SHORT_POLICY("accept 2-x");
+  TT_BAD_SHORT_POLICY("accept 1-,3");
+  TT_BAD_SHORT_POLICY("accept 1-,3");
+
   /* Test a too-long policy. */
   {
     int i;
     char *policy = NULL;
-    short_policy_t *parsed;
     smartlist_t *chunks = smartlist_new();
     smartlist_add(chunks, tor_strdup("accept "));
     for (i=1; i<10000; ++i)
@@ -884,9 +889,9 @@ test_policies(void)
     policy = smartlist_join_strings(chunks, "", 0, NULL);
     SMARTLIST_FOREACH(chunks, char *, ch, tor_free(ch));
     smartlist_free(chunks);
-    parsed = parse_short_policy(policy);/* shouldn't be accepted */
+    short_parsed = parse_short_policy(policy);/* shouldn't be accepted */
     tor_free(policy);
-    tt_ptr_op(NULL, ==, parsed);
+    tt_ptr_op(NULL, ==, short_parsed);
   }
 
   /* truncation ports */
@@ -927,6 +932,7 @@ test_policies(void)
     SMARTLIST_FOREACH(sm, char *, s, tor_free(s));
     smartlist_free(sm);
   }
+  short_policy_free(short_parsed);
 }
 
 /** Test encoding and parsing of rendezvous service descriptors. */
@@ -1629,6 +1635,8 @@ extern struct testcase_t logging_tests[];
 extern struct testcase_t backtrace_tests[];
 extern struct testcase_t hs_tests[];
 extern struct testcase_t nodelist_tests[];
+extern struct testcase_t routerkeys_tests[];
+extern struct testcase_t oom_tests[];
 
 static struct testgroup_t testgroups[] = {
   { "", test_array },
@@ -1654,6 +1662,8 @@ static struct testgroup_t testgroups[] = {
   { "control/", controller_event_tests },
   { "hs/", hs_tests },
   { "nodelist/", nodelist_tests },
+  { "routerkeys/", routerkeys_tests },
+  { "oom/", oom_tests },
   END_OF_GROUPS
 };
 

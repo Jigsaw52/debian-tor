@@ -3,7 +3,7 @@ dnl Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson
 dnl Copyright (c) 2007-2013, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
-AC_INIT([tor],[0.2.5.2-alpha])
+AC_INIT([tor],[0.2.5.3-alpha])
 AC_CONFIG_SRCDIR([src/or/main.c])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE
@@ -191,7 +191,7 @@ AC_CHECK_PROG([SED],[sed],[sed],[/bin/false])
 
 dnl check for asciidoc and a2x
 AC_PATH_PROG([ASCIIDOC], [asciidoc], none)
-AC_PATH_PROG([A2X], [a2x], none)
+AC_PATH_PROGS([A2X], [a2x a2x.py], none)
 
 AM_CONDITIONAL(USE_ASCIIDOC, test x$asciidoc = xtrue)
 
@@ -647,6 +647,13 @@ else
 fi
 CFLAGS="$saved_CFLAGS"
 AC_SUBST(F_OMIT_FRAME_POINTER)
+
+dnl ------------------------------------------------------
+dnl If we are adding -fomit-frame-pointer (or if the compiler's doing it
+dnl for us, as GCC 4.6 and later do at many optimization levels), then
+dnl we should try to add -fasynchronous-unwind-tables so that our backtrace
+dnl code will work.
+TOR_CHECK_CFLAGS(-fasynchronous-unwind-tables)
 
 dnl ------------------------------------------------------
 dnl Where do you live, libnatpmp?  And how do we call you?

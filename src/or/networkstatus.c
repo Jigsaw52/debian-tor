@@ -31,6 +31,7 @@
 #include "router.h"
 #include "routerlist.h"
 #include "routerparse.h"
+#include "transports.h"
 
 /** Map from lowercase nickname to identity digest of named server, if any. */
 static strmap_t *named_server_map = NULL;
@@ -522,16 +523,6 @@ networkstatus_check_consensus_signature(networkstatus_t *consensus,
     return -2;
 }
 
-/** Helper: return a newly allocated string containing the name of the filename
- * where we plan to cache the network status with the given identity digest. */
-char *
-networkstatus_get_cache_filename(const char *identity_digest)
-{
-  char fp[HEX_DIGEST_LEN+1];
-  base16_encode(fp, HEX_DIGEST_LEN+1, identity_digest, DIGEST_LEN);
-  return get_datadir_fname2("cached-status", fp);
-}
-
 /** How far in the future do we allow a network-status to get before removing
  * it? (seconds) */
 #define NETWORKSTATUS_ALLOW_SKEW (24*60*60)
@@ -894,14 +885,37 @@ update_consensus_networkstatus_fetch_time(time_t now)
 
 /** Return 1 if there's a reason we shouldn't try any directory
  * fetches yet (e.g. we demand bridges and none are yet known).
- * Else return 0. */
+ * Else return 0.
+
+ * If we return 1 and <b>msg_out</b> is provided, set <b>msg_out</b>
+ * to an explanation of why directory fetches are delayed. (If we
+ * return 0, we set msg_out to NULL.)
+ */
 int
-should_delay_dir_fetches(const or_options_t *options)
+should_delay_dir_fetches(const or_options_t *options, const char **msg_out)
 {
-  if (options->UseBridges && !any_bridge_descriptors_known()) {
-    log_info(LD_DIR, "delaying dir fetches (no running bridges known)");
-    return 1;
+  if (msg_out) {
+    *msg_out = NULL;
   }
+
+  if (options->UseBridges) {
+    if (!any_bridge_descriptors_known()) {
+      if (msg_out) {
+        *msg_out = "No running bridges";
+      }
+      log_info(LD_DIR, "Delaying dir fetches (no running bridges known)");
+      return 1;
+    }
+
+    if (pt_proxies_configuration_pending()) {
+      if (msg_out) {
+        *msg_out = "Pluggable transport proxies still configuring";
+      }
+      log_info(LD_DIR, "Delaying dir fetches (pt proxies still configuring)");
+      return 1;
+    }
+  }
+
   return 0;
 }
 
@@ -911,7 +925,7 @@ void
 update_networkstatus_downloads(time_t now)
 {
   const or_options_t *options = get_options();
-  if (should_delay_dir_fetches(options))
+  if (should_delay_dir_fetches(options, NULL))
     return;
   update_consensus_networkstatus_downloads(now);
   update_certificate_downloads(now);

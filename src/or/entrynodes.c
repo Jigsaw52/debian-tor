@@ -1967,7 +1967,6 @@ get_socks_args_by_bridge_addrport(const tor_addr_t *addr, uint16_t port)
 static void
 launch_direct_bridge_descriptor_fetch(bridge_info_t *bridge)
 {
-  char *address;
   const or_options_t *options = get_options();
 
   if (connection_get_by_type_addr_port_purpose(
@@ -1982,15 +1981,12 @@ launch_direct_bridge_descriptor_fetch(bridge_info_t *bridge)
     return;
   }
 
-  address = tor_dup_addr(&bridge->addr);
-
-  directory_initiate_command(address, &bridge->addr,
+  directory_initiate_command(&bridge->addr,
                              bridge->port, 0/*no dirport*/,
                              bridge->identity,
                              DIR_PURPOSE_FETCH_SERVERDESC,
                              ROUTER_PURPOSE_BRIDGE,
                              DIRIND_ONEHOP, "authority.z", NULL, 0, 0);
-  tor_free(address);
 }
 
 /** Fetching the bridge descriptor from the bridge authority returned a
@@ -2108,13 +2104,11 @@ rewrite_node_address_for_bridge(const bridge_info_t *bridge, node_t *node)
     } else {
       if (tor_addr_family(&bridge->addr) == AF_INET) {
         ri->addr = tor_addr_to_ipv4h(&bridge->addr);
-        tor_free(ri->address);
-        ri->address = tor_dup_ip(ri->addr);
         ri->or_port = bridge->port;
         log_info(LD_DIR,
                  "Adjusted bridge routerinfo for '%s' to match configured "
                  "address %s:%d.",
-                 ri->nickname, ri->address, ri->or_port);
+                 ri->nickname, fmt_addr32(ri->addr), ri->or_port);
       } else if (tor_addr_family(&bridge->addr) == AF_INET6) {
         tor_addr_copy(&ri->ipv6_addr, &bridge->addr);
         ri->ipv6_orport = bridge->port;
@@ -2211,27 +2205,6 @@ any_bridge_descriptors_known(void)
 {
   tor_assert(get_options()->UseBridges);
   return choose_random_entry(NULL) != NULL;
-}
-
-/** Return 1 if there are any directory conns fetching bridge descriptors
- * that aren't marked for close. We use this to guess if we should tell
- * the controller that we have a problem. */
-int
-any_pending_bridge_descriptor_fetches(void)
-{
-  smartlist_t *conns = get_connection_array();
-  SMARTLIST_FOREACH_BEGIN(conns, connection_t *, conn) {
-    if (conn->type == CONN_TYPE_DIR &&
-        conn->purpose == DIR_PURPOSE_FETCH_SERVERDESC &&
-        TO_DIR_CONN(conn)->router_purpose == ROUTER_PURPOSE_BRIDGE &&
-        !conn->marked_for_close &&
-        conn->linked &&
-        conn->linked_conn && !conn->linked_conn->marked_for_close) {
-      log_debug(LD_DIR, "found one: %s", conn->address);
-      return 1;
-    }
-  } SMARTLIST_FOREACH_END(conn);
-  return 0;
 }
 
 /** Return 1 if we have at least one descriptor for an entry guard

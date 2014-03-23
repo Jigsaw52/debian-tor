@@ -1202,16 +1202,6 @@ run_scheduled_events(time_t now)
    */
   consider_hibernation(now);
 
-#if 0
-  {
-    static time_t nl_check_time = 0;
-    if (nl_check_time <= now) {
-      nodelist_assert_ok();
-      nl_check_time = now + 30;
-    }
-  }
-#endif
-
   /* 0b. If we've deferred a signewnym, make sure it gets handled
    * eventually. */
   if (signewnym_is_pending &&
@@ -1561,10 +1551,12 @@ run_scheduled_events(time_t now)
   channel_run_cleanup();
   channel_listener_run_cleanup();
 
-  /** 9. and if we're a server, check whether our DNS is telling stories to
-   * us. */
+  /** 9. and if we're an exit node, check whether our DNS is telling stories
+   * to us. */
   if (!net_is_disabled() &&
-      public_server_mode(options) && time_to_check_for_correct_dns < now) {
+      public_server_mode(options) &&
+      time_to_check_for_correct_dns < now &&
+      ! router_my_exit_policy_is_reject_star()) {
     if (!time_to_check_for_correct_dns) {
       time_to_check_for_correct_dns = now + 60 + crypto_rand_int(120);
     } else {
@@ -1678,24 +1670,28 @@ second_elapsed_callback(periodic_timer_t *timer, void *arg)
     /* every 20 minutes, check and complain if necessary */
     const routerinfo_t *me = router_get_my_routerinfo();
     if (me && !check_whether_orport_reachable()) {
+      char *address = tor_dup_ip(me->addr);
       log_warn(LD_CONFIG,"Your server (%s:%d) has not managed to confirm that "
                "its ORPort is reachable. Please check your firewalls, ports, "
                "address, /etc/hosts file, etc.",
-               me->address, me->or_port);
+               address, me->or_port);
       control_event_server_status(LOG_WARN,
                                   "REACHABILITY_FAILED ORADDRESS=%s:%d",
-                                  me->address, me->or_port);
+                                  address, me->or_port);
+      tor_free(address);
     }
 
     if (me && !check_whether_dirport_reachable()) {
+      char *address = tor_dup_ip(me->addr);
       log_warn(LD_CONFIG,
                "Your server (%s:%d) has not managed to confirm that its "
                "DirPort is reachable. Please check your firewalls, ports, "
                "address, /etc/hosts file, etc.",
-               me->address, me->dir_port);
+               address, me->dir_port);
       control_event_server_status(LOG_WARN,
                                   "REACHABILITY_FAILED DIRADDRESS=%s:%d",
-                                  me->address, me->dir_port);
+                                  address, me->dir_port);
+      tor_free(address);
     }
   }
 
@@ -2329,6 +2325,13 @@ tor_init(int argc, char *argv[])
   /* Have the log set up with our application name. */
   tor_snprintf(progname, sizeof(progname), "Tor %s", get_version());
   log_set_application_name(progname);
+
+  /* Set up the crypto nice and early */
+  if (crypto_early_init() < 0) {
+    log_err(LD_GENERAL, "Unable to initialize the crypto subsystem!");
+    return 1;
+  }
+
   /* Initialize the history structures. */
   rep_hist_init();
   /* Initialize the service cache. */
@@ -2765,6 +2768,8 @@ sandbox_init_filter(void)
         get_datadir_fname2("keys", "secret_id_key.tmp"), 1,
         get_datadir_fname("fingerprint"), 1,
         get_datadir_fname("fingerprint.tmp"), 1,
+        get_datadir_fname("hashed-fingerprint"), 1,
+        get_datadir_fname("hashed-fingerprint.tmp"), 1,
         get_datadir_fname("cached-consensus"), 1,
         get_datadir_fname("cached-consensus.tmp"), 1,
         "/etc/resolv.conf", 0,

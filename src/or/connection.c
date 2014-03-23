@@ -1008,9 +1008,9 @@ tor_listen(tor_socket_t fd)
  */
 static connection_t *
 connection_listener_new(const struct sockaddr *listensockaddr,
-                           socklen_t socklen,
-                           int type, const char *address,
-                           const port_cfg_t *port_cfg)
+                        socklen_t socklen,
+                        int type, const char *address,
+                        const port_cfg_t *port_cfg)
 {
   listener_connection_t *lis_conn;
   connection_t *conn = NULL;
@@ -2227,7 +2227,7 @@ retry_listener_ports(smartlist_t *old_conns,
 
     if (listensockaddr) {
       conn = connection_listener_new(listensockaddr, listensocklen,
-                                        port->type, address, port);
+                                     port->type, address, port);
       tor_free(listensockaddr);
       tor_free(address);
     } else {
@@ -4164,20 +4164,29 @@ connection_dir_get_by_purpose_and_resource(int purpose,
   return NULL;
 }
 
-/** Return an open, non-marked connection of a given type and purpose, or NULL
- * if no such connection exists. */
-connection_t *
-connection_get_by_type_purpose(int type, int purpose)
+/** Return 1 if there are any active OR connections apart from
+ * <b>this_conn</b>.
+ *
+ * We use this to guess if we should tell the controller that we
+ * didn't manage to connect to any of our bridges. */
+int
+any_other_active_or_conns(const or_connection_t *this_conn)
 {
   smartlist_t *conns = get_connection_array();
-  SMARTLIST_FOREACH(conns, connection_t *, conn,
-  {
-    if (conn->type == type &&
-        !conn->marked_for_close &&
-        (purpose == conn->purpose))
-      return conn;
-  });
-  return NULL;
+  SMARTLIST_FOREACH_BEGIN(conns, connection_t *, conn) {
+    if (conn == TO_CONN(this_conn)) { /* don't consider this conn */
+      continue;
+    }
+
+    if (conn->type == CONN_TYPE_OR &&
+        !conn->marked_for_close) {
+      log_debug(LD_DIR, "%s: Found an OR connection: %s",
+                __func__, conn->address);
+      return 1;
+    }
+  } SMARTLIST_FOREACH_END(conn);
+
+  return 0;
 }
 
 /** Return 1 if <b>conn</b> is a listener conn, else return 0. */
