@@ -22,3 +22,5 @@
 
   /etc/tor/* r,
   /usr/share/tor/** r,
+
+  /usr/bin/obfsproxy PUx,

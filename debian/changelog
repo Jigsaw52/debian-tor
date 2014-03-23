@@ -2,8 +2,10 @@ tor (0.2.5.3-alpha-1) experimental; urgency=low
 
   * New upstream version.
   * Add obfsproxy to suggests.
+  * Apparmor policy: Allow executing /usr/bin/obfsproxy - thanks to
+    intrigeri for the patch (closes: #739279).
 
- -- Peter Palfrader <weasel@debian.org>  Sun, 23 Mar 2014 07:38:39 +0100
+ -- Peter Palfrader <weasel@debian.org>  Sun, 23 Mar 2014 07:39:17 +0100
 
 tor (0.2.5.2-alpha-1) experimental; urgency=low
 
