@@ -82,8 +82,7 @@ static void dir_microdesc_download_failed(smartlist_t *failed,
 static void note_client_request(int purpose, int compressed, size_t bytes);
 static int client_likes_consensus(networkstatus_t *v, const char *want_url);
 
-static void directory_initiate_command_rend(const char *address,
-                                            const tor_addr_t *addr,
+static void directory_initiate_command_rend(const tor_addr_t *addr,
                                             uint16_t or_port,
                                             uint16_t dir_port,
                                             const char *digest,
@@ -170,12 +169,8 @@ dir_conn_purpose_to_string(int purpose)
 {
   switch (purpose)
     {
-    case DIR_PURPOSE_FETCH_RENDDESC:
-      return "hidden-service descriptor fetch";
     case DIR_PURPOSE_UPLOAD_DIR:
       return "server descriptor upload";
-    case DIR_PURPOSE_UPLOAD_RENDDESC:
-      return "hidden-service descriptor upload";
     case DIR_PURPOSE_UPLOAD_VOTE:
       return "server vote upload";
     case DIR_PURPOSE_UPLOAD_SIGNATURES:
@@ -247,13 +242,13 @@ directories_have_accepted_server_descriptor(void)
 /** Start a connection to every suitable directory authority, using
  * connection purpose <b>dir_purpose</b> and uploading <b>payload</b>
  * (of length <b>payload_len</b>). The dir_purpose should be one of
- * 'DIR_PURPOSE_UPLOAD_DIR' or 'DIR_PURPOSE_UPLOAD_RENDDESC'.
+ * 'DIR_PURPOSE_UPLOAD_{DIR|VOTE|SIGNATURES}'.
  *
  * <b>router_purpose</b> describes the type of descriptor we're
  * publishing, if we're publishing a descriptor -- e.g. general or bridge.
  *
  * <b>type</b> specifies what sort of dir authorities (V1, V3,
- * HIDSERV, BRIDGE, etc) we should upload to.
+ * BRIDGE, etc) we should upload to.
  *
  * If <b>extrainfo_len</b> is nonzero, the first <b>payload_len</b> bytes of
  * <b>payload</b> hold a router descriptor, and the next <b>extrainfo_len</b>
@@ -410,9 +405,6 @@ directory_get_from_dirserver(uint8_t dir_purpose, uint8_t router_purpose,
       type = (router_purpose == ROUTER_PURPOSE_BRIDGE ? BRIDGE_DIRINFO :
                                                         V3_DIRINFO);
       break;
-    case DIR_PURPOSE_FETCH_RENDDESC:
-      type = HIDSERV_DIRINFO;
-      break;
     case DIR_PURPOSE_FETCH_STATUS_VOTE:
     case DIR_PURPOSE_FETCH_DETACHED_SIGNATURES:
     case DIR_PURPOSE_FETCH_CERTIFICATE:
@@ -452,7 +444,7 @@ directory_get_from_dirserver(uint8_t dir_purpose, uint8_t router_purpose,
     }
   }
 
-  if (!options->FetchServerDescriptors && type != HIDSERV_DIRINFO)
+  if (!options->FetchServerDescriptors)
     return;
 
   if (!get_via_tor) {
@@ -471,7 +463,7 @@ directory_get_from_dirserver(uint8_t dir_purpose, uint8_t router_purpose,
         tor_addr_t addr;
         routerinfo_t *ri = node->ri;
         node_get_addr(node, &addr);
-        directory_initiate_command(ri->address, &addr,
+        directory_initiate_command(&addr,
                                    ri->or_port, 0/*no dirport*/,
                                    ri->cache_info.identity_digest,
                                    dir_purpose,
@@ -523,11 +515,7 @@ directory_get_from_dirserver(uint8_t dir_purpose, uint8_t router_purpose,
     }
   } else { /* get_via_tor */
     /* Never use fascistfirewall; we're going via Tor. */
-    if (dir_purpose == DIR_PURPOSE_FETCH_RENDDESC) {
-      /* only ask hidserv authorities, any of them will do */
-      pds_flags |= PDS_IGNORE_FASCISTFIREWALL|PDS_ALLOW_SELF;
-      rs = router_pick_trusteddirserver(HIDSERV_DIRINFO, pds_flags);
-    } else {
+    if (1) {
       /* anybody with a non-zero dirport will do. Disregard firewalls. */
       pds_flags |= PDS_IGNORE_FASCISTFIREWALL;
       rs = router_pick_directory_server(type, pds_flags);
@@ -604,9 +592,6 @@ directory_initiate_command_routerstatus_rend(const routerstatus_t *status,
 {
   const or_options_t *options = get_options();
   const node_t *node;
-  char address_buf[INET_NTOA_BUF_LEN+1];
-  struct in_addr in;
-  const char *address;
   tor_addr_t addr;
   const int anonymized_connection = dirind_is_anon(indirection);
   node = node_get_by_id(status->identity_digest);
@@ -616,13 +601,6 @@ directory_initiate_command_routerstatus_rend(const routerstatus_t *status,
              "don't have its router descriptor.",
              routerstatus_describe(status));
     return;
-  } else if (node) {
-    node_get_address_string(node, address_buf, sizeof(address_buf));
-    address = address_buf;
-  } else {
-    in.s_addr = htonl(status->addr);
-    tor_inet_ntoa(&in, address_buf, sizeof(address_buf));
-    address = address_buf;
   }
   tor_addr_from_ipv4h(&addr, status->addr);
 
@@ -636,7 +614,7 @@ directory_initiate_command_routerstatus_rend(const routerstatus_t *status,
     return;
   }
 
-  directory_initiate_command_rend(address, &addr,
+  directory_initiate_command_rend(&addr,
                              status->or_port, status->dir_port,
                              status->identity_digest,
                              dir_purpose, router_purpose,
@@ -649,7 +627,7 @@ directory_initiate_command_routerstatus_rend(const routerstatus_t *status,
  * upload or download a server or rendezvous
  * descriptor. <b>dir_purpose</b> determines what
  * kind of directory connection we're launching, and must be one of
- * DIR_PURPOSE_{FETCH|UPLOAD}_{DIR|RENDDESC|RENDDESC_V2}. <b>router_purpose</b>
+ * DIR_PURPOSE_{FETCH|UPLOAD}_{DIR|RENDDESC_V2}. <b>router_purpose</b>
  * specifies the descriptor purposes we have in mind (currently only
  * used for FETCH_DIR).
  *
@@ -878,7 +856,7 @@ directory_command_should_use_begindir(const or_options_t *options,
  * <b>supports_begindir</b>, and whose identity key digest is
  * <b>digest</b>. */
 void
-directory_initiate_command(const char *address, const tor_addr_t *_addr,
+directory_initiate_command(const tor_addr_t *_addr,
                            uint16_t or_port, uint16_t dir_port,
                            const char *digest,
                            uint8_t dir_purpose, uint8_t router_purpose,
@@ -886,7 +864,7 @@ directory_initiate_command(const char *address, const tor_addr_t *_addr,
                            const char *payload, size_t payload_len,
                            time_t if_modified_since)
 {
-  directory_initiate_command_rend(address, _addr, or_port, dir_port,
+  directory_initiate_command_rend(_addr, or_port, dir_port,
                              digest, dir_purpose,
                              router_purpose, indirection,
                              resource, payload, payload_len,
@@ -900,9 +878,7 @@ directory_initiate_command(const char *address, const tor_addr_t *_addr,
 static int
 is_sensitive_dir_purpose(uint8_t dir_purpose)
 {
-  return ((dir_purpose == DIR_PURPOSE_FETCH_RENDDESC) ||
-          (dir_purpose == DIR_PURPOSE_HAS_FETCHED_RENDDESC) ||
-          (dir_purpose == DIR_PURPOSE_UPLOAD_RENDDESC) ||
+  return ((dir_purpose == DIR_PURPOSE_HAS_FETCHED_RENDDESC_V2) ||
           (dir_purpose == DIR_PURPOSE_UPLOAD_RENDDESC_V2) ||
           (dir_purpose == DIR_PURPOSE_FETCH_RENDDESC_V2));
 }
@@ -910,7 +886,7 @@ is_sensitive_dir_purpose(uint8_t dir_purpose)
 /** Same as directory_initiate_command(), but accepts rendezvous data to
  * fetch a hidden service descriptor. */
 static void
-directory_initiate_command_rend(const char *address, const tor_addr_t *_addr,
+directory_initiate_command_rend(const tor_addr_t *_addr,
                                 uint16_t or_port, uint16_t dir_port,
                                 const char *digest,
                                 uint8_t dir_purpose, uint8_t router_purpose,
@@ -928,7 +904,6 @@ directory_initiate_command_rend(const char *address, const tor_addr_t *_addr,
   const int anonymized_connection = dirind_is_anon(indirection);
   tor_addr_t addr;
 
-  tor_assert(address);
   tor_assert(_addr);
   tor_assert(or_port || dir_port);
   tor_assert(digest);
@@ -961,7 +936,7 @@ directory_initiate_command_rend(const char *address, const tor_addr_t *_addr,
   /* set up conn so it's got all the data we need to remember */
   tor_addr_copy(&conn->base_.addr, &addr);
   conn->base_.port = use_begindir ? or_port : dir_port;
-  conn->base_.address = tor_strdup(address);
+  conn->base_.address = tor_dup_addr(&addr);
   memcpy(conn->identity_digest, digest, DIGEST_LEN);
 
   conn->base_.purpose = dir_purpose;
@@ -1267,12 +1242,6 @@ directory_send_command(dir_connection_t *conn,
       httpcommand = "GET";
       tor_asprintf(&url, "/tor/rendezvous2/%s", resource);
       break;
-    case DIR_PURPOSE_UPLOAD_RENDDESC:
-      tor_assert(!resource);
-      tor_assert(payload);
-      httpcommand = "POST";
-      url = tor_strdup("/tor/rendezvous/publish");
-      break;
     case DIR_PURPOSE_UPLOAD_RENDDESC_V2:
       tor_assert(!resource);
       tor_assert(payload);
@@ -1532,20 +1501,18 @@ body_is_plausible(const char *body, size_t len, int purpose)
   if (purpose == DIR_PURPOSE_FETCH_MICRODESC) {
     return (!strcmpstart(body,"onion-key"));
   }
-  if (purpose != DIR_PURPOSE_FETCH_RENDDESC) {
+  if (1) {
     if (!strcmpstart(body,"router") ||
         !strcmpstart(body,"signed-directory") ||
         !strcmpstart(body,"network-status") ||
         !strcmpstart(body,"running-routers"))
-    return 1;
+      return 1;
     for (i=0;i<32;++i) {
       if (!TOR_ISPRINT(body[i]) && !TOR_ISSPACE(body[i]))
         return 0;
     }
-    return 1;
-  } else {
-    return 1;
   }
+  return 1;
 }
 
 /** Called when we've just fetched a bunch of router descriptors in
@@ -2104,46 +2071,6 @@ connection_dir_client_reached_eof(dir_connection_t *conn)
      * dirservers down just because they don't like us. */
   }
 
-  if (conn->base_.purpose == DIR_PURPOSE_FETCH_RENDDESC) {
-    tor_assert(conn->rend_data);
-    log_info(LD_REND,"Received rendezvous descriptor (size %d, status %d "
-             "(%s))",
-             (int)body_len, status_code, escaped(reason));
-    switch (status_code) {
-      case 200:
-        if (rend_cache_store(body, body_len, 0,
-                             conn->rend_data->onion_address) < -1) {
-          log_warn(LD_REND,"Failed to parse rendezvous descriptor.");
-          /* Any pending rendezvous attempts will notice when
-           * connection_about_to_close_connection()
-           * cleans this dir conn up. */
-          /* We could retry. But since v0 descriptors are going out of
-           * style, it isn't worth the hassle. We'll do better in v2. */
-        } else {
-          /* Success, or at least there's a v2 descriptor already
-           * present. Notify pending connections about this. */
-          conn->base_.purpose = DIR_PURPOSE_HAS_FETCHED_RENDDESC;
-          rend_client_desc_trynow(conn->rend_data->onion_address);
-        }
-        break;
-      case 404:
-        /* Not there. Pending connections will be notified when
-         * connection_about_to_close_connection() cleans this conn up. */
-        break;
-      case 400:
-        log_warn(LD_REND,
-                 "http status 400 (%s). Dirserver didn't like our "
-                 "rendezvous query?", escaped(reason));
-        break;
-      default:
-        log_warn(LD_REND,"http status %d (%s) response unexpected while "
-                 "fetching hidden service descriptor (server '%s:%d').",
-                 status_code, escaped(reason), conn->base_.address,
-                 conn->base_.port);
-        break;
-    }
-  }
-
   if (conn->base_.purpose == DIR_PURPOSE_FETCH_RENDDESC_V2) {
     #define SEND_HS_DESC_FAILED_EVENT() ( \
       control_event_hs_descriptor_failed(conn->rend_data, \
@@ -2155,27 +2082,22 @@ connection_dir_client_reached_eof(dir_connection_t *conn)
     switch (status_code) {
       case 200:
         switch (rend_cache_store_v2_desc_as_client(body, conn->rend_data)) {
-          case -2:
+          case RCS_BADDESC:
+          case RCS_NOTDIR: /* Impossible */
             log_warn(LD_REND,"Fetching v2 rendezvous descriptor failed. "
                      "Retrying at another directory.");
             /* We'll retry when connection_about_to_close_connection()
              * cleans this dir conn up. */
             SEND_HS_DESC_FAILED_EVENT();
             break;
-          case -1:
-            /* We already have a v0 descriptor here. Ignoring this one
-             * and _not_ performing another request. */
-            log_info(LD_REND, "Successfully fetched v2 rendezvous "
-                     "descriptor, but we already have a v0 descriptor.");
-            conn->base_.purpose = DIR_PURPOSE_HAS_FETCHED_RENDDESC;
-            break;
+          case RCS_OKAY:
           default:
             /* success. notify pending connections about this. */
             log_info(LD_REND, "Successfully fetched v2 rendezvous "
                      "descriptor.");
             control_event_hs_descriptor_received(conn->rend_data,
                                                  conn->identity_digest);
-            conn->base_.purpose = DIR_PURPOSE_HAS_FETCHED_RENDDESC;
+            conn->base_.purpose = DIR_PURPOSE_HAS_FETCHED_RENDDESC_V2;
             rend_client_desc_trynow(conn->rend_data->onion_address);
             break;
         }
@@ -2206,8 +2128,7 @@ connection_dir_client_reached_eof(dir_connection_t *conn)
     }
   }
 
-  if (conn->base_.purpose == DIR_PURPOSE_UPLOAD_RENDDESC ||
-      conn->base_.purpose == DIR_PURPOSE_UPLOAD_RENDDESC_V2) {
+  if (conn->base_.purpose == DIR_PURPOSE_UPLOAD_RENDDESC_V2) {
     log_info(LD_REND,"Uploaded rendezvous descriptor (status %d "
              "(%s))",
              status_code, escaped(reason));
@@ -2311,7 +2232,7 @@ connection_dir_about_to_close(dir_connection_t *dir_conn)
   }
   /* If we were trying to fetch a v2 rend desc and did not succeed,
    * retry as needed. (If a fetch is successful, the connection state
-   * is changed to DIR_PURPOSE_HAS_FETCHED_RENDDESC to mark that
+   * is changed to DIR_PURPOSE_HAS_FETCHED_RENDDESC_V2 to mark that
    * refetching is unnecessary.) */
   if (conn->purpose == DIR_PURPOSE_FETCH_RENDDESC_V2 &&
       dir_conn->rend_data &&
@@ -2452,9 +2373,7 @@ note_client_request(int purpose, int compressed, size_t bytes)
     case DIR_PURPOSE_UPLOAD_DIR:          kind = "dl/ul-dir"; break;
     case DIR_PURPOSE_UPLOAD_VOTE:         kind = "dl/ul-vote"; break;
     case DIR_PURPOSE_UPLOAD_SIGNATURES:   kind = "dl/ul-sig"; break;
-    case DIR_PURPOSE_FETCH_RENDDESC:      kind = "dl/rend"; break;
     case DIR_PURPOSE_FETCH_RENDDESC_V2:   kind = "dl/rend2"; break;
-    case DIR_PURPOSE_UPLOAD_RENDDESC:     kind = "dl/ul-rend"; break;
     case DIR_PURPOSE_UPLOAD_RENDDESC_V2:  kind = "dl/ul-rend2"; break;
   }
   if (kind) {
@@ -3312,19 +3231,20 @@ directory_handle_command_post(dir_connection_t *conn, const char *headers,
       connection_dir_is_encrypted(conn) &&
       !strcmpstart(url,"/tor/rendezvous2/publish")) {
     switch (rend_cache_store_v2_desc_as_dir(body)) {
-      case -2:
+      case RCS_NOTDIR:
         log_info(LD_REND, "Rejected v2 rend descriptor (length %d) from %s "
                  "since we're not currently a hidden service directory.",
                  (int)body_len, conn->base_.address);
         write_http_status_line(conn, 503, "Currently not acting as v2 "
                                "hidden service directory");
         break;
-      case -1:
+      case RCS_BADDESC:
         log_warn(LD_REND, "Rejected v2 rend descriptor (length %d) from %s.",
                  (int)body_len, conn->base_.address);
         write_http_status_line(conn, 400,
                                "Invalid v2 service descriptor rejected");
         break;
+      case RCS_OKAY:
       default:
         write_http_status_line(conn, 200, "Service descriptor (v2) stored");
         log_info(LD_REND, "Handled v2 rendezvous descriptor post: accepted");

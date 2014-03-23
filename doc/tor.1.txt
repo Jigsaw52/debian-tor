@@ -143,7 +143,17 @@ GENERAL OPTIONS
     the specified number of bytes per second, and the average outgoing
     bandwidth usage to that same value.  If you want to run a relay in the
     public network, this needs to be _at the very least_ 30 KBytes (that is,
-    30720 bytes). (Default: 1 GByte)
+    30720 bytes). (Default: 1 GByte) +
+ +
+    With this option, and in other options that take arguments in bytes,
+    KBytes, and so on, other formats are also supported. Notably, "KBytes" can
+    also be written as "kilobytes" or "kb"; "MBytes" can be written as
+    "megabytes" or "MB"; "kbits" can be written as "kilobits"; and so forth.
+    Tor also accepts "byte" and "bit" in the singular.
+    The prefixes "tera" and "T" are also recognized.
+    If no units are given, we default to bytes.
+    To avoid confusion, we recommend writing "bytes" or "bits" explicitly,
+    since it's easy to forget that "B" means bytes, not bits.
 
 [[BandwidthBurst]] **BandwidthBurst** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
     Limit the maximum token bucket size (also known as the burst) to the given
@@ -534,6 +544,12 @@ GENERAL OPTIONS
     following the Tor specification. Otherwise, they are logged with severity
     \'info'. (Default: 0)
 
+[[PredictedPortsRelevanceTime]] **PredictedPortsRelevanceTime** __NUM__::
+    Set how long, after the client has mad an anonymized connection to a
+    given port, we will try to make sure that we build circuits to
+    exits that support that port. The maximum value for this option is 1
+    hour. (Default: 1 hour)
+
 [[RunAsDaemon]] **RunAsDaemon** **0**|**1**::
     If 1, Tor forks and daemonizes to the background. This option has no effect
     on Windows; instead you should use the --service command-line option.
@@ -686,12 +702,13 @@ The following options are useful only for clients (that is, if
     number like 60. (Default: 0)
 
 [[ClientOnly]] **ClientOnly** **0**|**1**::
-    If set to 1, Tor will under no circumstances run as a relay or serve
-    directory requests. This config option is mostly meaningless: we
-    added it back when we were considering having Tor clients auto-promote
-    themselves to being relays if they were stable and fast enough. The
-    current behavior is simply that Tor is a client unless ORPort or
-    DirPort are configured. (Default: 0)
+    If set to 1, Tor will not run as a relay or serve
+    directory requests, even if the ORPort, ExtORPort, or DirPort options are
+    set. (This config option is
+    mostly unnecessary: we added it back when we were considering having
+    Tor clients auto-promote themselves to being relays if they were stable
+    and fast enough. The current behavior is simply that Tor is a client
+    unless ORPort, ExtORPort, or DirPort are configured.) (Default: 0)
 
 [[ExcludeNodes]] **ExcludeNodes** __node__,__node__,__...__::
     A list of identity fingerprints, nicknames, country codes and address
@@ -1025,7 +1042,8 @@ The following options are useful only for clients (that is, if
 [[SocksPolicy]] **SocksPolicy** __policy__,__policy__,__...__::
     Set an entrance policy for this server, to limit who can connect to the
     SocksPort and DNSPort ports. The policies have the same form as exit
-    policies below.
+    policies below, except that port specifiers are ignored. Any address
+    not matched by some entry in the policy is accepted.
 
 [[SocksTimeout]] **SocksTimeout** __NUM__::
     Let a socks connection wait NUM seconds handshaking, and NUM seconds
@@ -1727,13 +1745,13 @@ is non-zero):
     localhost, RFC1918 addresses, and so on. This can create security issues;
     you should probably leave it off. (Default: 0)
 
-[[MaxMemInCellQueues]] **MaxMemInCellQueues**  __N__ **bytes**|**KB**|**MB**|**GB**::
+[[MaxMemInQueues]] **MaxMemInQueues**  __N__ **bytes**|**KB**|**MB**|**GB**::
     This option configures a threshold above which Tor will assume that it
-    needs to stop queueing cells because it's about to run out of memory.
-    If it hits this threshold, it will begin killing circuits until it
-    has recovered at least 10% of this memory.  Do not set this option too
+    needs to stop queueing or buffering data because it's about to run out of
+    memory.  If it hits this threshold, it will begin killing circuits until
+    it has recovered at least 10% of this memory.  Do not set this option too
     low, or your relay may be unreliable under load.  This option only
-    affects circuit queues, so the actual process size will be larger than
+    affects some queues, so the actual process size will be larger than
     this. (Default: 8GB)
 
 DIRECTORY SERVER OPTIONS
@@ -1822,7 +1840,9 @@ if DirPort is non-zero):
 
 [[DirPolicy]] **DirPolicy** __policy__,__policy__,__...__::
     Set an entrance policy for this server, to limit who can connect to the
-    directory ports. The policies have the same form as exit policies above.
+    directory ports. The policies have the same form as exit policies above,
+    except that port specifiers are ignored. Any address not matched by
+    some entry in the policy is accepted.
 
 [[FetchV2Networkstatus]] **FetchV2Networkstatus** **0**|**1**::
     If set, we try to fetch the (obsolete, unused) version 2 network status
@@ -1866,7 +1886,11 @@ DIRECTORY AUTHORITY SERVER OPTIONS
 [[AuthDirBadDir]] **AuthDirBadDir** __AddressPattern...__::
     Authoritative directories only. A set of address patterns for servers that
     will be listed as bad directories in any network status document this
-    authority publishes, if **AuthDirListBadDirs** is set.
+    authority publishes, if **AuthDirListBadDirs** is set. +
+ +
+    (The address pattern syntax here and in the options below
+    is the same as for exit policies, except that you don't need to say
+    "accept" or "reject", and ports are not needed.)
 
 [[AuthDirBadExit]] **AuthDirBadExit** __AddressPattern...__::
     Authoritative directories only. A set of address patterns for servers that
@@ -2032,7 +2056,7 @@ The following options are used to configure a hidden service.
     authorization protocol or \'stealth' for a less scalable protocol that also
     hides service activity from unauthorized clients. Only clients that are
     listed here are authorized to access the hidden service. Valid client names
-    are 1 to 19 characters  long and only use characters in A-Za-z0-9+-_ (no
+    are 1 to 16 characters long and only use characters in A-Za-z0-9+-_ (no
     spaces). If this option is set, the hidden service is not accessible for
     clients without authorization any more. Generated authorization data can be
     found in the hostname file. Clients need to put this authorization data in
@@ -2304,6 +2328,10 @@ __DataDirectory__**/keys/***::
 
 __DataDirectory__**/fingerprint**::
     Only used by servers. Holds the fingerprint of the server's identity key.
+
+__DataDirectory__**/hashed-fingerprint**::
+    Only used by bridges. Holds the hashed fingerprint of the bridge's
+    identity key. (That is, the hash of the hash of the identity key.)
 
 __DataDirectory__**/approved-routers**::
     Only for naming authoritative directory servers (see

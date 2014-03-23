@@ -3176,27 +3176,22 @@ connection_control_reached_eof(control_connection_t *conn)
   return 0;
 }
 
+static void lost_owning_controller(const char *owner_type,
+                                   const char *loss_manner)
+  ATTR_NORETURN;
+
 /** Shut down this Tor instance in the same way that SIGINT would, but
  * with a log message appropriate for the loss of an owning controller. */
 static void
 lost_owning_controller(const char *owner_type, const char *loss_manner)
 {
-  int shutdown_slowly = server_mode(get_options());
-
-  log_notice(LD_CONTROL, "Owning controller %s has %s -- %s.",
-             owner_type, loss_manner,
-             shutdown_slowly ? "shutting down" : "exiting now");
+  log_notice(LD_CONTROL, "Owning controller %s has %s -- exiting now.",
+             owner_type, loss_manner);
 
   /* XXXX Perhaps this chunk of code should be a separate function,
    * called here and by process_signal(SIGINT). */
-
-  if (!shutdown_slowly) {
-    tor_cleanup();
-    exit(0);
-  }
-  /* XXXX This will close all listening sockets except control-port
-   * listeners.  Perhaps we should close those too. */
-  hibernate_begin_shutdown();
+  tor_cleanup();
+  exit(0);
 }
 
 /** Called when <b>conn</b> is being freed. */
@@ -4679,6 +4674,8 @@ static char *owning_controller_process_spec = NULL;
  * if this Tor instance is not currently owned by a process. */
 static tor_process_monitor_t *owning_controller_process_monitor = NULL;
 
+static void owning_controller_procmon_cb(void *unused) ATTR_NORETURN;
+
 /** Process-termination monitor callback for Tor's owning controller
  * process. */
 static void
@@ -4882,10 +4879,12 @@ control_event_bootstrap(bootstrap_status_t status, int progress)
 
 /** Called when Tor has failed to make bootstrapping progress in a way
  * that indicates a problem. <b>warn</b> gives a hint as to why, and
- * <b>reason</b> provides an "or_conn_end_reason" tag.
+ * <b>reason</b> provides an "or_conn_end_reason" tag.  <b>or_conn</b>
+ * is the connection that caused this problem.
  */
 MOCK_IMPL(void,
-control_event_bootstrap_problem, (const char *warn, int reason))
+          control_event_bootstrap_problem, (const char *warn, int reason,
+                                            const or_connection_t *or_conn))
 {
   int status = bootstrap_percent;
   const char *tag, *summary;
@@ -4907,9 +4906,10 @@ control_event_bootstrap_problem, (const char *warn, int reason))
   if (reason == END_OR_CONN_REASON_NO_ROUTE)
     recommendation = "warn";
 
-  if (get_options()->UseBridges &&
-      !any_bridge_descriptors_known() &&
-      !any_pending_bridge_descriptor_fetches())
+  /* If we are using bridges and all our OR connections are now
+     closed, it means that we totally failed to connect to our
+     bridges. Throw a warning. */
+  if (get_options()->UseBridges && !any_other_active_or_conns(or_conn))
     recommendation = "warn";
 
   if (we_are_hibernating())

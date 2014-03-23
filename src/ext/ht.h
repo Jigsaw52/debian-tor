@@ -86,6 +86,7 @@ ht_string_hash(const char *s)
 }
 #endif
 
+#if 0
 /** Basic string hash function, from Python's str.__hash__() */
 static INLINE unsigned
 ht_string_hash(const char *s)
@@ -100,6 +101,7 @@ ht_string_hash(const char *s)
   h ^= (unsigned)(cp-(const unsigned char*)s);
   return h;
 }
+#endif
 
 #ifndef HT_NO_CACHE_HASH_VALUES
 #define HT_SET_HASH_(elm, field, hashfn)        \
@@ -168,7 +170,7 @@ ht_string_hash(const char *s)
   }                                                                     \
   /* Insert the element 'elm' into the table 'head'.  Do not call this  \
    * function if the table might already contain a matching element. */ \
-  static INLINE void                                                    \
+  ATTR_UNUSED static INLINE void                                        \
   name##_HT_INSERT(struct name *head, struct type *elm)                 \
   {                                                                     \
     struct type **p;                                                    \
@@ -183,7 +185,7 @@ ht_string_hash(const char *s)
   /* Insert the element 'elm' into the table 'head'. If there already   \
    * a matching element in the table, replace that element and return   \
    * it. */                                                             \
-  static INLINE struct type *                                           \
+  ATTR_UNUSED static INLINE struct type *                               \
   name##_HT_REPLACE(struct name *head, struct type *elm)                \
   {                                                                     \
     struct type **p, *r;                                                \
@@ -204,7 +206,7 @@ ht_string_hash(const char *s)
   }                                                                     \
   /* Remove any element matching 'elm' from the table 'head'.  If such  \
    * an element is found, return it; otherwise return NULL. */          \
-  static INLINE struct type *                                           \
+  ATTR_UNUSED static INLINE struct type *                               \
   name##_HT_REMOVE(struct name *head, struct type *elm)                 \
   {                                                                     \
     struct type **p, *r;                                                \
@@ -222,11 +224,11 @@ ht_string_hash(const char *s)
    * using 'data' as its second argument.  If the function returns      \
    * nonzero, remove the most recently examined element before invoking \
    * the function again. */                                             \
-  static INLINE void                                                    \
+  ATTR_UNUSED static INLINE void                                        \
   name##_HT_FOREACH_FN(struct name *head,                               \
                        int (*fn)(struct type *, void *),                \
                        void *data)                                      \
-  {                                                                     \
+{                                                                       \
     unsigned idx;                                                       \
     struct type **p, **nextp, *next;                                    \
     if (!head->hth_table)                                               \
@@ -248,7 +250,7 @@ ht_string_hash(const char *s)
   /* Return a pointer to the first element in the table 'head', under   \
    * an arbitrary order.  This order is stable under remove operations, \
    * but not under others. If the table is empty, return NULL. */       \
-  static INLINE struct type **                                          \
+  ATTR_UNUSED static INLINE struct type **                              \
   name##_HT_START(struct name *head)                                    \
   {                                                                     \
     unsigned b = 0;                                                     \
@@ -264,7 +266,7 @@ ht_string_hash(const char *s)
    * NULL.  If 'elm' is to be removed from the table, you must call     \
    * this function for the next value before you remove it.             \
    */                                                                   \
-  static INLINE struct type **                                          \
+  ATTR_UNUSED static INLINE struct type **                              \
   name##_HT_NEXT(struct name *head, struct type **elm)                  \
   {                                                                     \
     if ((*elm)->field.hte_next) {                                       \
@@ -280,7 +282,7 @@ ht_string_hash(const char *s)
       return NULL;                                                      \
     }                                                                   \
   }                                                                     \
-  static INLINE struct type **                                          \
+  ATTR_UNUSED static INLINE struct type **                              \
   name##_HT_NEXT_RMV(struct name *head, struct type **elm)              \
   {                                                                     \
     unsigned h = HT_ELT_HASH_(*elm, field, hashfn);                     \

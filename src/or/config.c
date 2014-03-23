@@ -85,6 +85,7 @@ static config_abbrev_t option_abbrevs_[] = {
   { "DirFetchPostPeriod", "StatusFetchPeriod", 0, 0},
   { "DirServer", "DirAuthority", 0, 0}, /* XXXX024 later, make this warn? */
   { "MaxConn", "ConnLimit", 0, 1},
+  { "MaxMemInCellQueues", "MaxMemInQueues", 0, 0},
   { "ORBindAddress", "ORListenAddress", 0, 0},
   { "DirBindAddress", "DirListenAddress", 0, 0},
   { "SocksBindAddress", "SocksListenAddress", 0, 0},
@@ -306,7 +307,7 @@ static config_var_t option_vars_[] = {
   V(MaxAdvertisedBandwidth,      MEMUNIT,  "1 GB"),
   V(MaxCircuitDirtiness,         INTERVAL, "10 minutes"),
   V(MaxClientCircuitsPending,    UINT,     "32"),
-  V(MaxMemInCellQueues,          MEMUNIT,  "8 GB"),
+  V(MaxMemInQueues,              MEMUNIT,  "8 GB"),
   OBSOLETE("MaxOnionsPending"),
   V(MaxOnionQueueDelay,          MSEC_INTERVAL, "1750 msec"),
   V(MinMeasuredBWsForAuthToIgnoreAdvertised, INT, "500"),
@@ -317,6 +318,7 @@ static config_var_t option_vars_[] = {
   V(NATDListenAddress,           LINELIST, NULL),
   VPORT(NATDPort,                    LINELIST, NULL),
   V(Nickname,                    STRING,   NULL),
+  V(PredictedPortsRelevanceTime,  INTERVAL, "1 hour"),
   V(WarnUnsafeSocks,              BOOL,     "1"),
   OBSOLETE("NoPublish"),
   VAR("NodeFamily",              LINELIST, NodeFamilies,         NULL),
@@ -1341,6 +1343,19 @@ options_act(const or_options_t *old_options)
   }
 #endif
 
+  /* If we are a bridge with a pluggable transport proxy but no
+     Extended ORPort, inform the user that she is missing out. */
+  if (server_mode(options) && options->ServerTransportPlugin &&
+      !options->ExtORPort_lines) {
+    log_notice(LD_CONFIG, "We use pluggable transports but the Extended "
+               "ORPort is disabled. Tor and your pluggable transports proxy "
+               "communicate with each other via the Extended ORPort so it "
+               "is suggested you enable it: it will also allow your Bridge "
+               "to collect statistics about its clients that use pluggable "
+               "transports. Please enable it using the ExtORPort torrc option "
+               "(e.g. set 'ExtORPort auto').");
+  }
+
   if (options->SafeLogging_ != SAFELOG_SCRUB_ALL &&
       (!old_options || old_options->SafeLogging_ != options->SafeLogging_)) {
     log_warn(LD_GENERAL, "Your log may contain sensitive information - you "
@@ -1660,10 +1675,14 @@ options_act(const or_options_t *old_options)
     time_t now = time(NULL);
     int print_notice = 0;
 
-    /* If we aren't acting as a server, we can't collect stats anyway. */
+    /* Only collect directory-request statistics on relays and bridges. */
     if (!server_mode(options)) {
-      options->CellStatistics = 0;
       options->DirReqStatistics = 0;
+    }
+
+    /* Only collect other relay-only statistics on relays. */
+    if (!public_server_mode(options)) {
+      options->CellStatistics = 0;
       options->EntryStatistics = 0;
       options->ExitPortStatistics = 0;
     }
@@ -2376,6 +2395,11 @@ compute_publishserverdescriptor(or_options_t *options)
  * services can overload the directory system. */
 #define MIN_REND_POST_PERIOD (10*60)
 
+/** Higest allowable value for PredictedPortsRelevanceTime; if this is
+ * too high, our selection of exits will decrease for an extended
+ * period of time to an uncomfortable level .*/
+#define MAX_PREDICTED_CIRCS_RELEVANCE (60*60)
+
 /** Highest allowable value for RendPostPeriod. */
 #define MAX_DIR_PERIOD (MIN_ONION_KEY_LIFETIME/2)
 
@@ -2444,7 +2468,7 @@ options_validate(or_options_t *old_options, or_options_t *options,
        !strcmpstart(uname, "Windows Me"))) {
     log_warn(LD_CONFIG, "Tor is running as a server, but you are "
         "running %s; this probably won't work. See "
-        "https://wiki.torproject.org/TheOnionRouter/TorFAQ#ServerOS "
+        "https://www.torproject.org/docs/faq.html#BestOSForRelay "
         "for details.", uname);
   }
 
@@ -2754,10 +2778,10 @@ options_validate(or_options_t *old_options, or_options_t *options,
     REJECT("If EntryNodes is set, UseEntryGuards must be enabled.");
   }
 
-  if (options->MaxMemInCellQueues < (500 << 20)) {
-    log_warn(LD_CONFIG, "MaxMemInCellQueues must be at least 500 MB for now. "
+  if (options->MaxMemInQueues < (256 << 20)) {
+    log_warn(LD_CONFIG, "MaxMemInQueues must be at least 256 MB for now. "
              "Ideally, have it as large as you can afford.");
-    options->MaxMemInCellQueues = (500 << 20);
+    options->MaxMemInQueues = (256 << 20);
   }
 
   options->AllowInvalid_ = 0;
@@ -2834,6 +2858,13 @@ options_validate(or_options_t *old_options, or_options_t *options,
     log_warn(LD_CONFIG, "RendPostPeriod is too large; clipping to %ds.",
              MAX_DIR_PERIOD);
     options->RendPostPeriod = MAX_DIR_PERIOD;
+  }
+
+  if (options->PredictedPortsRelevanceTime >
+      MAX_PREDICTED_CIRCS_RELEVANCE) {
+    log_warn(LD_CONFIG, "PredictedPortsRelevanceTime is too large; "
+             "clipping to %ds.", MAX_PREDICTED_CIRCS_RELEVANCE);
+    options->PredictedPortsRelevanceTime = MAX_PREDICTED_CIRCS_RELEVANCE;
   }
 
   if (options->Tor2webMode && options->LearnCircuitBuildTimeout) {
@@ -3252,17 +3283,6 @@ options_validate(or_options_t *old_options, or_options_t *options,
 
     SMARTLIST_FOREACH(options_sl, char *, cp, tor_free(cp));
     smartlist_free(options_sl);
-  }
-
-  /* If we are a bridge with a pluggable transport proxy but no
-     Extended ORPort, inform the user that she is missing out. */
-  if (server_mode(options) && options->ServerTransportPlugin &&
-      !options->ExtORPort_lines) {
-    log_notice(LD_CONFIG, "We are a bridge with a pluggable transport "
-               "proxy but the Extended ORPort is disabled. The "
-               "Extended ORPort helps Tor communicate with the pluggable "
-               "transport proxy. Please enable it using the ExtORPort "
-               "torrc option.");
   }
 
   if (options->ConstrainedSockets) {
@@ -4661,8 +4681,8 @@ parse_client_transport_line(const char *line, int validate_only)
 
   if (is_managed) { /* managed */
     if (!validate_only && is_useless_proxy) {
-      log_warn(LD_GENERAL, "Pluggable transport proxy (%s) does not provide "
-               "any needed transports and will not be launched.", line);
+      log_notice(LD_GENERAL, "Pluggable transport proxy (%s) does not provide "
+                 "any needed transports and will not be launched.", line);
     }
 
     /* If we are not just validating, use the rest of the line as the

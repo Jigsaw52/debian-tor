@@ -110,6 +110,7 @@ typedef struct crypto_dh_t crypto_dh_t;
 /* global state */
 const char * crypto_openssl_get_version_str(void);
 const char * crypto_openssl_get_header_version_str(void);
+int crypto_early_init(void);
 int crypto_global_init(int hardwareAccel,
                        const char *accelName,
                        const char *accelPath);
@@ -181,6 +182,7 @@ crypto_pk_t *crypto_pk_asn1_decode(const char *str, size_t len);
 int crypto_pk_get_digest(crypto_pk_t *pk, char *digest_out);
 int crypto_pk_get_all_digests(crypto_pk_t *pk, digests_t *digests_out);
 int crypto_pk_get_fingerprint(crypto_pk_t *pk, char *fp_out,int add_space);
+int crypto_pk_get_hashed_fingerprint(crypto_pk_t *pk, char *fp_out);
 
 /* symmetric crypto */
 const char *crypto_cipher_get_key(crypto_cipher_t *env);
@@ -256,6 +258,7 @@ uint64_t crypto_rand_uint64(uint64_t max);
 double crypto_rand_double(void);
 struct tor_weak_rng_t;
 void crypto_seed_weak_rng(struct tor_weak_rng_t *rng);
+int crypto_init_siphash_key(void);
 
 char *crypto_random_hostname(int min_rand_len, int max_rand_len,
                              const char *prefix, const char *suffix);

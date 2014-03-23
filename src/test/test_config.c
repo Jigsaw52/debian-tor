@@ -221,12 +221,17 @@ test_config_check_or_create_data_subdir(void *arg)
   // and is private to the user.
   test_assert(!check_or_create_data_subdir(subdir));
 
+  r = stat(subpath, &st);
+  if (r) {
+    tt_abort_perror("stat");
+  }
+
 #if !defined (_WIN32) || defined (WINCE)
   group_permission = st.st_mode | 0070;
   r = chmod(subpath, group_permission);
 
   if (r) {
-    test_fail_msg("Changing permissions for the subdirectory failed.");
+    tt_abort_perror("chmod");
   }
 
   // If the directory exists, but its mode is too permissive
@@ -290,7 +295,6 @@ test_config_write_to_data_subdir(void *arg)
   cp = read_file_to_str(filepath, 0, NULL);
   test_streq(cp, str);
   tor_free(cp);
-
 
  done:
   (void) unlink(filepath);

@@ -43,14 +43,7 @@ typedef struct nodelist_t {
 static INLINE unsigned int
 node_id_hash(const node_t *node)
 {
-#if SIZEOF_INT == 4
-  const uint32_t *p = (const uint32_t*)node->identity;
-  return p[0] ^ p[1] ^ p[2] ^ p[3] ^ p[4];
-#elif SIZEOF_INT == 8
-  const uint64_t *p = (const uint32_t*)node->identity;
-  const uint32_t *p32 = (const uint32_t*)node->identity;
-  return p[0] ^ p[1] ^ p32[4];
-#endif
+  return (unsigned) siphash24g(node->identity, DIGEST_LEN);
 }
 
 static INLINE unsigned int
@@ -792,7 +785,7 @@ void
 node_get_address_string(const node_t *node, char *buf, size_t len)
 {
   if (node->ri) {
-    strlcpy(buf, node->ri->address, len);
+    strlcpy(buf, fmt_addr32(node->ri->addr), len);
   } else if (node->rs) {
     tor_addr_t addr;
     tor_addr_from_ipv4h(&addr, node->rs->addr);
@@ -1484,6 +1477,7 @@ update_router_have_minimum_dir_info(void)
   const networkstatus_t *consensus =
     networkstatus_get_reasonably_live_consensus(now,usable_consensus_flavor());
   int using_md;
+  const char *delay_fetches_msg = NULL;
 
   if (!consensus) {
     if (!networkstatus_get_latest_consensus())
@@ -1496,10 +1490,9 @@ update_router_have_minimum_dir_info(void)
     goto done;
   }
 
-  if (should_delay_dir_fetches(get_options())) {
-    log_notice(LD_DIR, "no known bridge descriptors running yet; stalling");
-    strlcpy(dir_info_status, "No live bridge descriptors.",
-            sizeof(dir_info_status));
+  if (should_delay_dir_fetches(get_options(), &delay_fetches_msg)) {
+    log_notice(LD_DIR, "Delaying dir fetches: %s", delay_fetches_msg);
+    strlcpy(dir_info_status, "%s",  sizeof(dir_info_status));
     res = 0;
     goto done;
   }
