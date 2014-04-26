@@ -1189,19 +1189,19 @@ test_util_strmisc(void)
   }
 
   /* Test str-foo functions */
-  cp = tor_strdup("abcdef");
-  test_assert(tor_strisnonupper(cp));
-  cp[3] = 'D';
-  test_assert(!tor_strisnonupper(cp));
-  tor_strupper(cp);
-  test_streq(cp, "ABCDEF");
-  tor_strlower(cp);
-  test_streq(cp, "abcdef");
-  test_assert(tor_strisnonupper(cp));
-  test_assert(tor_strisprint(cp));
-  cp[3] = 3;
-  test_assert(!tor_strisprint(cp));
-  tor_free(cp);
+  cp_tmp = tor_strdup("abcdef");
+  test_assert(tor_strisnonupper(cp_tmp));
+  cp_tmp[3] = 'D';
+  test_assert(!tor_strisnonupper(cp_tmp));
+  tor_strupper(cp_tmp);
+  test_streq(cp_tmp, "ABCDEF");
+  tor_strlower(cp_tmp);
+  test_streq(cp_tmp, "abcdef");
+  test_assert(tor_strisnonupper(cp_tmp));
+  test_assert(tor_strisprint(cp_tmp));
+  cp_tmp[3] = 3;
+  test_assert(!tor_strisprint(cp_tmp));
+  tor_free(cp_tmp);
 
   /* Test memmem and memstr */
   {
@@ -1212,6 +1212,10 @@ test_util_strmisc(void)
     test_assert(!tor_memmem(haystack, 4, "cde", 3));
     haystack = "ababcad";
     test_eq_ptr(tor_memmem(haystack, 7, "abc", 3), haystack + 2);
+    test_eq_ptr(tor_memmem(haystack, 7, "ad", 2), haystack + 5);
+    test_eq_ptr(tor_memmem(haystack, 7, "cad", 3), haystack + 4);
+    test_assert(!tor_memmem(haystack, 7, "dadad", 5));
+    test_assert(!tor_memmem(haystack, 7, "abcdefghij", 10));
     /* memstr */
     test_eq_ptr(tor_memstr(haystack, 7, "abc"), haystack + 2);
     test_eq_ptr(tor_memstr(haystack, 7, "cad"), haystack + 4);
@@ -1577,14 +1581,14 @@ test_util_mmap(void)
   test_eq(mapping->size, strlen("Short file."));
   test_streq(mapping->data, "Short file.");
 #ifdef _WIN32
-  tor_munmap_file(mapping);
+  tt_int_op(0, ==, tor_munmap_file(mapping));
   mapping = NULL;
   test_assert(unlink(fname1) == 0);
 #else
   /* make sure we can unlink. */
   test_assert(unlink(fname1) == 0);
   test_streq(mapping->data, "Short file.");
-  tor_munmap_file(mapping);
+  tt_int_op(0, ==, tor_munmap_file(mapping));
   mapping = NULL;
 #endif
 
@@ -1605,7 +1609,7 @@ test_util_mmap(void)
   test_assert(mapping);
   test_eq(mapping->size, buflen);
   test_memeq(mapping->data, buf, buflen);
-  tor_munmap_file(mapping);
+  tt_int_op(0, ==, tor_munmap_file(mapping));
   mapping = NULL;
 
   /* Now try a big aligned file. */
@@ -1614,7 +1618,7 @@ test_util_mmap(void)
   test_assert(mapping);
   test_eq(mapping->size, 16384);
   test_memeq(mapping->data, buf, 16384);
-  tor_munmap_file(mapping);
+  tt_int_op(0, ==, tor_munmap_file(mapping));
   mapping = NULL;
 
  done:
@@ -1627,8 +1631,7 @@ test_util_mmap(void)
   tor_free(fname3);
   tor_free(buf);
 
-  if (mapping)
-    tor_munmap_file(mapping);
+  tor_munmap_file(mapping);
 }
 
 /** Run unit tests for escaping/unescaping data for use by controllers. */
@@ -2322,6 +2325,8 @@ test_util_listdir(void *ptr)
  done:
   tor_free(fname1);
   tor_free(fname2);
+  tor_free(fname3);
+  tor_free(dir1);
   tor_free(dirname);
   if (dir_contents) {
     SMARTLIST_FOREACH(dir_contents, char *, cp, tor_free(cp));
@@ -3607,6 +3612,34 @@ test_util_socketpair(void *arg)
     tor_close_socket(fds[1]);
 }
 
+static void
+test_util_max_mem(void *arg)
+{
+  size_t memory1, memory2;
+  int r, r2;
+  (void) arg;
+
+  r = get_total_system_memory(&memory1);
+  r2 = get_total_system_memory(&memory2);
+  tt_int_op(r, ==, r2);
+  tt_int_op(memory2, ==, memory1);
+
+  TT_BLATHER(("System memory: "U64_FORMAT, U64_PRINTF_ARG(memory1)));
+
+  if (r==0) {
+    /* You have at least a megabyte. */
+    tt_int_op(memory1, >, (1<<20));
+  } else {
+    /* You do not have a petabyte. */
+#if SIZEOF_SIZE_T == SIZEOF_UINT64_T
+    tt_int_op(memory1, <, (U64_LITERAL(1)<<50));
+#endif
+  }
+
+ done:
+  ;
+}
+
 struct testcase_t util_tests[] = {
   UTIL_LEGACY(time),
   UTIL_TEST(parse_http_time, 0),
@@ -3670,6 +3703,7 @@ struct testcase_t util_tests[] = {
     (void*)"0" },
   { "socketpair_ersatz", test_util_socketpair, TT_FORK,
     &socketpair_setup, (void*)"1" },
+  UTIL_TEST(max_mem, 0),
   END_OF_TESTCASES
 };
 

@@ -42,7 +42,7 @@ COMMAND-LINE OPTIONS
 
 [[opt-f]] **-f** __FILE__::
     Specify a new configuration file to contain further Tor configuration
-    options. (Default: $HOME/.torrc, or @CONFDIR@/torrc if that file is not
+    options. (Default: @CONFDIR@/torrc, or $HOME/.torrc if that file is not
     found)
 
 [[opt-allow-missing-torrc]] **--allow-missing-torrc**::
@@ -342,9 +342,7 @@ GENERAL OPTIONS
     many times, for multiple authoritative directory servers. Flags are
     separated by spaces, and determine what kind of an authority this directory
     is. By default, an authority is not authoritative for any directory style
-    or version unless an appropriate flag is given. If the "v1" flag is
-    provided, Tor will use this server as an authority for old-style (v1)
-    directories as well. (Only directory mirrors care about this.)
+    or version unless an appropriate flag is given.
     Tor will use this authority as a bridge authoritative directory if the
     "bridge" flag is set. If a flag "orport=**port**" is given, Tor will use the
     given port when opening encrypted tunnels to the dirserver. If a flag
@@ -974,9 +972,10 @@ The following options are useful only for clients (that is, if
         on this port to share circuits with streams from every other
         port with the same session group.  (By default, streams received
         on different SOCKSPorts, TransPorts, etc are always isolated from one
-        another. This option overrides that behavior.) +
-+
-    Other recognized _flags_ for a SOCKSPort are:
+        another. This option overrides that behavior.)
+
+[[OtherSOCKSPortFlags]]::
+    Other recognized __flags__ for a SOCKSPort are:
     **NoIPv4Traffic**;;
         Tell exits to not connect to IPv4 addresses in response to SOCKS
         requests on this connection.
@@ -987,13 +986,14 @@ The following options are useful only for clients (that is, if
     **PreferIPv6**;;
         Tells exits that, if a host has both an IPv4 and an IPv6 address,
         we would prefer to connect to it via IPv6. (IPv4 is the default.) +
-+
-       NOTE: Although this option allows you to specify an IP address
-       other than localhost, you should do so only with extreme caution.
-       The SOCKS protocol is unencrypted and (as we use it)
-       unauthenticated, so exposing it in this way could leak your
-       information to anybody watching your network, and allow anybody
-       to use your computer as an open proxy.
+ +
+        NOTE: Although this option allows you to specify an IP address
+        other than localhost, you should do so only with extreme caution.
+        The SOCKS protocol is unencrypted and (as we use it)
+        unauthenticated, so exposing it in this way could leak your
+        information to anybody watching your network, and allow anybody
+        to use your computer as an open proxy. +
+ +
     **CacheIPv4DNS**;;
         Tells the client to remember IPv4 DNS answers we receive from exit
         nodes via this connection. (On by default.)
@@ -1196,20 +1196,29 @@ The following options are useful only for clients (that is, if
     compatibility, TransListenAddress is only allowed when TransPort is just
     a port number.)
 
-[[TransProxyType]] **TransProxyTYpe** **default**|**TPROXY**::
+[[TransProxyType]] **TransProxyTYpe** **default**|**TPROXY**|**ipfw**|**pf-divert**::
     TransProxyType may only be enabled when there is transparent proxy listener
     enabled.
  +
-    Set this to TPROXY if you wish to be able to use the TPROXY Linux module to
-    transparently proxy connections that are configured using the TransPort
+    Set this to "TPROXY" if you wish to be able to use the TPROXY Linux module
+    to transparently proxy connections that are configured using the TransPort
     option. This setting lets the listener on the TransPort accept connections
     for all addresses, even when the TransListenAddress is configured for an
     internal address. Detailed information on how to configure the TPROXY
     feature can be found in the Linux kernel source tree in the file
     Documentation/networking/tproxy.txt.
  +
+    Set this option to "ipfw" to use the FreeBSD ipfw interface.
+ +
+    On *BSD operating systems when using pf, set this to "pf-divert" to take
+    advantage of +divert-to+ rules, which do not modify the packets like
+    +rdr-to+ rules do. Detailed information on how to configure pf to use
+    +divert-to+ rules can be found in the pf.conf(5) manual page. On OpenBSD,
+    +divert-to+ is available to use on versions greater than or equal to
+    OpenBSD 4.4.
+ +
     Set this to "default", or leave it unconfigured, to use regular IPTables
-    on Linux, or to use pf on the *BSD operating systems.
+    on Linux, or to use pf +rdr-to+ rules on *BSD systems.
  +
     (Default: "default".)
 
@@ -1584,7 +1593,7 @@ is non-zero):
     If set to a path, only the specified path will be executed.
     (Default: tor-fw-helper)
 
-[[PublishServerDescriptor]] **PublishServerDescriptor** **0**|**1**|**v1**|**v2**|**v3**|**bridge**,**...**::
+[[PublishServerDescriptor]] **PublishServerDescriptor** **0**|**1**|**v3**|**bridge**,**...**::
     This option specifies which descriptors Tor will publish when acting as
     a relay. You can
     choose multiple arguments, separated by commas.
@@ -1752,7 +1761,8 @@ is non-zero):
     it has recovered at least 10% of this memory.  Do not set this option too
     low, or your relay may be unreliable under load.  This option only
     affects some queues, so the actual process size will be larger than
-    this. (Default: 8GB)
+    this.  If this option is set to 0, Tor will try to pick a reasonable
+    default based on your system's physical memory.  (Default: 0)
 
 DIRECTORY SERVER OPTIONS
 ------------------------
@@ -1773,17 +1783,6 @@ if DirPort is non-zero):
     the DirPort. Now relay operators can provide a disclaimer without needing
     to set up a separate webserver. There's a sample disclaimer in
     contrib/tor-exit-notice.html.
-
-[[V1AuthoritativeDirectory]] **V1AuthoritativeDirectory** **0**|**1**::
-    When this option is set in addition to **AuthoritativeDirectory**, Tor
-    generates version 1 directory and running-routers documents (for legacy
-    Tor clients up to 0.1.0.x).
-
-[[V2AuthoritativeDirectory]] **V2AuthoritativeDirectory** **0**|**1**::
-    When this option is set in addition to **AuthoritativeDirectory**, Tor
-    generates version 2 network statuses and serves descriptors, etc as
-    described in doc/spec/dir-spec-v2.txt (for Tor clients and servers running
-    0.1.1.x and 0.1.2.x).
 
 [[V3AuthoritativeDirectory]] **V3AuthoritativeDirectory** **0**|**1**::
     When this option is set in addition to **AuthoritativeDirectory**, Tor
@@ -2262,6 +2261,9 @@ FILES
 
 **@CONFDIR@/torrc**::
     The configuration file, which contains "option value" pairs.
+
+**$HOME/.torrc**::
+    Fallback location for torrc, if @CONFDIR@/torrc is not found.
 
 **@LOCALSTATEDIR@/lib/tor/**::
     The tor process stores keys and other data here.

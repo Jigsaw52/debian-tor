@@ -961,8 +961,7 @@ init_keys(void)
   }
   /* 6b. [authdirserver only] add own key to approved directories. */
   crypto_pk_get_digest(get_server_identity_key(), digest);
-  type = ((options->V1AuthoritativeDir ? V1_DIRINFO : NO_DIRINFO) |
-          (options->V3AuthoritativeDir ?
+  type = ((options->V3AuthoritativeDir ?
                (V3_DIRINFO|MICRODESC_DIRINFO|EXTRAINFO_DIRINFO) : NO_DIRINFO) |
           (options->BridgeAuthoritativeDir ? BRIDGE_DIRINFO : NO_DIRINFO));
 
@@ -1283,14 +1282,6 @@ authdir_mode(const or_options_t *options)
 {
   return options->AuthoritativeDir != 0;
 }
-/** Return true iff we believe ourselves to be a v1 authoritative
- * directory server.
- */
-int
-authdir_mode_v1(const or_options_t *options)
-{
-  return authdir_mode(options) && options->V1AuthoritativeDir != 0;
-}
 /** Return true iff we believe ourselves to be a v3 authoritative
  * directory server.
  */
@@ -1299,12 +1290,11 @@ authdir_mode_v3(const or_options_t *options)
 {
   return authdir_mode(options) && options->V3AuthoritativeDir != 0;
 }
-/** Return true iff we are a v1 or v3 directory authority. */
+/** Return true iff we are a v3 directory authority. */
 int
 authdir_mode_any_main(const or_options_t *options)
 {
-  return options->V1AuthoritativeDir ||
-         options->V3AuthoritativeDir;
+  return options->V3AuthoritativeDir;
 }
 /** Return true if we believe ourselves to be any kind of
  * authoritative directory beyond just a hidserv authority. */
@@ -1358,8 +1348,8 @@ authdir_mode_bridge(const or_options_t *options)
 
 /** Return true iff we are trying to be a server.
  */
-int
-server_mode(const or_options_t *options)
+MOCK_IMPL(int,
+server_mode,(const or_options_t *options))
 {
   if (options->ClientOnly) return 0;
   /* XXXX024 I believe we can kill off ORListenAddress here.*/
@@ -1368,8 +1358,8 @@ server_mode(const or_options_t *options)
 
 /** Return true iff we are trying to be a non-bridge server.
  */
-int
-public_server_mode(const or_options_t *options)
+MOCK_IMPL(int,
+public_server_mode,(const or_options_t *options))
 {
   if (!server_mode(options)) return 0;
   return (!options->BridgeRelay);
@@ -1699,8 +1689,8 @@ router_is_me(const routerinfo_t *router)
 
 /** Return a routerinfo for this OR, rebuilding a fresh one if
  * necessary.  Return NULL on error, or if called on an OP. */
-const routerinfo_t *
-router_get_my_routerinfo(void)
+MOCK_IMPL(const routerinfo_t *,
+router_get_my_routerinfo,(void))
 {
   if (!server_mode(get_options()))
     return NULL;
@@ -2408,20 +2398,13 @@ router_dump_router_to_string(routerinfo_t *router,
   if (!router->exit_policy || !smartlist_len(router->exit_policy)) {
     smartlist_add(chunks, tor_strdup("reject *:*\n"));
   } else if (router->exit_policy) {
-    int i;
-    for (i = 0; i < smartlist_len(router->exit_policy); ++i) {
-      char pbuf[POLICY_BUF_LEN];
-      addr_policy_t *tmpe = smartlist_get(router->exit_policy, i);
-      int result;
-      if (tor_addr_family(&tmpe->addr) == AF_INET6)
-        continue; /* Don't include IPv6 parts of address policy */
-      result = policy_write_item(pbuf, POLICY_BUF_LEN, tmpe, 1);
-      if (result < 0) {
-        log_warn(LD_BUG,"descriptor policy_write_item ran out of room!");
-        goto err;
-      }
-      smartlist_add_asprintf(chunks, "%s\n", pbuf);
-    }
+    char *exit_policy = router_dump_exit_policy_to_string(router,1,0);
+
+    if (!exit_policy)
+      goto err;
+
+    smartlist_add_asprintf(chunks, "%s\n", exit_policy);
+    tor_free(exit_policy);
   }
 
   if (router->ipv6_exit_policy) {
@@ -2487,6 +2470,56 @@ router_dump_router_to_string(routerinfo_t *router,
   tor_free(extra_or_address);
 
   return output;
+}
+
+/**
+ * OR only: Given <b>router</b>, produce a string with its exit policy.
+ * If <b>include_ipv4</b> is true, include IPv4 entries.
+ * If <b>include_ipv6</b> is true, include IPv6 entries.
+ */
+char *
+router_dump_exit_policy_to_string(const routerinfo_t *router,
+                                  int include_ipv4,
+                                  int include_ipv6)
+{
+  smartlist_t *exit_policy_strings;
+  char *policy_string = NULL;
+
+  if ((!router->exit_policy) || (router->policy_is_reject_star)) {
+    return tor_strdup("reject *:*");
+  }
+
+  exit_policy_strings = smartlist_new();
+
+  SMARTLIST_FOREACH_BEGIN(router->exit_policy, addr_policy_t *, tmpe) {
+    char *pbuf;
+    int bytes_written_to_pbuf;
+    if ((tor_addr_family(&tmpe->addr) == AF_INET6) && (!include_ipv6)) {
+      continue; /* Don't include IPv6 parts of address policy */
+    }
+    if ((tor_addr_family(&tmpe->addr) == AF_INET) && (!include_ipv4)) {
+      continue; /* Don't include IPv4 parts of address policy */
+    }
+
+    pbuf = tor_malloc(POLICY_BUF_LEN);
+    bytes_written_to_pbuf = policy_write_item(pbuf,POLICY_BUF_LEN, tmpe, 1);
+
+    if (bytes_written_to_pbuf < 0) {
+      log_warn(LD_BUG, "router_dump_exit_policy_to_string ran out of room!");
+      tor_free(pbuf);
+      goto done;
+    }
+
+    smartlist_add(exit_policy_strings,pbuf);
+  } SMARTLIST_FOREACH_END(tmpe);
+
+  policy_string = smartlist_join_strings(exit_policy_strings, "\n", 0, NULL);
+
+ done:
+  SMARTLIST_FOREACH(exit_policy_strings, char *, str, tor_free(str));
+  smartlist_free(exit_policy_strings);
+
+  return policy_string;
 }
 
 /** Copy the primary (IPv4) OR port (IP address and TCP port) for

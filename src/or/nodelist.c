@@ -85,8 +85,8 @@ node_get_mutable_by_id(const char *identity_digest)
 
 /** Return the node_t whose identity is <b>identity_digest</b>, or NULL
  * if no such node exists. */
-const node_t *
-node_get_by_id(const char *identity_digest)
+MOCK_IMPL(const node_t *,
+node_get_by_id,(const char *identity_digest))
 {
   return node_get_mutable_by_id(identity_digest);
 }
@@ -330,6 +330,25 @@ nodelist_drop_node(node_t *node, int remove_from_ht)
     tmp->nodelist_idx = idx;
   }
   node->nodelist_idx = -1;
+}
+
+/** Return a newly allocated smartlist of the nodes that have <b>md</b> as
+ * their microdescriptor. */
+smartlist_t *
+nodelist_find_nodes_with_microdesc(const microdesc_t *md)
+{
+  smartlist_t *result = smartlist_new();
+
+  if (the_nodelist == NULL)
+    return result;
+
+  SMARTLIST_FOREACH_BEGIN(the_nodelist->nodes, node_t *, node) {
+    if (node->md == md) {
+      smartlist_add(result, node);
+    }
+  } SMARTLIST_FOREACH_END(node);
+
+  return result;
 }
 
 /** Release storage held by <b>node</b>  */

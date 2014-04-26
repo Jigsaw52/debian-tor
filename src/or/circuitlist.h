@@ -16,13 +16,12 @@
 
 TOR_LIST_HEAD(global_circuitlist_s, circuit_t);
 
-struct global_circuitlist_s* circuit_get_global_list(void);
+MOCK_DECL(struct global_circuitlist_s*, circuit_get_global_list, (void));
 const char *circuit_state_to_string(int state);
 const char *circuit_purpose_to_controller_string(uint8_t purpose);
 const char *circuit_purpose_to_controller_hs_state_string(uint8_t purpose);
 const char *circuit_purpose_to_string(uint8_t purpose);
 void circuit_dump_by_conn(connection_t *conn, int severity);
-void circuit_dump_by_chan(channel_t *chan, int severity);
 void circuit_set_p_circid_chan(or_circuit_t *circ, circid_t id,
                                channel_t *chan);
 void circuit_set_n_circid_chan(circuit_t *circ, circid_t id,
@@ -47,8 +46,10 @@ origin_circuit_t *circuit_get_ready_rend_circ_by_rend_data(
   const rend_data_t *rend_data);
 origin_circuit_t *circuit_get_next_by_pk_and_purpose(origin_circuit_t *start,
                                          const char *digest, uint8_t purpose);
-or_circuit_t *circuit_get_rendezvous(const char *cookie);
-or_circuit_t *circuit_get_intro_point(const char *digest);
+or_circuit_t *circuit_get_rendezvous(const uint8_t *cookie);
+or_circuit_t *circuit_get_intro_point(const uint8_t *digest);
+void circuit_set_rendezvous_cookie(or_circuit_t *circ, const uint8_t *cookie);
+void circuit_set_intro_point_digest(or_circuit_t *circ, const uint8_t *digest);
 origin_circuit_t *circuit_find_to_cannibalize(uint8_t purpose,
                                               extend_info_t *info, int flags);
 void circuit_mark_all_unused_circs(void);

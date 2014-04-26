@@ -3,7 +3,7 @@ dnl Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson
 dnl Copyright (c) 2007-2013, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
-AC_INIT([tor],[0.2.5.3-alpha])
+AC_INIT([tor],[0.2.5.4-alpha])
 AC_CONFIG_SRCDIR([src/or/main.c])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE
@@ -129,12 +129,12 @@ AC_ARG_ENABLE(gcc-warnings,
 AC_ARG_ENABLE(gcc-warnings-advisory,
      AS_HELP_STRING(--enable-gcc-warnings-advisory, [enable verbose warnings, excluding -Werror]))
 
-dnl Adam shostack suggests the following for Windows:
-dnl -D_FORTIFY_SOURCE=2 -fstack-protector-all
 dnl Others suggest '/gs /safeseh /nxcompat /dynamicbase' for non-gcc on Windows
-dnl This requires that we use gcc and that we add -O2 to the CFLAGS.
 AC_ARG_ENABLE(gcc-hardening,
     AS_HELP_STRING(--disable-gcc-hardening, disable compiler security checks))
+
+AC_ARG_ENABLE(expensive-hardening,
+    AS_HELP_STRING(--enable-expensive-hardening, enable more expensive compiler hardening; makes Tor slower))
 
 dnl Linker hardening options
 dnl Currently these options are ELF specific - you can't use this with MacOSX
@@ -353,6 +353,7 @@ AC_CHECK_FUNCS(
         strtok_r \
         strtoull \
         sysconf \
+	sysctl \
         uname \
         vasprintf \
 	_vscprintf
@@ -435,6 +436,7 @@ AC_CHECK_FUNCS([event_get_version \
                 event_set_log_callback \
                 evdns_set_outgoing_bind_address \
                 evutil_secure_rng_set_urandom_device_file \
+                evutil_secure_rng_init \
                 event_base_loopexit])
 AC_CHECK_MEMBERS([struct event.min_heap_idx], , ,
 [#include <event.h>
@@ -628,6 +630,12 @@ if test x$enable_gcc_hardening != xno; then
     fi
 fi
 
+if test x$enable_expensive_hardening = xyes ; then
+   TOR_CHECK_CFLAGS([-fsanitize=address])
+   TOR_CHECK_CFLAGS([-fsanitize=undefined])
+   TOR_CHECK_CFLAGS([-fno-omit-frame-pointer])
+fi
+
 if test x$enable_linker_hardening != xno; then
     TOR_CHECK_LDFLAGS(-z relro -z now, "$all_ldflags_for_check", "$all_libs_for_check")
 fi
@@ -640,10 +648,11 @@ dnl Now see if we have a -fomit-frame-pointer compiler option.
 
 saved_CFLAGS="$CFLAGS"
 TOR_CHECK_CFLAGS(-fomit-frame-pointer)
+F_OMIT_FRAME_POINTER=''
 if test "$saved_CFLAGS" != "$CFLAGS"; then
-  F_OMIT_FRAME_POINTER='-fomit-frame-pointer'
-else
-  F_OMIT_FRAME_POINTER=''
+  if test x$enable_expensive_hardening != xyes ; then
+    F_OMIT_FRAME_POINTER='-fomit-frame-pointer'
+  fi
 fi
 CFLAGS="$saved_CFLAGS"
 AC_SUBST(F_OMIT_FRAME_POINTER)
@@ -877,6 +886,7 @@ AC_CHECK_HEADERS(
         sys/prctl.h \
         sys/resource.h \
         sys/socket.h \
+	sys/sysctl.h \
         sys/syslimits.h \
         sys/time.h \
         sys/types.h \

@@ -1504,6 +1504,9 @@ getinfo_helper_misc(control_connection_t *conn, const char *question,
     int max_fds=-1;
     set_max_file_descriptors(0, &max_fds);
     tor_asprintf(answer, "%d", max_fds);
+  } else if (!strcmp(question, "limits/max-mem-in-queues")) {
+    tor_asprintf(answer, U64_FORMAT,
+                 U64_PRINTF_ARG(get_options()->MaxMemInQueues));
   } else if (!strcmp(question, "dir-usage")) {
     *answer = directory_dump_request_log();
   } else if (!strcmp(question, "fingerprint")) {
@@ -2184,6 +2187,7 @@ static const getinfo_item_t getinfo_items[] = {
   ITEM("process/user", misc,
        "Username under which the tor process is running."),
   ITEM("process/descriptor-limit", misc, "File descriptor limit."),
+  ITEM("limits/max-mem-in-queues", misc, "Actual limit on memory in queues"),
   ITEM("dir-usage", misc, "Breakdown of bytes transferred over DirPort."),
   PREFIX("desc-annotations/id/", dir, "Router annotations by hexdigest."),
   PREFIX("dir/server/", dir,"Router descriptors as retrieved from a DirPort."),
@@ -2193,6 +2197,9 @@ static const getinfo_item_t getinfo_items[] = {
        "v3 Networkstatus consensus as retrieved from a DirPort."),
   ITEM("exit-policy/default", policies,
        "The default value appended to the configured exit policy."),
+  ITEM("exit-policy/full", policies, "The entire exit policy of onion router"),
+  ITEM("exit-policy/ipv4", policies, "IPv4 parts of exit policy"),
+  ITEM("exit-policy/ipv6", policies, "IPv6 parts of exit policy"),
   PREFIX("ip-to-country/", geoip, "Perform a GEOIP lookup"),
   { NULL, NULL, NULL, 0 }
 };
@@ -4819,15 +4826,27 @@ bootstrap_status_to_string(bootstrap_status_t s, const char **tag,
  * Tor initializes. */
 static int bootstrap_percent = BOOTSTRAP_STATUS_UNDEF;
 
+/** As bootstrap_percent, but holds the bootstrapping level at which we last
+ * logged a NOTICE-level message. We use this, plus BOOTSTRAP_PCT_INCREMENT,
+ * to avoid flooding the log with a new message every time we get a few more
+ * microdescriptors */
+static int notice_bootstrap_percent = 0;
+
 /** How many problems have we had getting to the next bootstrapping phase?
  * These include failure to establish a connection to a Tor relay,
  * failures to finish the TLS handshake, failures to validate the
  * consensus document, etc. */
 static int bootstrap_problems = 0;
 
-/* We only tell the controller once we've hit a threshold of problems
+/** We only tell the controller once we've hit a threshold of problems
  * for the current phase. */
 #define BOOTSTRAP_PROBLEM_THRESHOLD 10
+
+/** When our bootstrapping progress level changes, but our bootstrapping
+ * status has not advanced, we only log at NOTICE when we have made at least
+ * this much progress.
+ */
+#define BOOTSTRAP_PCT_INCREMENT 5
 
 /** Called when Tor has made progress at bootstrapping its directory
  * information and initial circuits.
@@ -4848,7 +4867,7 @@ control_event_bootstrap(bootstrap_status_t status, int progress)
    * can't distinguish what the connection is going to be for. */
   if (status == BOOTSTRAP_STATUS_HANDSHAKE) {
     if (bootstrap_percent < BOOTSTRAP_STATUS_CONN_OR) {
-      status =  BOOTSTRAP_STATUS_HANDSHAKE_DIR;
+      status = BOOTSTRAP_STATUS_HANDSHAKE_DIR;
     } else {
       status = BOOTSTRAP_STATUS_HANDSHAKE_OR;
     }
@@ -4856,9 +4875,19 @@ control_event_bootstrap(bootstrap_status_t status, int progress)
 
   if (status > bootstrap_percent ||
       (progress && progress > bootstrap_percent)) {
+    int loglevel = LOG_NOTICE;
     bootstrap_status_to_string(status, &tag, &summary);
-    tor_log(status ? LOG_NOTICE : LOG_INFO, LD_CONTROL,
-        "Bootstrapped %d%%: %s.", progress ? progress : status, summary);
+
+    if (status <= bootstrap_percent &&
+        (progress < notice_bootstrap_percent + BOOTSTRAP_PCT_INCREMENT)) {
+      /* We log the message at info if the status hasn't advanced, and if less
+       * than BOOTSTRAP_PCT_INCREMENT progress has been made.
+       */
+      loglevel = LOG_INFO;
+    }
+
+    tor_log(loglevel, LD_CONTROL,
+            "Bootstrapped %d%%: %s", progress ? progress : status, summary);
     tor_snprintf(buf, sizeof(buf),
         "BOOTSTRAP PROGRESS=%d TAG=%s SUMMARY=\"%s\"",
         progress ? progress : status, tag, summary);
@@ -4874,6 +4903,11 @@ control_event_bootstrap(bootstrap_status_t status, int progress)
       bootstrap_percent = progress;
       bootstrap_problems = 0; /* Progress! Reset our problem counter. */
     }
+    if (loglevel == LOG_NOTICE &&
+        bootstrap_percent > notice_bootstrap_percent) {
+      /* Remember that we gave a notice at this level. */
+      notice_bootstrap_percent = bootstrap_percent;
+    }
   }
 }
 
@@ -4884,7 +4918,7 @@ control_event_bootstrap(bootstrap_status_t status, int progress)
  */
 MOCK_IMPL(void,
           control_event_bootstrap_problem, (const char *warn, int reason,
-                                            const or_connection_t *or_conn))
+                                            or_connection_t *or_conn))
 {
   int status = bootstrap_percent;
   const char *tag, *summary;
@@ -4894,6 +4928,11 @@ MOCK_IMPL(void,
 
   /* bootstrap_percent must not be in "undefined" state here. */
   tor_assert(status >= 0);
+
+  if (or_conn->have_noted_bootstrap_problem)
+    return;
+
+  or_conn->have_noted_bootstrap_problem = 1;
 
   if (bootstrap_percent == 100)
     return; /* already bootstrapped; nothing to be done here. */

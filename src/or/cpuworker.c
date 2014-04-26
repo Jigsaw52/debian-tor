@@ -436,7 +436,7 @@ cpuworker_main(void *data)
     if (req.task == CPUWORKER_TASK_ONION) {
       const create_cell_t *cc = &req.create_cell;
       created_cell_t *cell_out = &rpl.created_cell;
-      struct timeval tv_start, tv_end;
+      struct timeval tv_start = {0,0}, tv_end;
       int n;
       rpl.timed = req.timed;
       rpl.started_at = req.started_at;
@@ -686,7 +686,7 @@ assign_onionskin_to_cpuworker(connection_t *cpuworker,
     }
 
     if (connection_or_digest_is_known_relay(circ->p_chan->identity_digest))
-      rep_hist_note_circuit_handshake_completed(onionskin->handshake_type);
+      rep_hist_note_circuit_handshake_assigned(onionskin->handshake_type);
 
     should_time = should_time_request(onionskin->handshake_type);
     memset(&req, 0, sizeof(req));

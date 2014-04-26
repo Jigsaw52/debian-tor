@@ -215,7 +215,7 @@ connection_or_clear_ext_or_id_map(void)
   orconn_ext_or_id_map = NULL;
 }
 
-/** Creates an Extended ORPort identifier for <b>conn<b/> and deposits
+/** Creates an Extended ORPort identifier for <b>conn</b> and deposits
  *  it into the global list of identifiers. */
 void
 connection_or_set_ext_or_identifier(or_connection_t *conn)
@@ -1195,6 +1195,12 @@ connection_or_connect(const tor_addr_t *_addr, uint16_t port,
                "your pluggable transport proxy stopped running.",
                fmt_addrport(&TO_CONN(conn)->addr, TO_CONN(conn)->port),
                transport_name, transport_name);
+
+      control_event_bootstrap_problem(
+                                "Can't connect to bridge",
+                                END_OR_CONN_REASON_PT_MISSING,
+                                conn);
+
     } else {
       log_warn(LD_GENERAL, "Tried to connect to '%s' through a proxy, but "
                "the proxy address could not be found.",
@@ -1759,8 +1765,6 @@ connection_tls_finish_handshake(or_connection_t *conn)
             conn,
             safe_str_client(conn->base_.address),
             tor_tls_get_ciphersuite_name(conn->tls));
-
-  directory_set_dirty();
 
   if (connection_or_check_valid_tls_handshake(conn, started_here,
                                               digest_rcvd) < 0)

@@ -898,8 +898,8 @@ tor_digest_is_zero(const char *digest)
   return tor_memeq(digest, ZERO_DIGEST, DIGEST_LEN);
 }
 
-/** Return true if <b>string</b> is a valid '<key>=[<value>]' string.
- *  <value> is optional, to indicate the empty string. Log at logging
+/** Return true if <b>string</b> is a valid 'key=[value]' string.
+ *  "value" is optional, to indicate the empty string. Log at logging
  *  <b>severity</b> if something ugly happens. */
 int
 string_is_key_value(int severity, const char *string)
@@ -1830,6 +1830,7 @@ file_status(const char *fname)
   int r;
   f = tor_strdup(fname);
   clean_name_for_stat(f);
+  log_debug(LD_FS, "stat()ing %s", f);
   r = stat(sandbox_intern_string(f), &st);
   tor_free(f);
   if (r) {
@@ -1880,6 +1881,7 @@ check_private_dir(const char *dirname, cpd_check_t check,
   tor_assert(dirname);
   f = tor_strdup(dirname);
   clean_name_for_stat(f);
+  log_debug(LD_FS, "stat()ing %s", f);
   r = stat(sandbox_intern_string(f), &st);
   tor_free(f);
   if (r) {
@@ -2141,6 +2143,7 @@ static int
 finish_writing_to_file_impl(open_file_t *file_data, int abort_write)
 {
   int r = 0;
+
   tor_assert(file_data && file_data->filename);
   if (file_data->stdio_file) {
     if (fclose(file_data->stdio_file)) {
@@ -2157,7 +2160,13 @@ finish_writing_to_file_impl(open_file_t *file_data, int abort_write)
   if (file_data->rename_on_close) {
     tor_assert(file_data->tempname && file_data->filename);
     if (abort_write) {
-      unlink(file_data->tempname);
+      int res = unlink(file_data->tempname);
+      if (res != 0) {
+        /* We couldn't unlink and we'll leave a mess behind */
+        log_warn(LD_FS, "Failed to unlink %s: %s",
+                 file_data->tempname, strerror(errno));
+        r = -1;
+      }
     } else {
       tor_assert(strcmp(file_data->filename, file_data->tempname));
       if (replace_file(file_data->tempname, file_data->filename)) {
@@ -3026,7 +3035,7 @@ tor_vsscanf(const char *buf, const char *pattern, va_list ap)
 /** Minimal sscanf replacement: parse <b>buf</b> according to <b>pattern</b>
  * and store the results in the corresponding argument fields.  Differs from
  * sscanf in that:
- * <ul><li>It only handles %u, %lu, %x, %lx, %<NUM>s, %d, %ld, %lf, and %c.
+ * <ul><li>It only handles %u, %lu, %x, %lx, %[NUM]s, %d, %ld, %lf, and %c.
  *     <li>It only handles decimal inputs for %lf. (12.3, not 1.23e1)
  *     <li>It does not handle arbitrarily long widths.
  *     <li>Numbers do not consume any space characters.

@@ -98,7 +98,8 @@ static smartlist_t *trusted_dir_servers = NULL;
  * and all fallback directory servers. */
 static smartlist_t *fallback_dir_servers = NULL;
 
-/** List of for a given authority, and download status for latest certificate.
+/** List of certificates for a single authority, and download status for
+ * latest certificate.
  */
 struct cert_list_t {
   /*
@@ -621,6 +622,37 @@ authority_cert_dl_failed(const char *id_digest,
   }
 }
 
+static const char *BAD_SIGNING_KEYS[] = {
+  "09CD84F751FD6E955E0F8ADB497D5401470D697E", // Expires 2015-01-11 16:26:31
+  "0E7E9C07F0969D0468AD741E172A6109DC289F3C", // Expires 2014-08-12 10:18:26
+  "57B85409891D3FB32137F642FDEDF8B7F8CDFDCD", // Expires 2015-02-11 17:19:09
+  "87326329007AF781F587AF5B594E540B2B6C7630", // Expires 2014-07-17 11:10:09
+  "98CC82342DE8D298CF99D3F1A396475901E0D38E", // Expires 2014-11-10 13:18:56
+  "9904B52336713A5ADCB13E4FB14DC919E0D45571", // Expires 2014-04-20 20:01:01
+  "9DCD8E3F1DD1597E2AD476BBA28A1A89F3095227", // Expires 2015-01-16 03:52:30
+  "A61682F34B9BB9694AC98491FE1ABBFE61923941", // Expires 2014-06-11 09:25:09
+  "B59F6E99C575113650C99F1C425BA7B20A8C071D", // Expires 2014-07-31 13:22:10
+  "D27178388FA75B96D37FA36E0B015227DDDBDA51", // Expires 2014-08-04 04:01:57
+  NULL,
+};
+
+/** DOCDOC */
+int
+authority_cert_is_blacklisted(const authority_cert_t *cert)
+{
+  char hex_digest[HEX_DIGEST_LEN+1];
+  int i;
+  base16_encode(hex_digest, sizeof(hex_digest),
+                cert->signing_key_digest, sizeof(cert->signing_key_digest));
+
+  for (i = 0; BAD_SIGNING_KEYS[i]; ++i) {
+    if (!strcasecmp(hex_digest, BAD_SIGNING_KEYS[i])) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
 /** Return true iff when we've been getting enough failures when trying to
  * download the certificate with ID digest <b>id_digest</b> that we're willing
  * to start bugging the user about it. */
@@ -1064,8 +1096,11 @@ router_rebuild_store(int flags, desc_store_t *store)
 
   /* Our mmap is now invalid. */
   if (store->mmap) {
-    tor_munmap_file(store->mmap);
+    int res = tor_munmap_file(store->mmap);
     store->mmap = NULL;
+    if (res != 0) {
+      log_warn(LD_FS, "Unable to munmap route store in %s", fname);
+    }
   }
 
   if (replace_file(fname_tmp, fname)<0) {
@@ -1139,9 +1174,16 @@ router_reload_router_list_impl(desc_store_t *store)
 
   fname = get_datadir_fname(store->fname_base);
 
-  if (store->mmap) /* get rid of it first */
-    tor_munmap_file(store->mmap);
-  store->mmap = NULL;
+  if (store->mmap) {
+    /* get rid of it first */
+    int res = tor_munmap_file(store->mmap);
+    store->mmap = NULL;
+    if (res != 0) {
+      log_warn(LD_FS, "Failed to munmap %s", fname);
+      tor_free(fname);
+      return -1;
+    }
+  }
 
   store->mmap = tor_mmap_file(fname);
   if (store->mmap) {
@@ -2794,10 +2836,18 @@ routerlist_free(routerlist_t *rl)
                     signed_descriptor_free(sd));
   smartlist_free(rl->routers);
   smartlist_free(rl->old_routers);
-  if (routerlist->desc_store.mmap)
-    tor_munmap_file(routerlist->desc_store.mmap);
-  if (routerlist->extrainfo_store.mmap)
-    tor_munmap_file(routerlist->extrainfo_store.mmap);
+  if (rl->desc_store.mmap) {
+    int res = tor_munmap_file(routerlist->desc_store.mmap);
+    if (res != 0) {
+      log_warn(LD_FS, "Failed to munmap routerlist->desc_store.mmap");
+    }
+  }
+  if (rl->extrainfo_store.mmap) {
+    int res = tor_munmap_file(routerlist->extrainfo_store.mmap);
+    if (res != 0) {
+      log_warn(LD_FS, "Failed to munmap routerlist->extrainfo_store.mmap");
+    }
+  }
   tor_free(rl);
 
   router_dir_info_changed();
@@ -3414,7 +3464,6 @@ router_add_to_routerlist(routerinfo_t *router, const char **msg,
         signed_desc_append_to_journal(&router->cache_info,
                                       &routerlist->desc_store);
       }
-      directory_set_dirty();
       *msg = authdir_believes_valid ? "Valid server updated" :
         ("Invalid server updated. (This dirserver is marking your "
          "server as unapproved.)");
@@ -3436,7 +3485,6 @@ router_add_to_routerlist(routerinfo_t *router, const char **msg,
     signed_desc_append_to_journal(&router->cache_info,
                                   &routerlist->desc_store);
   }
-  directory_set_dirty();
   return ROUTER_ADDED_SUCCESSFULLY;
 }
 
