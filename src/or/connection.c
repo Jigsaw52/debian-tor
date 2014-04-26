@@ -271,8 +271,6 @@ dir_connection_new(int socket_family)
  *
  * Set timestamp_last_added_nonpadding to now.
  *
- * Assign a pseudorandom next_circ_id between 0 and 2**15.
- *
  * Initialize active_circuit_pqueue.
  *
  * Set active_circuit_pqueue_last_recalibrated to current cell_ewma tick.
@@ -958,12 +956,14 @@ check_location_for_unix_socket(const or_options_t *options, const char *path)
 #endif
 
 /** Tell the TCP stack that it shouldn't wait for a long time after
- * <b>sock</b> has closed before reusing its port. */
-static void
+ * <b>sock</b> has closed before reusing its port. Return 0 on success,
+ * -1 on failure. */
+static int
 make_socket_reuseable(tor_socket_t sock)
 {
 #ifdef _WIN32
   (void) sock;
+  return 0;
 #else
   int one=1;
 
@@ -973,9 +973,9 @@ make_socket_reuseable(tor_socket_t sock)
    * already has it bound_. So, don't do that on Win32. */
   if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (void*) &one,
              (socklen_t)sizeof(one)) == -1) {
-    log_warn(LD_NET, "Error setting SO_REUSEADDR flag: %s",
-             tor_socket_strerror(errno));
+    return -1;
   }
+  return 0;
 #endif
 }
 
@@ -1049,7 +1049,11 @@ connection_listener_new(const struct sockaddr *listensockaddr,
       goto err;
     }
 
-    make_socket_reuseable(s);
+    if (make_socket_reuseable(s) < 0) {
+      log_warn(LD_NET, "Error setting SO_REUSEADDR flag on %s: %s",
+               conn_type_to_string(type),
+               tor_socket_strerror(errno));
+    }
 
 #if defined USE_TRANSPARENT && defined(IP_TRANSPARENT)
     if (options->TransProxyType_parsed == TPT_TPROXY &&
@@ -1354,7 +1358,18 @@ connection_handle_listener_read(connection_t *conn, int new_type)
             "Connection accepted on socket %d (child of fd %d).",
             (int)news,(int)conn->s);
 
-  make_socket_reuseable(news);
+  if (make_socket_reuseable(news) < 0) {
+    if (tor_socket_errno(news) == EINVAL) {
+      /* This can happen on OSX if we get a badly timed shutdown. */
+      log_debug(LD_NET, "make_socket_reuseable returned EINVAL");
+    } else {
+      log_warn(LD_NET, "Error setting SO_REUSEADDR flag on %s: %s",
+               conn_type_to_string(new_type),
+               tor_socket_strerror(errno));
+    }
+    tor_close_socket(news);
+    return 0;
+  }
 
   if (options->ConstrainedSockets)
     set_constrained_socket_buffers(news, (int)options->ConstrainedSockSize);
@@ -1563,7 +1578,10 @@ connection_connect(connection_t *conn, const char *address,
     return -1;
   }
 
-  make_socket_reuseable(s);
+  if (make_socket_reuseable(s) < 0) {
+    log_warn(LD_NET, "Error setting SO_REUSEADDR flag on new connection: %s",
+             tor_socket_strerror(errno));
+  }
 
   if (!tor_addr_is_loopback(addr)) {
     const tor_addr_t *ext_addr = NULL;
@@ -2339,6 +2357,20 @@ connection_mark_all_noncontrol_connections(void)
         connection_mark_unattached_ap(TO_ENTRY_CONN(conn),
                                       END_STREAM_REASON_HIBERNATING);
         break;
+      case CONN_TYPE_OR:
+        {
+          or_connection_t *orconn = TO_OR_CONN(conn);
+          if (orconn->chan) {
+            connection_or_close_normally(orconn, 0);
+          } else {
+            /*
+             * There should have been one, but mark for close and hope
+             * for the best..
+             */
+            connection_mark_for_close(conn);
+          }
+        }
+        break;
       default:
         connection_mark_for_close(conn);
         break;
@@ -2513,9 +2545,8 @@ connection_bucket_write_limit(connection_t *conn, time_t now)
  * shouldn't send <b>attempt</b> bytes of low-priority directory stuff
  * out to <b>conn</b>. Else return 0.
 
- * Priority is 1 for v1 requests (directories and running-routers),
- * and 2 for v2 requests (statuses and descriptors). But see FFFF in
- * directory_handle_command_get() for why we don't use priority 2 yet.
+ * Priority was 1 for v1 requests (directories and running-routers),
+ * and 2 for v2 requests and later (statuses and descriptors).
  *
  * There are a lot of parameters we could use here:
  * - global_relayed_write_bucket. Low is bad.
@@ -3990,6 +4021,12 @@ connection_write_to_buf_impl_,(const char *string, size_t len,
                "write_to_buf failed. Closing circuit (fd %d).", (int)conn->s);
       circuit_mark_for_close(circuit_get_by_edge_conn(TO_EDGE_CONN(conn)),
                              END_CIRC_REASON_INTERNAL);
+    } else if (conn->type == CONN_TYPE_OR) {
+      or_connection_t *orconn = TO_OR_CONN(conn);
+      log_warn(LD_NET,
+               "write_to_buf failed on an orconn; notifying of error "
+               "(fd %d)", (int)(conn->s));
+      connection_or_close_for_error(orconn, 0);
     } else {
       log_warn(LD_NET,
                "write_to_buf failed. Closing connection (fd %d).",
@@ -4775,6 +4812,8 @@ get_proxy_addrport(tor_addr_t *addr, uint16_t *port, int *proxy_type,
     }
   }
 
+  tor_addr_make_unspec(addr);
+  *port = 0;
   *proxy_type = PROXY_NONE;
   return 0;
 }

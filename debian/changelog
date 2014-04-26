@@ -1,8 +1,9 @@
-tor (0.2.5.3-alpha-1.X) experimental; urgency=low
+tor (0.2.5.4-alpha-1) experimental; urgency=low
 
+  * New upstream version.
   * Build depend on libseccomp-dev.
 
- -- Peter Palfrader <weasel@debian.org>  Fri, 18 Apr 2014 21:38:42 +0200
+ -- Peter Palfrader <weasel@debian.org>  Sat, 26 Apr 2014 09:01:00 +0200
 
 tor (0.2.5.3-alpha-1) experimental; urgency=low
 

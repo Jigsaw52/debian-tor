@@ -182,7 +182,7 @@ tor_addr_make_unspec(tor_addr_t *a)
   a->family = AF_UNSPEC;
 }
 
-/** Set address <a>a</b> to the null address in address family <b>family</b>.
+/** Set address <b>a</b> to the null address in address family <b>family</b>.
  * The null address for AF_INET is 0.0.0.0.  The null address for AF_INET6 is
  * [::].  AF_UNSPEC is all null. */
 void
@@ -236,7 +236,9 @@ tor_addr_lookup(const char *name, uint16_t family, tor_addr_t *addr)
     hints.ai_family = family;
     hints.ai_socktype = SOCK_STREAM;
     err = sandbox_getaddrinfo(name, NULL, &hints, &res);
-    if (!err) {
+    /* The check for 'res' here shouldn't be necessary, but it makes static
+     * analysis tools happy. */
+    if (!err && res) {
       best = NULL;
       for (res_p = res; res_p; res_p = res_p->ai_next) {
         if (family == AF_UNSPEC) {
@@ -1445,31 +1447,22 @@ get_interface_address6(int severity, sa_family_t family, tor_addr_t *addr)
  * XXXX024 IPv6 deprecate some of these.
  */
 
-/** Return true iff <b>ip</b> (in host order) is an IP reserved to localhost,
- * or reserved for local networks by RFC 1918.
- */
-int
-is_internal_IP(uint32_t ip, int for_listening)
-{
-  tor_addr_t myaddr;
-  myaddr.family = AF_INET;
-  myaddr.addr.in_addr.s_addr = htonl(ip);
-
-  return tor_addr_is_internal(&myaddr, for_listening);
-}
-
 /** Given an address of the form "ip:port", try to divide it into its
  * ip and port portions, setting *<b>address_out</b> to a newly
  * allocated string holding the address portion and *<b>port_out</b>
  * to the port.
  *
- * Don't do DNS lookups and don't allow domain names in the <ip> field.
- * Don't accept <b>addrport</b> of the form "<ip>" or "<ip>:0".
+ * Don't do DNS lookups and don't allow domain names in the "ip" field.
+ *
+ * If <b>default_port</b> is less than 0, don't accept <b>addrport</b> of the
+ * form "ip" or "ip:0".  Otherwise, accept those forms, and set
+ * *<b>port_out</b> to <b>default_port</b>.
  *
  * Return 0 on success, -1 on failure. */
 int
 tor_addr_port_parse(int severity, const char *addrport,
-                    tor_addr_t *address_out, uint16_t *port_out)
+                    tor_addr_t *address_out, uint16_t *port_out,
+                    int default_port)
 {
   int retval = -1;
   int r;
@@ -1483,8 +1476,12 @@ tor_addr_port_parse(int severity, const char *addrport,
   if (r < 0)
     goto done;
 
-  if (!*port_out)
-    goto done;
+  if (!*port_out) {
+    if (default_port >= 0)
+      *port_out = default_port;
+    else
+      goto done;
+  }
 
   /* make sure that address_out is an IP address */
   if (tor_addr_parse(address_out, addr_tmp) < 0)
@@ -1505,9 +1502,18 @@ int
 tor_addr_port_split(int severity, const char *addrport,
                     char **address_out, uint16_t *port_out)
 {
+  tor_addr_t a_tmp;
   tor_assert(addrport);
   tor_assert(address_out);
   tor_assert(port_out);
+  /* We need to check for IPv6 manually because addr_port_lookup() doesn't
+   * do a good job on IPv6 addresses that lack a port. */
+  if (tor_addr_parse(&a_tmp, addrport) == AF_INET6) {
+    *port_out = 0;
+    *address_out = tor_strdup(addrport);
+    return 0;
+  }
+
   return addr_port_lookup(severity, addrport, address_out, NULL, port_out);
 }
 
@@ -1585,7 +1591,7 @@ addr_mask_get_bits(uint32_t mask)
     return 0;
   if (mask == 0xFFFFFFFFu)
     return 32;
-  for (i=0; i<=32; ++i) {
+  for (i=1; i<=32; ++i) {
     if (mask == (uint32_t) ~((1u<<(32-i))-1)) {
       return i;
     }

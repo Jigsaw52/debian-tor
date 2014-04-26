@@ -82,7 +82,7 @@ typedef struct rend_service_port_config_t {
 #define MAX_INTRO_CIRCS_PER_PERIOD 10
 /** How many times will a hidden service operator attempt to connect to
  * a requested rendezvous point before giving up? */
-#define MAX_REND_FAILURES 30
+#define MAX_REND_FAILURES 8
 /** How many seconds should we spend trying to connect to a requested
  * rendezvous point before giving up? */
 #define MAX_REND_TIMEOUT 30
@@ -2041,7 +2041,7 @@ rend_service_decrypt_intro(
   if (err_msg_out && !err_msg) {
     tor_asprintf(&err_msg,
                  "unknown INTRODUCE%d error decrypting encrypted part",
-                 (int)(intro->type));
+                 intro ? (int)(intro->type) : -1);
   }
   if (status >= 0) status = -1;
 
@@ -2147,7 +2147,7 @@ rend_service_parse_intro_plaintext(
   if (err_msg_out && !err_msg) {
     tor_asprintf(&err_msg,
                  "unknown INTRODUCE%d error parsing encrypted part",
-                 (int)(intro->type));
+                 intro ? (int)(intro->type) : -1);
   }
   if (status >= 0) status = -1;
 

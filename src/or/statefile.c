@@ -13,6 +13,7 @@
 #include "hibernate.h"
 #include "rephist.h"
 #include "router.h"
+#include "sandbox.h"
 #include "statefile.h"
 
 /** A list of state-file "abbreviations," for compatibility. */
@@ -260,7 +261,7 @@ or_state_set(or_state_t *new_state)
 static void
 or_state_save_broken(char *fname)
 {
-  int i;
+  int i, res;
   file_status_t status;
   char *fname2 = NULL;
   for (i = 0; i < 100; ++i) {
@@ -274,12 +275,18 @@ or_state_save_broken(char *fname)
     log_warn(LD_BUG, "Unable to parse state in \"%s\"; too many saved bad "
              "state files to move aside. Discarding the old state file.",
              fname);
-    unlink(fname);
+    res = unlink(fname);
+    if (res != 0) {
+      log_warn(LD_FS,
+               "Also couldn't discard old state file \"%s\" because "
+               "unlink() failed: %s",
+               fname, strerror(errno));
+    }
   } else {
     log_warn(LD_BUG, "Unable to parse state in \"%s\". Moving it aside "
              "to \"%s\".  This could be a bug in Tor; please tell "
              "the developers.", fname, fname2);
-    if (rename(fname, fname2) < 0) {
+    if (tor_rename(fname, fname2) < 0) {//XXXX sandbox prohibits
       log_warn(LD_BUG, "Weirdly, I couldn't even move the state aside. The "
                "OS gave an error of %s", strerror(errno));
     }

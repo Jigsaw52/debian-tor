@@ -322,6 +322,17 @@ networkstatus_check_document_signature(const networkstatus_t *consensus,
                  DIGEST_LEN))
     return -1;
 
+  if (authority_cert_is_blacklisted(cert)) {
+    /* We implement blacklisting for authority signing keys by treating
+     * all their signatures as always bad. That way we don't get into
+     * crazy loops of dropping and re-fetching signatures. */
+    log_warn(LD_DIR, "Ignoring a consensus signature made with deprecated"
+             " signing key %s",
+             hex_str(cert->signing_key_digest, DIGEST_LEN));
+    sig->bad_signature = 1;
+    return 0;
+  }
+
   signed_digest_len = crypto_pk_keysize(cert->signing_key);
   signed_digest = tor_malloc(signed_digest_len);
   if (crypto_pk_public_checksig(cert->signing_key,
@@ -898,6 +909,14 @@ should_delay_dir_fetches(const or_options_t *options, const char **msg_out)
     *msg_out = NULL;
   }
 
+  if (options->DisableNetwork) {
+    if (msg_out) {
+      *msg_out = "DisableNetwork is set.";
+    }
+    log_info(LD_DIR, "Delaying dir fetches (DisableNetwork is set)");
+    return 1;
+  }
+
   if (options->UseBridges) {
     if (!any_bridge_descriptors_known()) {
       if (msg_out) {
@@ -1254,7 +1273,11 @@ networkstatus_set_current_consensus(const char *consensus,
         /* Even if we had enough signatures, we'd never use this as the
          * latest consensus. */
         if (was_waiting_for_certs && from_cache)
-          unlink(unverified_fname);
+          if (unlink(unverified_fname) != 0) {
+            log_warn(LD_FS,
+                     "Failed to unlink %s: %s",
+                     unverified_fname, strerror(errno));
+          }
       }
       goto done;
     } else {
@@ -1264,8 +1287,13 @@ networkstatus_set_current_consensus(const char *consensus,
                  "consensus");
         result = -2;
       }
-      if (was_waiting_for_certs && (r < -1) && from_cache)
-        unlink(unverified_fname);
+      if (was_waiting_for_certs && (r < -1) && from_cache) {
+        if (unlink(unverified_fname) != 0) {
+            log_warn(LD_FS,
+                     "Failed to unlink %s: %s",
+                     unverified_fname, strerror(errno));
+        }
+      }
       goto done;
     }
   }
@@ -1313,7 +1341,11 @@ networkstatus_set_current_consensus(const char *consensus,
       waiting->body = NULL;
     waiting->set_at = 0;
     waiting->dl_failed = 0;
-    unlink(unverified_fname);
+    if (unlink(unverified_fname) != 0) {
+      log_warn(LD_FS,
+               "Failed to unlink %s: %s",
+               unverified_fname, strerror(errno));
+    }
   }
 
   /* Reset the failure count only if this consensus is actually valid. */

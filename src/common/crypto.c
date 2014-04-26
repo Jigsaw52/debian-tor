@@ -282,6 +282,9 @@ int
 crypto_early_init(void)
 {
   if (!crypto_early_initialized_) {
+
+    crypto_early_initialized_ = 1;
+
     ERR_load_crypto_strings();
     OpenSSL_add_all_algorithms();
 
@@ -1591,7 +1594,7 @@ struct crypto_digest_t {
     SHA256_CTX sha2; /**< state for SHA256 */
   } d; /**< State for the digest we're using.  Only one member of the
         * union is usable, depending on the value of <b>algorithm</b>. */
-  ENUM_BF(digest_algorithm_t) algorithm : 8; /**< Which algorithm is in use? */
+  digest_algorithm_bitfield_t algorithm : 8; /**< Which algorithm is in use? */
 };
 
 /** Allocate and return a new digest object to compute SHA1 digests.
@@ -2468,6 +2471,7 @@ crypto_strongest_rand(uint8_t *out, size_t out_len)
   return 0;
 #else
   for (i = 0; filenames[i]; ++i) {
+    log_debug(LD_FS, "Opening %s for entropy", filenames[i]);
     fd = open(sandbox_intern_string(filenames[i]), O_RDONLY, 0);
     if (fd<0) continue;
     log_info(LD_CRYPTO, "Reading entropy from \"%s\"", filenames[i]);
@@ -3100,7 +3104,7 @@ openssl_locking_cb_(int mode, int n, const char *file, int line)
   (void)file;
   (void)line;
   if (!openssl_mutexes_)
-    /* This is not a really good  fix for the
+    /* This is not a really good fix for the
      * "release-freed-lock-from-separate-thread-on-shutdown" problem, but
      * it can't hurt. */
     return;
