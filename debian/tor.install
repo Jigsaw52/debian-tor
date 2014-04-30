@@ -3,5 +3,5 @@ usr/share/doc
 usr/share/man
 etc/tor
 
-contrib/torify usr/bin
+contrib/client-tools/torify usr/bin
 debian/tor-service-defaults-torrc usr/share/tor

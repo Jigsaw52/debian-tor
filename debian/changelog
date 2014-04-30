@@ -1,3 +1,9 @@
+tor (0.2.5.4-alpha-2) UNRELEASED; urgency=low
+
+  * torify moved from contrib to contrib/client-tools, adapt install rule.
+
+ -- Peter Palfrader <weasel@debian.org>  Wed, 30 Apr 2014 12:07:39 +0200
+
 tor (0.2.5.4-alpha-1) experimental; urgency=low
 
   * New upstream version.
