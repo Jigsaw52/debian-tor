@@ -1,5 +1,6 @@
-tor (0.2.5.4-alpha-2) UNRELEASED; urgency=low
+tor (0.2.5.5-alpha-1) experimental; urgency=low
 
+  * New upstream version.
   * upstream contrib/ directory cleanup, requires adapting paths in
     tor.docs and tor.install:
     - torify moved to contrib/client-tools/
@@ -7,7 +8,7 @@ tor (0.2.5.4-alpha-2) UNRELEASED; urgency=low
   * Restrict build dependency on libseccomp-dev to amd64 and i386 only.
     Build-Conflict with it on the other archs.
 
- -- Peter Palfrader <weasel@debian.org>  Wed, 30 Apr 2014 14:16:55 +0200
+ -- Peter Palfrader <weasel@debian.org>  Thu, 19 Jun 2014 08:06:11 +0200
 
 tor (0.2.5.4-alpha-1) experimental; urgency=low
 

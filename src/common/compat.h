@@ -633,6 +633,11 @@ int switch_id(const char *user);
 char *get_user_homedir(const char *username);
 #endif
 
+#ifndef _WIN32
+const struct passwd *tor_getpwnam(const char *username);
+const struct passwd *tor_getpwuid(uid_t uid);
+#endif
+
 int get_parent_directory(char *fname);
 char *make_path_absolute(char *fname);
 
@@ -742,6 +747,10 @@ char *format_win32_error(DWORD err);
 #define VER_SUITE_SINGLEUSERTS 0x00000100
 #endif
 
+#endif
+
+#ifdef TOR_UNIT_TESTS
+void tor_sleep_msec(int msec);
 #endif
 
 #ifdef COMPAT_PRIVATE

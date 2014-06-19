@@ -122,7 +122,7 @@ Running gcov for unit test coverage
    make
    make check
    mkdir coverage-output
-   ./contrib/coverage coverage-output
+   ./scripts/test/coverage coverage-output
 -----
 
 (On OSX, you'll need to start with "--enable-coverage CC=clang".)
@@ -142,7 +142,7 @@ If you have two different "coverage-output" directories, and you want to see
 a meaningful diff between them, you can run:
 
 -----
-   ./contrib/cov-diff coverage-output1 coverage-output2 | less
+   ./scripts/test/cov-diff coverage-output1 coverage-output2 | less
 -----
 
 In this diff, any lines that were visited at least once will have coverage
@@ -530,12 +530,16 @@ the date in the ChangeLog.
 
 11) Forward-port the ChangeLog.
 
-12) Update the topic in #tor to reflect the new version.
-
 12) Wait up to a day or two (for a development release), or until most
 packages are up (for a stable release), and mail the release blurb and
 changelog to tor-talk or tor-announce.
 
   (We might be moving to faster announcements, but don't announce until
   the website is at least updated.)
+
+13) If it's a stable release, bump the version number in the maint-x.y.z
+    branch to "newversion-dev", and do a "merge -s ours" merge to avoid
+    taking that change into master.  Do a similar 'merge -s theirs'
+    merge to get the change (and only that change) into release.  (Some
+    of the build scripts require that maint merge cleanly into release.)
 

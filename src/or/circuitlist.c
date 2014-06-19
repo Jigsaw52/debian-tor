@@ -59,6 +59,8 @@ typedef struct chan_circid_circuit_map_t {
   channel_t *chan;
   circid_t circ_id;
   circuit_t *circuit;
+  /* For debugging 12184: when was this placeholder item added? */
+  time_t made_placeholder_at;
 } chan_circid_circuit_map_t;
 
 /** Helper for hash tables: compare the channel and circuit ID for a and
@@ -76,7 +78,15 @@ chan_circid_entries_eq_(chan_circid_circuit_map_t *a,
 static INLINE unsigned int
 chan_circid_entry_hash_(chan_circid_circuit_map_t *a)
 {
-  return ((unsigned)a->circ_id) ^ (unsigned)(uintptr_t)(a->chan);
+  /* Try to squeze the siphash input into 8 bytes to save any extra siphash
+   * rounds.  This hash function is in the critical path. */
+  uintptr_t chan = (uintptr_t) (void*) a->chan;
+  uint32_t array[2];
+  array[0] = a->circ_id;
+  /* The low bits of the channel pointer are uninteresting, since the channel
+   * is a pretty big structure. */
+  array[1] = (uint32_t) (chan >> 6);
+  return (unsigned) siphash24g(array, sizeof(array));
 }
 
 /** Map from [chan,circid] to circuit. */
@@ -176,6 +186,7 @@ circuit_set_circid_chan_helper(circuit_t *circ, int direction,
   found = HT_FIND(chan_circid_map, &chan_circid_map, &search);
   if (found) {
     found->circuit = circ;
+    found->made_placeholder_at = 0;
   } else {
     found = tor_malloc_zero(sizeof(chan_circid_circuit_map_t));
     found->circ_id = id;
@@ -233,11 +244,14 @@ channel_mark_circid_unusable(channel_t *chan, circid_t id)
              "a circuit there.", (unsigned)id, chan);
   } else if (ent) {
     /* It's already marked. */
+    if (!ent->made_placeholder_at)
+      ent->made_placeholder_at = approx_time();
   } else {
     ent = tor_malloc_zero(sizeof(chan_circid_circuit_map_t));
     ent->chan = chan;
     ent->circ_id = id;
-    /* leave circuit at NULL */
+    /* leave circuit at NULL. */
+    ent->made_placeholder_at = approx_time();
     HT_INSERT(chan_circid_map, &chan_circid_map, ent);
   }
 }
@@ -320,9 +334,12 @@ circuit_set_p_circid_chan(or_circuit_t *or_circ, circid_t id,
 
   circuit_set_circid_chan_helper(circ, CELL_DIRECTION_IN, id, chan);
 
-  if (chan)
+  if (chan) {
     tor_assert(bool_eq(or_circ->p_chan_cells.n,
                        or_circ->next_active_on_p_chan));
+
+    chan->timestamp_last_had_circuits = approx_time();
+  }
 
   if (circ->p_delete_pending && old_chan) {
     channel_mark_circid_unusable(old_chan, old_id);
@@ -342,8 +359,11 @@ circuit_set_n_circid_chan(circuit_t *circ, circid_t id,
 
   circuit_set_circid_chan_helper(circ, CELL_DIRECTION_OUT, id, chan);
 
-  if (chan)
+  if (chan) {
     tor_assert(bool_eq(circ->n_chan_cells.n, circ->next_active_on_n_chan));
+
+    chan->timestamp_last_had_circuits = approx_time();
+  }
 
   if (circ->n_delete_pending && old_chan) {
     channel_mark_circid_unusable(old_chan, old_id);
@@ -1080,6 +1100,26 @@ circuit_id_in_use_on_channel(circid_t circ_id, channel_t *chan)
   if (found)
     return 2;
   return 0;
+}
+
+/** Helper for debugging 12184.  Returns the time since which 'circ_id' has
+ * been marked unusable on 'chan'. */
+time_t
+circuit_id_when_marked_unusable_on_channel(circid_t circ_id, channel_t *chan)
+{
+  chan_circid_circuit_map_t search;
+  chan_circid_circuit_map_t *found;
+
+  memset(&search, 0, sizeof(search));
+  search.circ_id = circ_id;
+  search.chan = chan;
+
+  found = HT_FIND(chan_circid_map, &chan_circid_map, &search);
+
+  if (! found || found->circuit)
+    return 0;
+
+  return found->made_placeholder_at;
 }
 
 /** Return the circuit that a given edge connection is using. */
@@ -1821,7 +1861,7 @@ circuit_max_queued_cell_age(const circuit_t *c, uint32_t now)
     age = now - cell->inserted_time;
 
   if (! CIRCUIT_IS_ORIGIN(c)) {
-    const or_circuit_t *orcirc = TO_OR_CIRCUIT((circuit_t*)c);
+    const or_circuit_t *orcirc = CONST_TO_OR_CIRCUIT(c);
     if (NULL != (cell = TOR_SIMPLEQ_FIRST(&orcirc->p_chan_cells.head))) {
       uint32_t age2 = now - cell->inserted_time;
       if (age2 > age)
@@ -1863,10 +1903,10 @@ circuit_max_queued_data_age(const circuit_t *c, uint32_t now)
 {
   if (CIRCUIT_IS_ORIGIN(c)) {
     return circuit_get_streams_max_data_age(
-                           TO_ORIGIN_CIRCUIT((circuit_t*)c)->p_streams, now);
+        CONST_TO_ORIGIN_CIRCUIT(c)->p_streams, now);
   } else {
     return circuit_get_streams_max_data_age(
-                           TO_OR_CIRCUIT((circuit_t*)c)->n_streams, now);
+        CONST_TO_OR_CIRCUIT(c)->n_streams, now);
   }
 }
 
@@ -1975,7 +2015,9 @@ circuits_handle_oom(size_t current_allocation)
       break;
   } SMARTLIST_FOREACH_END(circ);
 
+#ifdef ENABLE_MEMPOOLS
   clean_cell_pool(); /* In case this helps. */
+#endif /* ENABLE_MEMPOOLS */
   buf_shrink_freelists(1); /* This is necessary to actually release buffer
                               chunks. */
 
@@ -2057,15 +2099,10 @@ assert_circuit_ok(const circuit_t *c)
   tor_assert(c->purpose >= CIRCUIT_PURPOSE_MIN_ &&
              c->purpose <= CIRCUIT_PURPOSE_MAX_);
 
-  {
-    /* Having a separate variable for this pleases GCC 4.2 in ways I hope I
-     * never understand. -NM. */
-    circuit_t *nonconst_circ = (circuit_t*) c;
-    if (CIRCUIT_IS_ORIGIN(c))
-      origin_circ = TO_ORIGIN_CIRCUIT(nonconst_circ);
-    else
-      or_circ = TO_OR_CIRCUIT(nonconst_circ);
-  }
+  if (CIRCUIT_IS_ORIGIN(c))
+    origin_circ = CONST_TO_ORIGIN_CIRCUIT(c);
+  else
+    or_circ = CONST_TO_OR_CIRCUIT(c);
 
   if (c->n_chan) {
     tor_assert(!c->n_hop);

@@ -11,6 +11,7 @@
 #define ROUTER_PRIVATE
 #define ROUTERLIST_PRIVATE
 #define HIBERNATE_PRIVATE
+#define NETWORKSTATUS_PRIVATE
 #include "or.h"
 #include "config.h"
 #include "directory.h"
@@ -194,6 +195,7 @@ test_dir_formats(void)
   test_assert(crypto_pk_cmp_keys(rp1->onion_pkey, pk1) == 0);
   test_assert(crypto_pk_cmp_keys(rp1->identity_pkey, pk2) == 0);
   //test_assert(rp1->exit_policy == NULL);
+  tor_free(buf);
 
   strlcpy(buf2,
           "router Fred 10.3.2.1 9005 0 0\n"
@@ -277,6 +279,8 @@ test_dir_formats(void)
     routerinfo_free(r1);
   if (r2)
     routerinfo_free(r2);
+  if (rp2)
+    routerinfo_free(rp2);
 
   tor_free(buf);
   tor_free(pk1_str);
@@ -1011,16 +1015,14 @@ vote_tweaks_for_v3ns(networkstatus_t *v, int voter, time_t now)
     /* Monkey around with the list a bit */
     vrs = smartlist_get(v->routerstatus_list, 2);
     smartlist_del_keeporder(v->routerstatus_list, 2);
-    tor_free(vrs->version);
-    tor_free(vrs);
+    vote_routerstatus_free(vrs);
     vrs = smartlist_get(v->routerstatus_list, 0);
     vrs->status.is_fast = 1;
 
     if (voter == 3) {
       vrs = smartlist_get(v->routerstatus_list, 0);
       smartlist_del_keeporder(v->routerstatus_list, 0);
-      tor_free(vrs->version);
-      tor_free(vrs);
+      vote_routerstatus_free(vrs);
       vrs = smartlist_get(v->routerstatus_list, 0);
       memset(vrs->status.descriptor_digest, (int)'Z', DIGEST_LEN);
       test_assert(router_add_to_routerlist(
@@ -1064,7 +1066,7 @@ test_vrs_for_v3ns(vote_routerstatus_t *vrs, int voter, time_t now)
     test_eq(rs->or_port, 443);
     test_eq(rs->dir_port, 8000);
     /* no flags except "running" (16) and "v2dir" (64) */
-    test_eq(vrs->flags, U64_LITERAL(80));
+    tt_u64_op(vrs->flags, ==, U64_LITERAL(80));
   } else if (tor_memeq(rs->identity_digest,
                        "\x5\x5\x5\x5\x5\x5\x5\x5\x5\x5\x5\x5\x5\x5\x5\x5"
                        "\x5\x5\x5\x5",
@@ -1090,10 +1092,10 @@ test_vrs_for_v3ns(vote_routerstatus_t *vrs, int voter, time_t now)
     test_eq(rs->ipv6_orport, 4711);
     if (voter == 1) {
       /* all except "authority" (1) and "v2dir" (64) */
-      test_eq(vrs->flags, U64_LITERAL(190));
+      tt_u64_op(vrs->flags, ==, U64_LITERAL(190));
     } else {
       /* 1023 - authority(1) - madeofcheese(16) - madeoftin(32) - v2dir(256) */
-      test_eq(vrs->flags, U64_LITERAL(718));
+      tt_u64_op(vrs->flags, ==, U64_LITERAL(718));
     }
   } else if (tor_memeq(rs->identity_digest,
                        "\x33\x33\x33\x33\x33\x33\x33\x33\x33\x33"
@@ -1360,7 +1362,8 @@ test_a_networkstatus(
   vote->dist_seconds = 300;
   authority_cert_free(vote->cert);
   vote->cert = authority_cert_dup(cert2);
-  vote->net_params = smartlist_new();
+  SMARTLIST_FOREACH(vote->net_params, char *, c, tor_free(c));
+  smartlist_clear(vote->net_params);
   smartlist_split_string(vote->net_params, "bar=2000000000 circuitwindow=20",
                          NULL, 0, 0);
   tor_free(vote->client_versions);
@@ -1404,7 +1407,8 @@ test_a_networkstatus(
   vote->dist_seconds = 250;
   authority_cert_free(vote->cert);
   vote->cert = authority_cert_dup(cert3);
-  vote->net_params = smartlist_new();
+  SMARTLIST_FOREACH(vote->net_params, char *, c, tor_free(c));
+  smartlist_clear(vote->net_params);
   smartlist_split_string(vote->net_params, "circuitwindow=80 foo=660",
                          NULL, 0, 0);
   smartlist_add(vote->supported_methods, tor_strdup("4"));
@@ -1771,7 +1775,7 @@ test_dir_random_weighted(void *testdata)
     inp[i].u64 = vals[i];
     total += vals[i];
   }
-  tt_int_op(total, ==, 45);
+  tt_u64_op(total, ==, 45);
   for (i=0; i<n; ++i) {
     choice = choose_array_element_by_weight(inp, 10);
     tt_int_op(choice, >=, 0);
@@ -1981,6 +1985,7 @@ vote_tweaks_for_umbw(networkstatus_t *v, int voter, time_t now)
   (void)now;
 
   test_assert(v->supported_methods);
+  SMARTLIST_FOREACH(v->supported_methods, char *, c, tor_free(c));
   smartlist_clear(v->supported_methods);
   /* Method 17 is MIN_METHOD_TO_CLIP_UNMEASURED_BW_KB */
   smartlist_split_string(v->supported_methods,

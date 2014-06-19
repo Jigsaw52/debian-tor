@@ -3,7 +3,7 @@ dnl Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson
 dnl Copyright (c) 2007-2013, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
-AC_INIT([tor],[0.2.5.4-alpha])
+AC_INIT([tor],[0.2.5.5-alpha])
 AC_CONFIG_SRCDIR([src/or/main.c])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE
@@ -24,7 +24,9 @@ CPPFLAGS="$CPPFLAGS -I\${top_srcdir}/src/common"
 
 #XXXX020 We should make these enabled or not, before 0.2.0.x-final
 AC_ARG_ENABLE(buf-freelists,
-   AS_HELP_STRING(--disable-buf-freelists, disable freelists for buffer RAM))
+   AS_HELP_STRING(--enable-buf-freelists, enable freelists for buffer RAM))
+AC_ARG_ENABLE(mempools,
+   AS_HELP_STRING(--enable-mempools, enable mempools for relay cells))
 AC_ARG_ENABLE(openbsd-malloc,
    AS_HELP_STRING(--enable-openbsd-malloc, Use malloc code from openbsd.  Linux only))
 AC_ARG_ENABLE(instrument-downloads,
@@ -54,10 +56,17 @@ if test "$enable_static_tor" = "yes"; then
   CFLAGS="$CFLAGS -static"
 fi
 
-if test x$enable_buf_freelists != xno; then
+if test x$enable_buf_freelists = xyes; then
   AC_DEFINE(ENABLE_BUF_FREELISTS, 1,
             [Defined if we try to use freelists for buffer RAM chunks])
 fi
+
+AM_CONDITIONAL(USE_MEMPOOLS, test x$enable_mempools = xyes)
+if test x$enable_mempools = xyes; then
+  AC_DEFINE(ENABLE_MEMPOOLS, 1,
+            [Defined if we try to use mempools for cells being relayed])
+fi
+
 AM_CONDITIONAL(USE_OPENBSD_MALLOC, test x$enable_openbsd_malloc = xyes)
 if test x$enable_instrument_downloads = xyes; then
   AC_DEFINE(INSTRUMENT_DOWNLOADS, 1,
@@ -161,6 +170,9 @@ AC_ARG_ENABLE(bufferevents,
 AC_ARG_ENABLE(tool-name-check,
      AS_HELP_STRING(--disable-tool-name-check, check for sanely named toolchain when cross-compiling))
 
+AC_ARG_ENABLE(seccomp,
+     AS_HELP_STRING(--disable-seccomp, do not attempt to use libseccomp))
+
 dnl check for the correct "ar" when cross-compiling
 AN_MAKEVAR([AR], [AC_PROG_AR])
 AN_PROGRAM([ar], [AC_PROG_AR])
@@ -201,7 +213,7 @@ AM_CONDITIONAL(MINIUPNPC, test x$upnp = xtrue)
 AM_PROG_CC_C_O
 
 AC_ARG_VAR(PYTHON)
-AC_CHECK_PROGS(PYTHON, [python python2 python3])
+AC_CHECK_PROGS(PYTHON, [python python2 python2.7 python3 python3.3])
 if test "x$PYTHON" = "x"; then
   AC_MSG_WARN([Python unavailable; some tests will not be run.])
 fi
@@ -355,6 +367,7 @@ AC_CHECK_FUNCS(
         sysconf \
 	sysctl \
         uname \
+        usleep \
         vasprintf \
 	_vscprintf
 )
@@ -434,7 +447,6 @@ AC_CHECK_FUNCS([event_get_version \
                 event_get_version_number \
                 event_get_method \
                 event_set_log_callback \
-                evdns_set_outgoing_bind_address \
                 evutil_secure_rng_set_urandom_device_file \
                 evutil_secure_rng_init \
                 event_base_loopexit])
@@ -442,7 +454,7 @@ AC_CHECK_MEMBERS([struct event.min_heap_idx], , ,
 [#include <event.h>
 ])
 
-AC_CHECK_HEADERS(event2/event.h event2/dns.h event2/bufferevent_ssl.h)
+AC_CHECK_HEADERS(event2/event.h event2/dns.h)
 
 LIBS="$save_LIBS"
 LDFLAGS="$save_LDFLAGS"
@@ -726,8 +738,10 @@ fi
 dnl ============================================================
 dnl Check for libseccomp
 
-AC_CHECK_HEADERS([seccomp.h])
-AC_SEARCH_LIBS(seccomp_init, [seccomp])
+if test "x$enable_seccomp" != "xno"; then
+  AC_CHECK_HEADERS([seccomp.h])
+  AC_SEARCH_LIBS(seccomp_init, [seccomp])
+fi
 
 dnl ============================================================
 dnl We need an implementation of curve25519.
@@ -765,7 +779,7 @@ if test x$enable_curve25519 != xno; then
         ])],
 	[tor_cv_can_use_curve25519_donna_c64=yes],
         [tor_cv_can_use_curve25519_donna_c64=no],
-	[AC_COMPILE_IFELSE(
+	[AC_LINK_IFELSE(
           [AC_LANG_PROGRAM([dnl
         #include <stdint.h>
         typedef unsigned uint128_t __attribute__((mode(TI)));
@@ -885,6 +899,7 @@ AC_CHECK_HEADERS(
         sys/param.h \
         sys/prctl.h \
         sys/resource.h \
+        sys/select.h \
         sys/socket.h \
 	sys/sysctl.h \
         sys/syslimits.h \
@@ -1230,7 +1245,6 @@ if [[ $dmalloc -eq 1 ]]; then
   AC_CHECK_HEADERS(dmalloc.h, , AC_MSG_ERROR(dmalloc header file not found. Do you have the development files for dmalloc installed?))
   AC_SEARCH_LIBS(dmalloc_malloc, [dmallocth dmalloc], , AC_MSG_ERROR(Libdmalloc library not found. If you enable it you better have it installed.))
   AC_DEFINE(USE_DMALLOC, 1, [Debug memory allocation library])
-  AC_DEFINE(DMALLOC_FUNC_CHECK, 1, [Enable dmalloc's malloc function check])
   AC_CHECK_FUNCS(dmalloc_strdup dmalloc_strndup)
 fi
 
@@ -1557,10 +1571,11 @@ CPPFLAGS="$CPPFLAGS $TOR_CPPFLAGS_libevent $TOR_CPPFLAGS_openssl $TOR_CPPFLAGS_z
 AC_CONFIG_FILES([
         Doxyfile
         Makefile
-        contrib/suse/tor.sh
-        contrib/tor.logrotate
-        contrib/tor.sh
-        contrib/torctl
+        contrib/dist/suse/tor.sh
+        contrib/operator-tools/tor.logrotate
+        contrib/dist/tor.sh
+        contrib/dist/torctl
+        contrib/dist/tor.service
         src/config/torrc.sample
 ])
 
@@ -1582,6 +1597,6 @@ fi
 
 AC_OUTPUT
 
-if test -x /usr/bin/perl && test -x ./contrib/updateVersions.pl ; then
-  ./contrib/updateVersions.pl
+if test -x /usr/bin/perl && test -x ./scripts/maint/updateVersions.pl ; then
+  ./scripts/maint/updateVersions.pl
 fi

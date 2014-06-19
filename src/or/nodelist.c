@@ -1249,10 +1249,12 @@ router_set_status(const char *digest, int up)
     if (!up && node_is_me(node) && !net_is_disabled())
       log_warn(LD_NET, "We just marked ourself as down. Are your external "
                "addresses reachable?");
+
+    if (bool_neq(node->is_running, up))
+      router_dir_info_changed();
+
     node->is_running = up;
   }
-
-  router_dir_info_changed();
 }
 
 /** True iff, the last time we checked whether we had enough directory info
@@ -1510,8 +1512,8 @@ update_router_have_minimum_dir_info(void)
   }
 
   if (should_delay_dir_fetches(get_options(), &delay_fetches_msg)) {
-    log_notice(LD_DIR, "Delaying dir fetches: %s", delay_fetches_msg);
-    strlcpy(dir_info_status, "%s",  sizeof(dir_info_status));
+    log_notice(LD_DIR, "Delaying directory fetches: %s", delay_fetches_msg);
+    strlcpy(dir_info_status, delay_fetches_msg,  sizeof(dir_info_status));
     res = 0;
     goto done;
   }

@@ -261,7 +261,7 @@ directory_post_to_dirservers(uint8_t dir_purpose, uint8_t router_purpose,
                              size_t payload_len, size_t extrainfo_len)
 {
   const or_options_t *options = get_options();
-  int post_via_tor;
+  dir_indirection_t indirection;
   const smartlist_t *dirservers = router_get_trusted_dir_servers();
   int found = 0;
   const int exclude_self = (dir_purpose == DIR_PURPOSE_UPLOAD_VOTE ||
@@ -305,11 +305,19 @@ directory_post_to_dirservers(uint8_t dir_purpose, uint8_t router_purpose,
                  (int) extrainfo_len);
       }
       tor_addr_from_ipv4h(&ds_addr, ds->addr);
-      post_via_tor = purpose_needs_anonymity(dir_purpose, router_purpose) ||
-        !fascist_firewall_allows_address_dir(&ds_addr, ds->dir_port);
+      if (purpose_needs_anonymity(dir_purpose, router_purpose)) {
+        indirection = DIRIND_ANONYMOUS;
+      } else if (!fascist_firewall_allows_address_dir(&ds_addr,ds->dir_port)) {
+        if (fascist_firewall_allows_address_or(&ds_addr,ds->or_port))
+          indirection = DIRIND_ONEHOP;
+        else
+          indirection = DIRIND_ANONYMOUS;
+      } else {
+        indirection = DIRIND_DIRECT_CONN;
+      }
       directory_initiate_command_routerstatus(rs, dir_purpose,
                                               router_purpose,
-                                              post_via_tor,
+                                              indirection,
                                               NULL, payload, upload_len, 0);
   } SMARTLIST_FOREACH_END(ds);
   if (!found) {
@@ -337,8 +345,6 @@ should_use_directory_guards(const or_options_t *options)
    * nonstandard type, don't use directory guards. */
   if (options->DownloadExtraInfo || options->FetchDirInfoEarly ||
       options->FetchDirInfoExtraEarly || options->FetchUselessDescriptors)
-    return 0;
-  if (! options->PreferTunneledDirConns)
     return 0;
   return 1;
 }
@@ -834,6 +840,7 @@ directory_command_should_use_begindir(const or_options_t *options,
                                       int or_port, uint8_t router_purpose,
                                       dir_indirection_t indirection)
 {
+  (void) router_purpose;
   if (!or_port)
     return 0; /* We don't know an ORPort -- no chance. */
   if (indirection == DIRIND_DIRECT_CONN || indirection == DIRIND_ANON_DIRPORT)
@@ -842,9 +849,6 @@ directory_command_should_use_begindir(const or_options_t *options,
     if (!fascist_firewall_allows_address_or(addr, or_port) ||
         directory_fetches_from_authorities(options))
       return 0; /* We're firewalled or are acting like a relay -- also no. */
-  if (!options->TunnelDirConns &&
-      router_purpose != ROUTER_PURPOSE_BRIDGE)
-    return 0; /* We prefer to avoid using begindir conns. Fine. */
   return 1;
 }
 
@@ -2303,7 +2307,7 @@ write_http_response_header_impl(dir_connection_t *conn, ssize_t length,
   }
   if (cache_lifetime > 0) {
     char expbuf[RFC1123_TIME_LEN+1];
-    format_rfc1123_time(expbuf, now + cache_lifetime);
+    format_rfc1123_time(expbuf, (time_t)(now + cache_lifetime));
     /* We could say 'Cache-control: max-age=%d' here if we start doing
      * http/1.1 */
     tor_snprintf(cp, sizeof(tmp)-(cp-tmp),
@@ -3066,22 +3070,6 @@ directory_handle_command_get(dir_connection_t *conn, const char *headers,
     size_t len = strlen(robots);
     write_http_response_header(conn, len, 0, ROBOTS_CACHE_LIFETIME);
     connection_write_to_buf(robots, len, TO_CONN(conn));
-    goto done;
-  }
-
-  if (!strcmp(url,"/tor/dbg-stability.txt")) {
-    const char *stability;
-    size_t len;
-    if (options->BridgeAuthoritativeDir ||
-        ! authdir_mode_tests_reachability(options) ||
-        ! (stability = rep_hist_get_router_stability_doc(time(NULL)))) {
-      write_http_status_line(conn, 404, "Not found.");
-      goto done;
-    }
-
-    len = strlen(stability);
-    write_http_response_header(conn, len, 0, 0);
-    connection_write_to_buf(stability, len, TO_CONN(conn));
     goto done;
   }
 

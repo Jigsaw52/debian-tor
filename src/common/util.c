@@ -26,6 +26,7 @@
 #include "address.h"
 #include "sandbox.h"
 #include "backtrace.h"
+#include "util_process.h"
 
 #ifdef _WIN32
 #include <io.h>
@@ -303,7 +304,7 @@ tor_memdup_(const void *mem, size_t len DMALLOC_PARAMS)
 /** As tor_memdup(), but add an extra 0 byte at the end of the resulting
  * memory. */
 void *
-tor_memdup_nulterm(const void *mem, size_t len DMALLOC_PARAMS)
+tor_memdup_nulterm_(const void *mem, size_t len DMALLOC_PARAMS)
 {
   char *dup;
   tor_assert(len < SIZE_T_CEILING+1);
@@ -1516,7 +1517,7 @@ void
 format_iso_time_nospace_usec(char *buf, const struct timeval *tv)
 {
   tor_assert(tv);
-  format_iso_time_nospace(buf, tv->tv_sec);
+  format_iso_time_nospace(buf, (time_t)tv->tv_sec);
   tor_snprintf(buf+ISO_TIME_LEN, 8, ".%06d", (int)tv->tv_usec);
 }
 
@@ -1871,7 +1872,7 @@ check_private_dir(const char *dirname, cpd_check_t check,
   char *f;
 #ifndef _WIN32
   int mask;
-  struct passwd *pw = NULL;
+  const struct passwd *pw = NULL;
   uid_t running_uid;
   gid_t running_gid;
 #else
@@ -1918,7 +1919,7 @@ check_private_dir(const char *dirname, cpd_check_t check,
   if (effective_user) {
     /* Look up the user and group information.
      * If we have a problem, bail out. */
-    pw = getpwnam(effective_user);
+    pw = tor_getpwnam(effective_user);
     if (pw == NULL) {
       log_warn(LD_CONFIG, "Error setting configured user: %s not found",
                effective_user);
@@ -1932,13 +1933,13 @@ check_private_dir(const char *dirname, cpd_check_t check,
   }
 
   if (st.st_uid != running_uid) {
-    struct passwd *pw = NULL;
+    const struct passwd *pw = NULL;
     char *process_ownername = NULL;
 
-    pw = getpwuid(running_uid);
+    pw = tor_getpwuid(running_uid);
     process_ownername = pw ? tor_strdup(pw->pw_name) : tor_strdup("<unknown>");
 
-    pw = getpwuid(st.st_uid);
+    pw = tor_getpwuid(st.st_uid);
 
     log_warn(LD_FS, "%s is not owned by this user (%s, %d) but by "
         "%s (%d). Perhaps you are running Tor as the wrong user?",
@@ -2004,7 +2005,8 @@ write_str_to_file(const char *fname, const char *str, int bin)
 #ifdef _WIN32
   if (!bin && strchr(str, '\r')) {
     log_warn(LD_BUG,
-             "We're writing a text string that already contains a CR.");
+             "We're writing a text string that already contains a CR to %s",
+             escaped(fname));
   }
 #endif
   return write_bytes_to_file(fname, str, strlen(str), bin);
@@ -3628,13 +3630,7 @@ tor_terminate_process(process_handle_t *process_handle)
 {
 #ifdef _WIN32
   if (tor_get_exit_code(process_handle, 0, NULL) == PROCESS_EXIT_RUNNING) {
-    HANDLE handle;
-    /* If the signal is outside of what GenerateConsoleCtrlEvent can use,
-       attempt to open and terminate the process. */
-    handle = OpenProcess(PROCESS_ALL_ACCESS, FALSE,
-                         process_handle->pid.dwProcessId);
-    if (!handle)
-      return -1;
+    HANDLE handle = process_handle->pid.hProcess;
 
     if (!TerminateProcess(handle, 0))
       return -1;
@@ -3642,7 +3638,10 @@ tor_terminate_process(process_handle_t *process_handle)
       return 0;
   }
 #else /* Unix */
-  return kill(process_handle->pid, SIGTERM);
+  if (process_handle->waitpid_cb) {
+    /* We haven't got a waitpid yet, so we can just kill off the process. */
+    return kill(process_handle->pid, SIGTERM);
+  }
 #endif
 
   return -1;
@@ -3690,6 +3689,23 @@ process_handle_new(void)
 
   return out;
 }
+
+#ifndef _WIN32
+/** Invoked when a process that we've launched via tor_spawn_background() has
+ * been found to have terminated.
+ */
+static void
+process_handle_waitpid_cb(int status, void *arg)
+{
+  process_handle_t *process_handle = arg;
+
+  process_handle->waitpid_exit_status = status;
+  clear_waitpid_callback(process_handle->waitpid_cb);
+  if (process_handle->status == PROCESS_STATUS_RUNNING)
+    process_handle->status = PROCESS_STATUS_NOTRUNNING;
+  process_handle->waitpid_cb = 0;
+}
+#endif
 
 /**
  * @name child-process states
@@ -4007,6 +4023,10 @@ tor_spawn_background(const char *const filename, const char **argv,
             strerror(errno));
   }
 
+  process_handle->waitpid_cb = set_waitpid_callback(pid,
+                                                    process_handle_waitpid_cb,
+                                                    process_handle);
+
   process_handle->stderr_pipe = stderr_pipe[0];
   retval = close(stderr_pipe[1]);
 
@@ -4071,6 +4091,8 @@ tor_process_handle_destroy,(process_handle_t *process_handle,
 
   if (process_handle->stderr_handle)
     fclose(process_handle->stderr_handle);
+
+  clear_waitpid_callback(process_handle->waitpid_cb);
 #endif
 
   memset(process_handle, 0x0f, sizeof(process_handle_t));
@@ -4088,7 +4110,7 @@ tor_process_handle_destroy,(process_handle_t *process_handle,
  * probably not work in Tor, because waitpid() is called in main.c to reap any
  * terminated child processes.*/
 int
-tor_get_exit_code(const process_handle_t *process_handle,
+tor_get_exit_code(process_handle_t *process_handle,
                   int block, int *exit_code)
 {
 #ifdef _WIN32
@@ -4128,7 +4150,20 @@ tor_get_exit_code(const process_handle_t *process_handle,
   int stat_loc;
   int retval;
 
-  retval = waitpid(process_handle->pid, &stat_loc, block?0:WNOHANG);
+  if (process_handle->waitpid_cb) {
+    /* We haven't processed a SIGCHLD yet. */
+    retval = waitpid(process_handle->pid, &stat_loc, block?0:WNOHANG);
+    if (retval == process_handle->pid) {
+      clear_waitpid_callback(process_handle->waitpid_cb);
+      process_handle->waitpid_cb = NULL;
+      process_handle->waitpid_exit_status = stat_loc;
+    }
+  } else {
+    /* We already got a SIGCHLD for this process, and handled it. */
+    retval = process_handle->pid;
+    stat_loc = process_handle->waitpid_exit_status;
+  }
+
   if (!block && 0 == retval) {
     /* Process has not exited */
     return PROCESS_EXIT_RUNNING;
@@ -4539,6 +4574,30 @@ stream_status_to_string(enum stream_status stream_status)
   }
 }
 
+/* DOCDOC */
+static void
+log_portfw_spawn_error_message(const char *buf,
+                               const char *executable, int *child_status)
+{
+  /* Parse error message */
+  int retval, child_state, saved_errno;
+  retval = tor_sscanf(buf, SPAWN_ERROR_MESSAGE "%x/%x",
+                      &child_state, &saved_errno);
+  if (retval == 2) {
+    log_warn(LD_GENERAL,
+             "Failed to start child process \"%s\" in state %d: %s",
+             executable, child_state, strerror(saved_errno));
+    if (child_status)
+      *child_status = 1;
+  } else {
+    /* Failed to parse message from child process, log it as a
+       warning */
+    log_warn(LD_GENERAL,
+             "Unexpected message from port forwarding helper \"%s\": %s",
+             executable, buf);
+  }
+}
+
 #ifdef _WIN32
 
 /** Return a smartlist containing lines outputted from
@@ -4686,23 +4745,7 @@ log_from_pipe(FILE *stream, int severity, const char *executable,
 
     /* Check if buf starts with SPAWN_ERROR_MESSAGE */
     if (strcmpstart(buf, SPAWN_ERROR_MESSAGE) == 0) {
-      /* Parse error message */
-      int retval, child_state, saved_errno;
-      retval = tor_sscanf(buf, SPAWN_ERROR_MESSAGE "%x/%x",
-                          &child_state, &saved_errno);
-      if (retval == 2) {
-        log_warn(LD_GENERAL,
-                 "Failed to start child process \"%s\" in state %d: %s",
-                 executable, child_state, strerror(saved_errno));
-        if (child_status)
-          *child_status = 1;
-      } else {
-        /* Failed to parse message from child process, log it as a
-           warning */
-        log_warn(LD_GENERAL,
-                 "Unexpected message from port forwarding helper \"%s\": %s",
-                 executable, buf);
-      }
+      log_portfw_spawn_error_message(buf, executable, child_status);
     } else {
       log_fn(severity, LD_GENERAL, "Port forwarding helper says: %s", buf);
     }
@@ -4780,7 +4823,7 @@ get_string_from_pipe(FILE *stream, char *buf_out, size_t count)
 /** Parse a <b>line</b> from tor-fw-helper and issue an appropriate
  *  log message to our user. */
 static void
-handle_fw_helper_line(const char *line)
+handle_fw_helper_line(const char *executable, const char *line)
 {
   smartlist_t *tokens = smartlist_new();
   char *message = NULL;
@@ -4790,6 +4833,19 @@ handle_fw_helper_line(const char *line)
   const char *result = NULL;
   int port = 0;
   int success = 0;
+
+  if (strcmpstart(line, SPAWN_ERROR_MESSAGE) == 0) {
+    /* We need to check for SPAWN_ERROR_MESSAGE again here, since it's
+     * possible that it got sent after we tried to read it in log_from_pipe.
+     *
+     * XXX Ideally, we should be using one of stdout/stderr for the real
+     * output, and one for the output of the startup code.  We used to do that
+     * before cd05f35d2c.
+     */
+    int child_status;
+    log_portfw_spawn_error_message(line, executable, &child_status);
+    goto done;
+  }
 
   smartlist_split_string(tokens, line, NULL,
                          SPLIT_SKIP_SPACE|SPLIT_IGNORE_BLANK, -1);
@@ -4870,7 +4926,8 @@ handle_fw_helper_line(const char *line)
 /** Read what tor-fw-helper has to say in its stdout and handle it
  *  appropriately */
 static int
-handle_fw_helper_output(process_handle_t *process_handle)
+handle_fw_helper_output(const char *executable,
+                        process_handle_t *process_handle)
 {
   smartlist_t *fw_helper_output = NULL;
   enum stream_status stream_status = 0;
@@ -4885,7 +4942,7 @@ handle_fw_helper_output(process_handle_t *process_handle)
 
   /* Handle the lines we got: */
   SMARTLIST_FOREACH_BEGIN(fw_helper_output, char *, line) {
-    handle_fw_helper_line(line);
+    handle_fw_helper_line(executable, line);
     tor_free(line);
   } SMARTLIST_FOREACH_END(line);
 
@@ -5000,7 +5057,7 @@ tor_check_port_forwarding(const char *filename,
     stderr_status = log_from_pipe(child_handle->stderr_handle,
                                   LOG_INFO, filename, &retval);
 #endif
-    if (handle_fw_helper_output(child_handle) < 0) {
+    if (handle_fw_helper_output(filename, child_handle) < 0) {
       log_warn(LD_GENERAL, "Failed to handle fw helper output.");
       stdout_status = -1;
       retval = -1;
