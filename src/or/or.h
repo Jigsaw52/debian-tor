@@ -42,9 +42,6 @@
 #include <sys/param.h> /* FreeBSD needs this to know what version it is */
 #endif
 #include "torint.h"
-#ifdef HAVE_SYS_WAIT_H
-#include <sys/wait.h>
-#endif
 #ifdef HAVE_SYS_FCNTL_H
 #include <sys/fcntl.h>
 #endif
@@ -1488,13 +1485,14 @@ typedef struct or_connection_t {
 
   uint16_t link_proto; /**< What protocol version are we using? 0 for
                         * "none negotiated yet." */
-
+  uint16_t idle_timeout; /**< How long can this connection sit with no
+                          * circuits on it before we close it? Based on
+                          * IDLE_CIRCUIT_TIMEOUT_{NON,}CANONICAL and
+                          * on is_canonical, randomized. */
   or_handshake_state_t *handshake_state; /**< If we are setting this connection
                                           * up, state information to do so. */
 
   time_t timestamp_lastempty; /**< When was the outbuf last completely empty?*/
-  time_t timestamp_last_added_nonpadding; /** When did we last add a
-                                           * non-padding cell to the outbuf? */
 
   /* bandwidth* and *_bucket only used by ORs in OPEN state: */
   int bandwidthrate; /**< Bytes/s added to the bucket. (OPEN ORs only.) */
@@ -3231,16 +3229,29 @@ typedef struct or_circuit_rendinfo_s {
 /** Convert a circuit_t* to a pointer to the enclosing or_circuit_t.  Assert
  * if the cast is impossible. */
 static or_circuit_t *TO_OR_CIRCUIT(circuit_t *);
+static const or_circuit_t *CONST_TO_OR_CIRCUIT(const circuit_t *);
 /** Convert a circuit_t* to a pointer to the enclosing origin_circuit_t.
  * Assert if the cast is impossible. */
 static origin_circuit_t *TO_ORIGIN_CIRCUIT(circuit_t *);
+static const origin_circuit_t *CONST_TO_ORIGIN_CIRCUIT(const circuit_t *);
 
 static INLINE or_circuit_t *TO_OR_CIRCUIT(circuit_t *x)
 {
   tor_assert(x->magic == OR_CIRCUIT_MAGIC);
   return DOWNCAST(or_circuit_t, x);
 }
+static INLINE const or_circuit_t *CONST_TO_OR_CIRCUIT(const circuit_t *x)
+{
+  tor_assert(x->magic == OR_CIRCUIT_MAGIC);
+  return DOWNCAST(or_circuit_t, x);
+}
 static INLINE origin_circuit_t *TO_ORIGIN_CIRCUIT(circuit_t *x)
+{
+  tor_assert(x->magic == ORIGIN_CIRCUIT_MAGIC);
+  return DOWNCAST(origin_circuit_t, x);
+}
+static INLINE const origin_circuit_t *CONST_TO_ORIGIN_CIRCUIT(
+    const circuit_t *x)
 {
   tor_assert(x->magic == ORIGIN_CIRCUIT_MAGIC);
   return DOWNCAST(origin_circuit_t, x);
@@ -3873,10 +3884,6 @@ typedef struct {
                                         * testing our DNS server. */
   int EnforceDistinctSubnets; /**< If true, don't allow multiple routers in the
                                * same network zone in the same circuit. */
-  int TunnelDirConns; /**< If true, use BEGIN_DIR rather than BEGIN when
-                       * possible. */
-  int PreferTunneledDirConns; /**< If true, avoid dirservers that don't
-                               * support BEGIN_DIR, when possible. */
   int PortForwarding; /**< If true, use NAT-PMP or UPnP to automatically
                        * forward the DirPort and ORPort on the NAT device */
   char *PortForwardingHelper; /** < Filename or full path of the port
@@ -4960,8 +4967,6 @@ typedef struct dir_server_t {
 /** This node is to be chosen as a directory guard, so don't choose any
  * node that's currently a guard. */
 #define PDS_FOR_GUARD (1<<5)
-
-#define PDS_PREFER_TUNNELED_DIR_CONNS_ (1<<16)
 
 /** Possible ways to weight routers when choosing one randomly.  See
  * routerlist_sl_choose_by_bandwidth() for more information.*/

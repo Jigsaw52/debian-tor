@@ -58,6 +58,7 @@
 #define HT_NEXT_RMV(name, head, elm) name##_HT_NEXT_RMV((head), (elm))
 #define HT_CLEAR(name, head)         name##_HT_CLEAR(head)
 #define HT_INIT(name, head)          name##_HT_INIT(head)
+#define HT_REP_IS_BAD_(name, head)    name##_HT_REP_IS_BAD_(head)
 /* Helper: */
 static INLINE unsigned
 ht_improve_hash(unsigned h)
@@ -159,7 +160,7 @@ ht_string_hash(const char *s)
   }                                                                     \
   /* Return a pointer to the element in the table 'head' matching 'elm', \
    * or NULL if no such element exists */                               \
-  static INLINE struct type *                                           \
+  ATTR_UNUSED static INLINE struct type *                               \
   name##_HT_FIND(const struct name *head, struct type *elm)             \
   {                                                                     \
     struct type **p;                                                    \

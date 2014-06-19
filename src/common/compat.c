@@ -114,6 +114,12 @@
 /* Only use the linux prctl;  the IRIX prctl is totally different */
 #include <sys/prctl.h>
 #endif
+#ifdef TOR_UNIT_TESTS
+#if !defined(HAVE_USLEEP) && defined(HAVE_SYS_SELECT_H)
+/* as fallback implementation for tor_sleep_msec */
+#include <sys/select.h>
+#endif
+#endif
 
 #include "torlog.h"
 #include "util.h"
@@ -1702,6 +1708,106 @@ log_credential_status(void)
 }
 #endif
 
+#ifndef _WIN32
+/** Cached struct from the last getpwname() call we did successfully. */
+static struct passwd *passwd_cached = NULL;
+
+/** Helper: copy a struct passwd object.
+ *
+ * We only copy the fields pw_uid, pw_gid, pw_name, pw_dir.  Tor doesn't use
+ * any others, and I don't want to run into incompatibilities.
+ */
+static struct passwd *
+tor_passwd_dup(const struct passwd *pw)
+{
+  struct passwd *new_pw = tor_malloc_zero(sizeof(struct passwd));
+  if (pw->pw_name)
+    new_pw->pw_name = tor_strdup(pw->pw_name);
+  if (pw->pw_dir)
+    new_pw->pw_dir = tor_strdup(pw->pw_dir);
+  new_pw->pw_uid = pw->pw_uid;
+  new_pw->pw_gid = pw->pw_gid;
+
+  return new_pw;
+}
+
+/** Helper: free one of our cached 'struct passwd' values. */
+static void
+tor_passwd_free(struct passwd *pw)
+{
+  if (!pw)
+    return;
+
+  tor_free(pw->pw_name);
+  tor_free(pw->pw_dir);
+  tor_free(pw);
+}
+
+/** Wrapper around getpwnam() that caches result. Used so that we don't need
+ * to give the sandbox access to /etc/passwd.
+ *
+ * The following fields alone will definitely be copied in the output: pw_uid,
+ * pw_gid, pw_name, pw_dir.  Other fields are not present in cached values.
+ *
+ * When called with a NULL argument, this function clears storage associated
+ * with static variables it uses.
+ **/
+const struct passwd *
+tor_getpwnam(const char *username)
+{
+  struct passwd *pw;
+
+  if (username == NULL) {
+    tor_passwd_free(passwd_cached);
+    passwd_cached = NULL;
+    return NULL;
+  }
+
+  if ((pw = getpwnam(username))) {
+    tor_passwd_free(passwd_cached);
+    passwd_cached = tor_passwd_dup(pw);
+    log_notice(LD_GENERAL, "Caching new entry %s for %s",
+               passwd_cached->pw_name, username);
+    return pw;
+  }
+
+  /* Lookup failed */
+  if (! passwd_cached || ! passwd_cached->pw_name)
+    return NULL;
+
+  if (! strcmp(username, passwd_cached->pw_name))
+    return passwd_cached;
+
+  return NULL;
+}
+
+/** Wrapper around getpwnam() that can use cached result from
+ * tor_getpwnam(). Used so that we don't need to give the sandbox access to
+ * /etc/passwd.
+ *
+ * The following fields alone will definitely be copied in the output: pw_uid,
+ * pw_gid, pw_name, pw_dir.  Other fields are not present in cached values.
+ */
+const struct passwd *
+tor_getpwuid(uid_t uid)
+{
+  struct passwd *pw;
+
+  if ((pw = getpwuid(uid))) {
+    return pw;
+  }
+
+  /* Lookup failed */
+  if (! passwd_cached)
+    return NULL;
+
+  if (uid == passwd_cached->pw_uid)
+    return passwd_cached;
+
+  return NULL;
+}
+#endif
+
 /** Call setuid and setgid to run as <b>user</b> and switch to their
  * primary group.  Return 0 on success.  On failure, log and return -1.
  */
@@ -1709,7 +1815,7 @@ int
 switch_id(const char *user)
 {
 #ifndef _WIN32
-  struct passwd *pw = NULL;
+  const struct passwd *pw = NULL;
   uid_t old_uid;
   gid_t old_gid;
   static int have_already_switched_id = 0;
@@ -1730,7 +1836,7 @@ switch_id(const char *user)
   old_gid = getgid();
 
   /* Lookup the user and group information, if we have a problem, bail out. */
-  pw = getpwnam(user);
+  pw = tor_getpwnam(user);
   if (pw == NULL) {
     log_warn(LD_CONFIG, "Error setting configured user: %s not found", user);
     return -1;
@@ -1901,10 +2007,10 @@ tor_disable_debugger_attach(void)
 char *
 get_user_homedir(const char *username)
 {
-  struct passwd *pw;
+  const struct passwd *pw;
   tor_assert(username);
 
-  if (!(pw = getpwnam(username))) {
+  if (!(pw = tor_getpwnam(username))) {
     log_err(LD_CONFIG,"User \"%s\" not found.", username);
     return NULL;
   }
@@ -2429,6 +2535,12 @@ tor_pthread_helper_fn(void *_data)
   func(arg);
   return NULL;
 }
+/**
+ * A pthread attribute to make threads start detached.
+ */
+static pthread_attr_t attr_detached;
+/** True iff we've called tor_threads_init() */
+static int threads_initialized = 0;
 #endif
 
 /** Minimalist interface to run a void function in the background.  On
@@ -2452,12 +2564,12 @@ spawn_func(void (*func)(void *), void *data)
 #elif defined(USE_PTHREADS)
   pthread_t thread;
   tor_pthread_data_t *d;
+  if (PREDICT_UNLIKELY(!threads_initialized))
+    tor_threads_init();
   d = tor_malloc(sizeof(tor_pthread_data_t));
   d->data = data;
   d->func = func;
-  if (pthread_create(&thread,NULL,tor_pthread_helper_fn,d))
-    return -1;
-  if (pthread_detach(thread))
+  if (pthread_create(&thread,&attr_detached,tor_pthread_helper_fn,d))
     return -1;
   return 0;
 #else
@@ -2814,8 +2926,6 @@ tor_get_thread_id(void)
  * "reentrant" mutexes (i.e., once we can re-lock if we're already holding
  * them.) */
 static pthread_mutexattr_t attr_reentrant;
-/** True iff we've called tor_threads_init() */
-static int threads_initialized = 0;
 /** Initialize <b>mutex</b> so it can be locked.  Every mutex must be set
  * up with tor_mutex_init() or tor_mutex_new(); not both. */
 void
@@ -2959,6 +3069,8 @@ tor_threads_init(void)
   if (!threads_initialized) {
     pthread_mutexattr_init(&attr_reentrant);
     pthread_mutexattr_settype(&attr_reentrant, PTHREAD_MUTEX_RECURSIVE);
+    tor_assert(0==pthread_attr_init(&attr_detached));
+    tor_assert(0==pthread_attr_setdetachstate(&attr_detached, 1));
     threads_initialized = 1;
     set_main_thread();
   }
@@ -3447,6 +3559,26 @@ get_total_system_memory(size_t *mem_out)
 
   *mem_out = mem_cached = (size_t) m;
 
-  return -1;
+  return 0;
 }
+
+#ifdef TOR_UNIT_TESTS
+/** Delay for <b>msec</b> milliseconds.  Only used in tests. */
+void
+tor_sleep_msec(int msec)
+{
+#ifdef _WIN32
+  Sleep(msec);
+#elif defined(HAVE_USLEEP)
+  sleep(msec / 1000);
+  /* Some usleep()s hate sleeping more than 1 sec */
+  usleep((msec % 1000) * 1000);
+#elif defined(HAVE_SYS_SELECT_H)
+  struct timeval tv = { msec / 1000, (msec % 1000) * 1000};
+  select(0, NULL, NULL, NULL, &tv);
+#else
+  sleep(CEIL_DIV(msec, 1000));
+#endif
+}
+#endif
 
