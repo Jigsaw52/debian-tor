@@ -1,3 +1,11 @@
+tor (0.2.4.22-1~deb7u1) wheezy; urgency=medium
+
+  * Build for stable (re: #751977).
+  * Revert upstream changes to the default torrc to match what 0.2.3.25-1
+    from stable has (two minor changes in comments).
+
+ -- Peter Palfrader <weasel@debian.org>  Mon, 23 Jun 2014 15:16:39 +0200
+
 tor (0.2.4.22-1) unstable; urgency=medium
 
   * New upstream version.
