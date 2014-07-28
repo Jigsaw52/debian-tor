@@ -1,3 +1,9 @@
+tor (0.2.4.23-1) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Peter Palfrader <weasel@debian.org>  Mon, 28 Jul 2014 22:22:24 +0200
+
 tor (0.2.4.22-1) unstable; urgency=medium
 
   * New upstream version.
