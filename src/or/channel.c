@@ -19,6 +19,7 @@
 #include "circuitbuild.h"
 #include "circuitlist.h"
 #include "circuitstats.h"
+#include "config.h"
 #include "connection_or.h" /* For var_cell_free() */
 #include "circuitmux.h"
 #include "entrynodes.h"
@@ -3277,9 +3278,9 @@ channel_dump_statistics(channel_t *chan, int severity)
         " is %s, and gives a canonical description of \"%s\" and an "
         "actual description of \"%s\"",
         U64_PRINTF_ARG(chan->global_identifier),
-        remote_addr_str,
-        channel_get_canonical_remote_descr(chan),
-        actual);
+        safe_str(remote_addr_str),
+        safe_str(channel_get_canonical_remote_descr(chan)),
+        safe_str(actual));
     tor_free(remote_addr_str);
     tor_free(actual);
   } else {
@@ -3351,7 +3352,7 @@ channel_dump_statistics(channel_t *chan, int severity)
       U64_PRINTF_ARG(chan->timestamp_recv),
       U64_PRINTF_ARG(now - chan->timestamp_recv));
   tor_log(severity, LD_GENERAL,
-      " * Channel " U64_FORMAT " last trasmitted a cell "
+      " * Channel " U64_FORMAT " last transmitted a cell "
       "at " U64_FORMAT " (" U64_FORMAT " seconds ago)",
       U64_PRINTF_ARG(chan->global_identifier),
       U64_PRINTF_ARG(chan->timestamp_xmit),
