@@ -1,4 +1,4 @@
-tor (0.2.4.23-1~deb7u1) wheezy; urgency=high
+tor (0.2.4.23-1~deb7u1) wheezy-security; urgency=high
 
   * New upstream version, built for wheezy:
     - Clients will no longer use CREATE_FAST cells for the first hop of their
@@ -11,7 +11,7 @@ tor (0.2.4.23-1~deb7u1) wheezy; urgency=high
       implementation.
     - Warn and drop the circuit if we receive an inbound 'relay early' cell.
 
- -- Peter Palfrader <weasel@debian.org>  Wed, 30 Jul 2014 21:07:02 +0200
+ -- Peter Palfrader <weasel@debian.org>  Wed, 30 Jul 2014 23:01:22 +0200
 
 tor (0.2.4.22-1~deb7u1) wheezy; urgency=medium
 
