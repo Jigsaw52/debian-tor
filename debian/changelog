@@ -1,3 +1,12 @@
+tor (0.2.4.23-2) unstable; urgency=low
+
+  * Revert upstream changes to the default torrc to match what the 0.2.4.22
+    currently in Debian wheezy has (two minor changes in comments).  Add
+    this patch to this version so that we avoid future dpkg conffile prompts
+    when updating from different trees (at the cost of one now).
+
+ -- Peter Palfrader <weasel@debian.org>  Thu, 31 Jul 2014 10:08:30 +0200
+
 tor (0.2.4.23-1) unstable; urgency=medium
 
   * New upstream version.
