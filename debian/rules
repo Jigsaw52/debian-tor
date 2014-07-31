@@ -48,9 +48,9 @@ override_dh_install:
 
 	mv debian/tor/etc/tor/torrc.sample debian/tor/etc/tor/torrc
 
-	cp debian/tor.apparmor-profile             debian/tor/etc/apparmor.d/system_tor
-	cp debian/tor.apparmor-profile.abstraction debian/tor/etc/apparmor.d/abstractions/tor
-	dh_apparmor --profile-name=system_tor -ptor
+	# cp debian/tor.apparmor-profile             debian/tor/etc/apparmor.d/system_tor
+	# cp debian/tor.apparmor-profile.abstraction debian/tor/etc/apparmor.d/abstractions/tor
+	# dh_apparmor --profile-name=system_tor -ptor
 
 override_dh_installdocs:
 	dh_installdocs -ptor-dbg --link-doc=tor
