@@ -2,8 +2,10 @@ tor (0.2.4.23-1~deb6u1) squeeze-lts; urgency=low
 
   * Build for squeeze.
   * Remove apparmor support on squeeze.
+  * Manually clean up old /etc/tor/tor-tsocks.conf conffile (re: #705785),
+    so we can downgrade the debhelper build dependency to >= 8.
 
- -- Peter Palfrader <weasel@debian.org>  Thu, 31 Jul 2014 15:22:05 +0200
+ -- Peter Palfrader <weasel@debian.org>  Thu, 31 Jul 2014 15:36:51 +0200
 
 tor (0.2.4.23-1~deb7u1) wheezy-security; urgency=high
 
