@@ -1,3 +1,9 @@
+tor (0.2.4.23-1~deb6u1) squeeze-lts; urgency=low
+
+  * Build for squeeze.
+
+ -- Peter Palfrader <weasel@debian.org>  Thu, 31 Jul 2014 15:02:20 +0200
+
 tor (0.2.4.23-1~deb7u1) wheezy-security; urgency=high
 
   * New upstream version, built for wheezy:
