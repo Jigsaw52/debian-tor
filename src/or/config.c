@@ -238,6 +238,7 @@ static config_var_t option_vars_[] = {
   V(ExtendAllowPrivateAddresses, BOOL,     "0"),
   VPORT(ExtORPort,               LINELIST, NULL),
   V(ExtORPortCookieAuthFile,     STRING,   NULL),
+  V(ExtORPortCookieAuthFileGroupReadable, BOOL, "0"),
   V(ExtraInfoStatistics,         BOOL,     "1"),
   V(FallbackDir,                 LINELIST, NULL),
 
@@ -1931,7 +1932,8 @@ config_parse_commandline(int argc, char **argv, int ignore_errors,
     }
 
     param = tor_malloc_zero(sizeof(config_line_t));
-    param->key = is_cmdline ? tor_strdup(argv[i]) : tor_strdup(s);
+    param->key = is_cmdline ? tor_strdup(argv[i]) :
+                   tor_strdup(config_expand_abbrev(&options_format, s, 1, 1));
     param->value = arg;
     param->command = command;
     param->next = NULL;
@@ -2561,6 +2563,13 @@ options_validate(or_options_t *old_options, or_options_t *options,
   if (options->RunAsDaemon && torrc_fname && path_is_relative(torrc_fname))
     REJECT("Can't use a relative path to torrc when RunAsDaemon is set.");
 #endif
+
+  if (server_mode(options) && options->RendConfigLines)
+    log_warn(LD_CONFIG,
+        "Tor is currently configured as a relay and a hidden service. "
+        "That's not very secure: you should probably run your hidden service "
+        "in a separate Tor process, at least -- see "
+        "https://trac.torproject.org/8742");
 
   /* XXXX require that the only port not be DirPort? */
   /* XXXX require that at least one port be listened-upon. */
@@ -4818,8 +4827,8 @@ parse_client_transport_line(const or_options_t *options,
 
   if (is_managed) { /* managed */
     if (!validate_only && is_useless_proxy) {
-      log_notice(LD_GENERAL, "Pluggable transport proxy (%s) does not provide "
-                 "any needed transports and will not be launched.", line);
+      log_info(LD_GENERAL, "Pluggable transport proxy (%s) does not provide "
+               "any needed transports and will not be launched.", line);
     }
 
     /* If we are not just validating, use the rest of the line as the
@@ -6824,11 +6833,14 @@ config_maybe_load_geoip_files_(const or_options_t *options,
  *  in <b>cookie_out</b>.
  *  Then write it down to <b>fname</b> and prepend it with <b>header</b>.
  *
+ *  If <b>group_readable</b> is set, set <b>fname</b> to be readable
+ *  by the default GID.
+ *
  *  If the whole procedure was successful, set
  *  <b>cookie_is_set_out</b> to True. */
 int
 init_cookie_authentication(const char *fname, const char *header,
-                           int cookie_len,
+                           int cookie_len, int group_readable,
                            uint8_t **cookie_out, int *cookie_is_set_out)
 {
   char cookie_file_str_len = strlen(header) + cookie_len;
@@ -6860,6 +6872,16 @@ init_cookie_authentication(const char *fname, const char *header,
     log_warn(LD_FS,"Error writing auth cookie to %s.", escaped(fname));
     goto done;
   }
+
+#ifndef _WIN32
+  if (group_readable) {
+    if (chmod(fname, 0640)) {
+      log_warn(LD_FS,"Unable to make %s group-readable.", escaped(fname));
+    }
+  }
+#else
+  (void) group_readable;
+#endif
 
   /* Success! */
   log_info(LD_GENERAL, "Generated auth cookie file in '%s'.", escaped(fname));

@@ -582,7 +582,7 @@ send_control_event_string,(uint16_t event, event_format_t which,
         conn->state == CONTROL_CONN_STATE_OPEN) {
       control_connection_t *control_conn = TO_CONTROL_CONN(conn);
 
-      if (control_conn->event_mask & (1<<event)) {
+      if (control_conn->event_mask & (((event_mask_t)1)<<event)) {
         int is_err = 0;
         connection_write_to_buf(msg, strlen(msg), TO_CONN(control_conn));
         if (event == EVENT_ERR_MSG)
@@ -950,7 +950,7 @@ handle_control_setevents(control_connection_t *conn, uint32_t len,
                          const char *body)
 {
   int event_code = -1;
-  uint32_t event_mask = 0;
+  event_mask_t event_mask = 0;
   smartlist_t *events = smartlist_new();
 
   (void) len;
@@ -978,7 +978,7 @@ handle_control_setevents(control_connection_t *conn, uint32_t len,
           return 0;
         }
       }
-      event_mask |= (1 << event_code);
+      event_mask |= (((event_mask_t)1) << event_code);
     }
   SMARTLIST_FOREACH_END(ev);
   SMARTLIST_FOREACH(events, char *, e, tor_free(e));
@@ -2639,7 +2639,7 @@ handle_control_attachstream(control_connection_t *conn, uint32_t len,
   /* Is this a single hop circuit? */
   if (circ && (circuit_get_cpath_len(circ)<2 || hop==1)) {
     const node_t *node = NULL;
-    char *exit_digest;
+    char *exit_digest = NULL;
     if (circ->build_state &&
         circ->build_state->chosen_exit &&
         !tor_digest_is_zero(circ->build_state->chosen_exit->identity_digest)) {
@@ -2654,6 +2654,7 @@ handle_control_attachstream(control_connection_t *conn, uint32_t len,
       "551 Can't attach stream to this one-hop circuit.\r\n", conn);
       return 0;
     }
+    tor_assert(exit_digest);
     ap_conn->chosen_exit_name = tor_strdup(hex_str(exit_digest, DIGEST_LEN));
   }
 
@@ -2879,7 +2880,7 @@ handle_control_resolve(control_connection_t *conn, uint32_t len,
   int is_reverse = 0;
   (void) len; /* body is nul-terminated; it's safe to ignore the length */
 
-  if (!(conn->event_mask & ((uint32_t)1L<<EVENT_ADDRMAP))) {
+  if (!(conn->event_mask & (((event_mask_t)1)<<EVENT_ADDRMAP))) {
     log_warn(LD_CONTROL, "Controller asked us to resolve an address, but "
              "isn't listening for ADDRMAP events.  It probably won't see "
              "the answer.");
@@ -4666,6 +4667,7 @@ init_control_cookie_authentication(int enabled)
   fname = get_controller_cookie_file_name();
   retval = init_cookie_authentication(fname, "", /* no header */
                                       AUTHENTICATION_COOKIE_LEN,
+                                   get_options()->CookieAuthFileGroupReadable,
                                       &authentication_cookie,
                                       &authentication_cookie_is_set);
   tor_free(fname);
@@ -4920,7 +4922,7 @@ MOCK_IMPL(void,
                                             or_connection_t *or_conn))
 {
   int status = bootstrap_percent;
-  const char *tag, *summary;
+  const char *tag = "", *summary = "";
   char buf[BOOTSTRAP_MSG_LEN];
   const char *recommendation = "ignore";
   int severity;
