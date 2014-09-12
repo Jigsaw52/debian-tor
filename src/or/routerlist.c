@@ -1365,7 +1365,7 @@ router_pick_trusteddirserver(dirinfo_type_t type, int flags)
   return router_pick_dirserver_generic(trusted_dir_servers, type, flags);
 }
 
-/** Try to find a running fallback directory Flags are as for
+/** Try to find a running fallback directory. Flags are as for
  * router_pick_directory_server.
  */
 const routerstatus_t *
@@ -1374,7 +1374,7 @@ router_pick_fallback_dirserver(dirinfo_type_t type, int flags)
   return router_pick_dirserver_generic(fallback_dir_servers, type, flags);
 }
 
-/** Try to find a running fallback directory Flags are as for
+/** Try to find a running fallback directory. Flags are as for
  * router_pick_directory_server.
  */
 static const routerstatus_t *
@@ -4938,7 +4938,7 @@ routerlist_assert_ok(const routerlist_t *rl)
   } SMARTLIST_FOREACH_END(r);
   SMARTLIST_FOREACH_BEGIN(rl->old_routers, signed_descriptor_t *, sd) {
     r2 = rimap_get(rl->identity_map, sd->identity_digest);
-    tor_assert(sd != &(r2->cache_info));
+    tor_assert(!r2 || sd != &(r2->cache_info));
     sd2 = sdmap_get(rl->desc_digest_map, sd->signed_descriptor_digest);
     tor_assert(sd == sd2);
     tor_assert(sd->routerlist_index == sd_sl_idx);

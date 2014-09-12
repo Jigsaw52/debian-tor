@@ -2682,6 +2682,14 @@ int
 channel_send_destroy(circid_t circ_id, channel_t *chan, int reason)
 {
   tor_assert(chan);
+  if (circ_id == 0) {
+    log_warn(LD_BUG, "Attempted to send a destroy cell for circID 0 "
+             "on a channel " U64_FORMAT " at %p in state %s (%d)",
+             U64_PRINTF_ARG(chan->global_identifier),
+             chan, channel_state_to_string(chan->state),
+             chan->state);
+    return 0;
+  }
 
   /* Check to make sure we can send on this channel first */
   if (!(chan->state == CHANNEL_STATE_CLOSING ||
@@ -3749,6 +3757,23 @@ channel_mark_local(channel_t *chan)
   tor_assert(chan);
 
   chan->is_local = 1;
+}
+
+/**
+ * Mark a channel as remote
+ *
+ * This internal-only function should be called by the lower layer if the
+ * channel is not to a local address but has previously been marked local.
+ * See channel_is_local() above or the description of the is_local bit in
+ * channel.h
+ */
+
+void
+channel_mark_remote(channel_t *chan)
+{
+  tor_assert(chan);
+
+  chan->is_local = 0;
 }
 
 /**
