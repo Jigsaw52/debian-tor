@@ -1,3 +1,9 @@
+tor (0.2.5.8-rc-1) unstable; urgency=medium
+
+  * New upstream version.  Upload to unstable.
+
+ -- Peter Palfrader <weasel@debian.org>  Tue, 23 Sep 2014 11:06:10 +0200
+
 tor (0.2.5.7-rc-1) experimental; urgency=medium
 
   * New upstream version.
