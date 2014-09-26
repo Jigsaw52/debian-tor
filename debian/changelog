@@ -1,6 +1,6 @@
 tor (0.2.4.24-1) wheezy; urgency=low
 
-  * New upstream version:
+  * New upstream version, built for stable (re: #762587):
     - Use correct byte order when sending the address of the chosen rendezvous
       point to a hidden service.  This bug meant that clients were leaking to
       the hidden service whether they were on a little-endian (common) or
@@ -9,7 +9,7 @@ tor (0.2.4.24-1) wheezy; urgency=low
     - Update geoip and geoip6 to the August 7 2014 Maxmind GeoLite2
       Country database.
 
- -- Peter Palfrader <weasel@debian.org>  Fri, 26 Sep 2014 15:39:50 +0200
+ -- Peter Palfrader <weasel@debian.org>  Fri, 26 Sep 2014 15:40:38 +0200
 
 tor (0.2.4.23-1~deb7u1) wheezy-security; urgency=high
 
