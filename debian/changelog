@@ -1,4 +1,4 @@
-tor (0.2.4.24-1~deb7u1) wheezy; urgency=low
+tor (0.2.4.24-1) wheezy; urgency=low
 
   * New upstream version:
     - Use correct byte order when sending the address of the chosen rendezvous
@@ -9,7 +9,7 @@ tor (0.2.4.24-1~deb7u1) wheezy; urgency=low
     - Update geoip and geoip6 to the August 7 2014 Maxmind GeoLite2
       Country database.
 
- -- Peter Palfrader <weasel@debian.org>  Fri, 26 Sep 2014 14:27:18 +0200
+ -- Peter Palfrader <weasel@debian.org>  Fri, 26 Sep 2014 15:39:50 +0200
 
 tor (0.2.4.23-1~deb7u1) wheezy-security; urgency=high
 
