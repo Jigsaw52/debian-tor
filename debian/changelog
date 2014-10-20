@@ -1,10 +1,14 @@
-tor (0.2.5.8-rc-2) unstable; urgency=medium
+tor (0.2.5.9-rc-1) unstable; urgency=medium
 
+  * New upstream version.
+    - Disabled SSLv3 unconditionally.  As a by-product, this means
+      that we no longer die in SSLv3 cleanup code in what is likely
+      an openssl bug introduced in 1.0.1i (closes: 765968).
   * logrotate script: call service tor reload instead of
     /etc/init.d/tor reload.  Now redirect stderr to /dev/null in
     addition to stdout (closes: #765407).
 
- -- Peter Palfrader <weasel@debian.org>  Mon, 20 Oct 2014 17:59:23 +0200
+ -- Peter Palfrader <weasel@debian.org>  Mon, 20 Oct 2014 18:05:55 +0200
 
 tor (0.2.5.8-rc-1) unstable; urgency=medium
 
