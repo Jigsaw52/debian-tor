@@ -1,3 +1,11 @@
+tor (0.2.5.8-rc-2) unstable; urgency=medium
+
+  * logrotate script: call service tor reload instead of
+    /etc/init.d/tor reload.  Now redirect stderr to /dev/null in
+    addition to stdout (closes: #765407).
+
+ -- Peter Palfrader <weasel@debian.org>  Mon, 20 Oct 2014 17:59:23 +0200
+
 tor (0.2.5.8-rc-1) unstable; urgency=medium
 
   * New upstream version.  Upload to unstable.
