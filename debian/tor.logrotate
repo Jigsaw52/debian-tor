@@ -8,6 +8,6 @@
 	create 0640 debian-tor adm
 	sharedscripts
 	postrotate
-		service tor reload > /dev/null 2>&1
+		invoke-rc.d tor reload > /dev/null
 	endscript
 }

@@ -4,11 +4,11 @@ tor (0.2.5.9-rc-1) unstable; urgency=medium
     - Disabled SSLv3 unconditionally.  As a by-product, this means
       that we no longer die in SSLv3 cleanup code in what is likely
       an openssl bug introduced in 1.0.1j (closes: 765968).
-  * logrotate script: call service tor reload instead of
-    /etc/init.d/tor reload.  Now redirect stderr to /dev/null in
-    addition to stdout (closes: #765407).
+  * logrotate script: call invoke-rc.d tor reload instead of
+    /etc/init.d/tor reload.  This way, if tor is properly disabled, we will
+    not try to reload tor. (closes: #765407).
 
- -- Peter Palfrader <weasel@debian.org>  Mon, 20 Oct 2014 19:35:29 +0200
+ -- Peter Palfrader <weasel@debian.org>  Mon, 20 Oct 2014 21:01:01 +0200
 
 tor (0.2.5.8-rc-1) unstable; urgency=medium
 
