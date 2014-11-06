@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -448,9 +448,10 @@ trusted_dirs_flush_certs_to_disk(void)
   trusted_dir_servers_certs_changed = 0;
 }
 
-/** Remove all v3 authority certificates that have been superseded for more
- * than 48 hours.  (If the most recent cert was published more than 48 hours
- * ago, then we aren't going to get any consensuses signed with older
+/** Remove all expired v3 authority certificates that have been superseded for
+ * more than 48 hours or, if not expired, that were published more than 7 days
+ * before being superseded. (If the most recent cert was published more than 48
+ * hours ago, then we aren't going to get any consensuses signed with older
  * keys.) */
 static void
 trusted_dirs_remove_old_certs(void)
@@ -474,6 +475,8 @@ trusted_dirs_remove_old_certs(void)
         time_t cert_published;
         if (newest == cert)
           continue;
+        /* resolve spurious clang shallow analysis null pointer errors */
+        tor_assert(cert);
         expired = now > cert->expires;
         cert_published = cert->cache_info.published_on;
         /* Store expired certs for 48 hours after a newer arrives;
@@ -488,6 +491,7 @@ trusted_dirs_remove_old_certs(void)
       } SMARTLIST_FOREACH_END(cert);
     }
   } DIGESTMAP_FOREACH_END;
+#undef DEAD_CERT_LIFETIME
 #undef OLD_CERT_LIFETIME
 
   trusted_dirs_flush_certs_to_disk();
@@ -1438,7 +1442,7 @@ router_pick_directory_server_impl(dirinfo_type_t type, int flags)
 
   /* Find all the running dirservers we know about. */
   SMARTLIST_FOREACH_BEGIN(nodelist_get_list(), const node_t *, node) {
-    int is_trusted;
+    int is_trusted, is_trusted_extrainfo;
     int is_overloaded;
     tor_addr_t addr;
     const routerstatus_t *status = node->rs;
@@ -1448,13 +1452,13 @@ router_pick_directory_server_impl(dirinfo_type_t type, int flags)
 
     if (!node->is_running || !status->dir_port || !node->is_valid)
       continue;
-    if (node->is_bad_directory)
-      continue;
     if (requireother && router_digest_is_me(node->identity))
       continue;
     is_trusted = router_digest_is_trusted_dir(node->identity);
+    is_trusted_extrainfo = router_digest_is_trusted_dir_type(
+                           node->identity, EXTRAINFO_DIRINFO);
     if ((type & EXTRAINFO_DIRINFO) &&
-        !router_supports_extrainfo(node->identity, 0))
+        !router_supports_extrainfo(node->identity, is_trusted_extrainfo))
       continue;
     if ((type & MICRODESC_DIRINFO) && !is_trusted &&
         !node->rs->version_supports_microdesc_cache)
@@ -1530,7 +1534,7 @@ dirserver_choose_by_weight(const smartlist_t *servers, double authority_weight)
   u64_dbl_t *weights;
   const dir_server_t *ds;
 
-  weights = tor_malloc(sizeof(u64_dbl_t) * n);
+  weights = tor_calloc(sizeof(u64_dbl_t), n);
   for (i = 0; i < n; ++i) {
     ds = smartlist_get(servers, i);
     weights[i].dbl = ds->weight;
@@ -1802,15 +1806,16 @@ scale_array_elements_to_u64(u64_dbl_t *entries, int n_entries,
                             uint64_t *total_out)
 {
   double total = 0.0;
-  double scale_factor;
+  double scale_factor = 0.0;
   int i;
   /* big, but far away from overflowing an int64_t */
-#define SCALE_TO_U64_MAX (INT64_MAX / 4)
+#define SCALE_TO_U64_MAX ((int64_t) (INT64_MAX / 4))
 
   for (i = 0; i < n_entries; ++i)
     total += entries[i].dbl;
 
-  scale_factor = SCALE_TO_U64_MAX / total;
+  if (total > 0.0)
+    scale_factor = SCALE_TO_U64_MAX / total;
 
   for (i = 0; i < n_entries; ++i)
     entries[i].u64 = tor_llround(entries[i].dbl * scale_factor);
@@ -2038,7 +2043,7 @@ compute_weighted_bandwidths(const smartlist_t *sl,
   Web /= weight_scale;
   Wdb /= weight_scale;
 
-  bandwidths = tor_malloc_zero(sizeof(u64_dbl_t)*smartlist_len(sl));
+  bandwidths = tor_calloc(sizeof(u64_dbl_t), smartlist_len(sl));
 
   // Cycle through smartlist and total the bandwidth.
   SMARTLIST_FOREACH_BEGIN(sl, const node_t *, node) {
@@ -2185,7 +2190,7 @@ smartlist_choose_node_by_bandwidth(const smartlist_t *sl,
 
   /* First count the total bandwidth weight, and make a list
    * of each value.  We use UINT64_MAX to indicate "unknown". */
-  bandwidths = tor_malloc_zero(sizeof(u64_dbl_t)*smartlist_len(sl));
+  bandwidths = tor_calloc(sizeof(u64_dbl_t), smartlist_len(sl));
   fast_bits = bitarray_init_zero(smartlist_len(sl));
   exit_bits = bitarray_init_zero(smartlist_len(sl));
   guard_bits = bitarray_init_zero(smartlist_len(sl));
@@ -2197,7 +2202,7 @@ smartlist_choose_node_by_bandwidth(const smartlist_t *sl,
     uint32_t this_bw = 0;
     i = node_sl_idx;
 
-    is_exit = node->is_exit;
+    is_exit = node_is_good_exit(node);
     is_guard = node->is_possible_guard;
     if (node->rs) {
       if (node->rs->has_bandwidth) {
@@ -2529,7 +2534,7 @@ router_is_named(const routerinfo_t *router)
 
 /** Return true iff <b>digest</b> is the digest of the identity key of a
  * trusted directory matching at least one bit of <b>type</b>.  If <b>type</b>
- * is zero, any authority is okay. */
+ * is zero (NO_DIRINFO), or ALL_DIRINFO, any authority is okay. */
 int
 router_digest_is_trusted_dir_type(const char *digest, dirinfo_type_t type)
 {
@@ -2610,8 +2615,8 @@ router_get_by_descriptor_digest(const char *digest)
 /** Return the signed descriptor for the router in our routerlist whose
  * 20-byte extra-info digest is <b>digest</b>.  Return NULL if no such router
  * is known. */
-signed_descriptor_t *
-router_get_by_extrainfo_digest(const char *digest)
+MOCK_IMPL(signed_descriptor_t *,
+router_get_by_extrainfo_digest,(const char *digest))
 {
   tor_assert(digest);
 
@@ -2932,12 +2937,12 @@ routerlist_insert(routerlist_t *rl, routerinfo_t *ri)
 }
 
 /** Adds the extrainfo_t <b>ei</b> to the routerlist <b>rl</b>, if there is a
- * corresponding router in rl-\>routers or rl-\>old_routers.  Return true iff
- * we actually inserted <b>ei</b>.  Free <b>ei</b> if it isn't inserted. */
-static int
-extrainfo_insert(routerlist_t *rl, extrainfo_t *ei)
+ * corresponding router in rl-\>routers or rl-\>old_routers.  Return the status
+ * of inserting <b>ei</b>.  Free <b>ei</b> if it isn't inserted. */
+MOCK_IMPL(STATIC was_router_added_t,
+extrainfo_insert,(routerlist_t *rl, extrainfo_t *ei))
 {
-  int r = 0;
+  was_router_added_t r;
   routerinfo_t *ri = rimap_get(rl->identity_map,
                                ei->cache_info.identity_digest);
   signed_descriptor_t *sd =
@@ -2951,9 +2956,12 @@ extrainfo_insert(routerlist_t *rl, extrainfo_t *ei)
 
   if (!ri) {
     /* This router is unknown; we can't even verify the signature. Give up.*/
+    r = ROUTER_NOT_IN_CONSENSUS;
     goto done;
   }
   if (routerinfo_incompatible_with_extrainfo(ri, ei, sd, NULL)) {
+    r = (ri->cache_info.extrainfo_is_bogus) ?
+      ROUTER_BAD_EI : ROUTER_NOT_IN_CONSENSUS;
     goto done;
   }
 
@@ -2963,7 +2971,7 @@ extrainfo_insert(routerlist_t *rl, extrainfo_t *ei)
   ei_tmp = eimap_set(rl->extra_info_map,
                      ei->cache_info.signed_descriptor_digest,
                      ei);
-  r = 1;
+  r = ROUTER_ADDED_SUCCESSFULLY;
   if (ei_tmp) {
     rl->extrainfo_store.bytes_dropped +=
       ei_tmp->cache_info.signed_descriptor_len;
@@ -2971,7 +2979,7 @@ extrainfo_insert(routerlist_t *rl, extrainfo_t *ei)
   }
 
  done:
-  if (r == 0)
+  if (r != ROUTER_ADDED_SUCCESSFULLY)
     extrainfo_free(ei);
 
 #ifdef DEBUG_ROUTERLIST
@@ -3246,7 +3254,7 @@ routerlist_reparse_old(routerlist_t *rl, signed_descriptor_t *sd)
 
   ri = router_parse_entry_from_string(body,
                          body+sd->signed_descriptor_len+sd->annotations_len,
-                         0, 1, NULL);
+                         0, 1, NULL, NULL);
   if (!ri)
     return NULL;
   memcpy(&ri->cache_info, sd, sizeof(signed_descriptor_t));
@@ -3290,6 +3298,14 @@ routerlist_reset_warnings(void)
   smartlist_clear(warned_nicknames); /* now the list is empty. */
 
   networkstatus_reset_warnings();
+}
+
+/** Return 1 if the signed descriptor of this router is older than
+ *  <b>seconds</b> seconds.  Otherwise return 0. */
+MOCK_IMPL(int,
+router_descriptor_is_older_than,(const routerinfo_t *router, int seconds))
+{
+  return router->cache_info.published_on < approx_time() - seconds;
 }
 
 /** Add <b>router</b> to the routerlist, if we don't already have it.  Replace
@@ -3461,10 +3477,10 @@ router_add_to_routerlist(routerinfo_t *router, const char **msg,
   }
 
   if (!in_consensus && from_cache &&
-      router->cache_info.published_on < time(NULL) - OLD_ROUTER_DESC_MAX_AGE) {
+      router_descriptor_is_older_than(router, OLD_ROUTER_DESC_MAX_AGE)) {
     *msg = "Router descriptor was really old.";
     routerinfo_free(router);
-    return ROUTER_WAS_NOT_NEW;
+    return ROUTER_WAS_TOO_OLD;
   }
 
   /* We haven't seen a router with this identity before. Add it to the end of
@@ -3485,21 +3501,18 @@ was_router_added_t
 router_add_extrainfo_to_routerlist(extrainfo_t *ei, const char **msg,
                                    int from_cache, int from_fetch)
 {
-  int inserted;
+  was_router_added_t inserted;
   (void)from_fetch;
   if (msg) *msg = NULL;
   /*XXXX023 Do something with msg */
 
   inserted = extrainfo_insert(router_get_routerlist(), ei);
 
-  if (inserted && !from_cache)
+  if (WRA_WAS_ADDED(inserted) && !from_cache)
     signed_desc_append_to_journal(&ei->cache_info,
                                   &routerlist->extrainfo_store);
 
-  if (inserted)
-    return ROUTER_ADDED_SUCCESSFULLY;
-  else
-    return ROUTER_BAD_EI;
+  return inserted;
 }
 
 /** Sorting helper: return &lt;0, 0, or &gt;0 depending on whether the
@@ -3569,9 +3582,9 @@ routerlist_remove_old_cached_routers_with_id(time_t now,
     n_extra = n - mdpr;
   }
 
-  lifespans = tor_malloc_zero(sizeof(struct duration_idx_t)*n);
-  rmv = tor_malloc_zero(sizeof(uint8_t)*n);
-  must_keep = tor_malloc_zero(sizeof(uint8_t)*n);
+  lifespans = tor_calloc(sizeof(struct duration_idx_t), n);
+  rmv = tor_calloc(sizeof(uint8_t), n);
+  must_keep = tor_calloc(sizeof(uint8_t), n);
   /* Set lifespans to contain the lifespan and index of each server. */
   /* Set rmv[i-lo]=1 if we're going to remove a server for being too old. */
   for (i = lo; i <= hi; ++i) {
@@ -3794,7 +3807,8 @@ router_load_single_router(const char *s, uint8_t purpose, int cache,
                "@source controller\n"
                "@purpose %s\n", router_purpose_to_string(purpose));
 
-  if (!(ri = router_parse_entry_from_string(s, NULL, 1, 0, annotation_buf))) {
+  if (!(ri = router_parse_entry_from_string(s, NULL, 1, 0,
+                                            annotation_buf, NULL))) {
     log_warn(LD_DIR, "Error parsing router descriptor; dropping.");
     *msg = "Couldn't parse router descriptor.";
     return -1;
@@ -3858,9 +3872,11 @@ router_load_routers_from_string(const char *s, const char *eos,
   int from_cache = (saved_location != SAVED_NOWHERE);
   int allow_annotations = (saved_location != SAVED_NOWHERE);
   int any_changed = 0;
+  smartlist_t *invalid_digests = smartlist_new();
 
   router_parse_list_from_string(&s, eos, routers, saved_location, 0,
-                                allow_annotations, prepend_annotations);
+                                allow_annotations, prepend_annotations,
+                                invalid_digests);
 
   routers_update_status_from_consensus_networkstatus(routers, !from_cache);
 
@@ -3896,7 +3912,7 @@ router_load_routers_from_string(const char *s, const char *eos,
       smartlist_add(changed, ri);
       routerlist_descriptors_added(changed, from_cache);
       smartlist_clear(changed);
-    } else if (WRA_WAS_REJECTED(r)) {
+    } else if (WRA_NEVER_DOWNLOADABLE(r)) {
       download_status_t *dl_status;
       dl_status = router_get_dl_status_by_descriptor_digest(d);
       if (dl_status) {
@@ -3906,6 +3922,27 @@ router_load_routers_from_string(const char *s, const char *eos,
       }
     }
   } SMARTLIST_FOREACH_END(ri);
+
+  SMARTLIST_FOREACH_BEGIN(invalid_digests, const uint8_t *, bad_digest) {
+    /* This digest is never going to be parseable. */
+    base16_encode(fp, sizeof(fp), (char*)bad_digest, DIGEST_LEN);
+    if (requested_fingerprints && descriptor_digests) {
+      if (! smartlist_contains_string(requested_fingerprints, fp)) {
+        /* But we didn't ask for it, so we should assume shennanegans. */
+        continue;
+      }
+      smartlist_string_remove(requested_fingerprints, fp);
+    }
+    download_status_t *dls;
+    dls = router_get_dl_status_by_descriptor_digest((char*)bad_digest);
+    if (dls) {
+      log_info(LD_GENERAL, "Marking router with descriptor %s as unparseable, "
+               "and therefore undownloadable", fp);
+      download_status_mark_impossible(dls);
+    }
+  } SMARTLIST_FOREACH_END(bad_digest);
+  SMARTLIST_FOREACH(invalid_digests, uint8_t *, d, tor_free(d));
+  smartlist_free(invalid_digests);
 
   routerlist_assert_ok(routerlist);
 
@@ -3930,13 +3967,16 @@ router_load_extrainfo_from_string(const char *s, const char *eos,
   smartlist_t *extrainfo_list = smartlist_new();
   const char *msg;
   int from_cache = (saved_location != SAVED_NOWHERE);
+  smartlist_t *invalid_digests = smartlist_new();
 
   router_parse_list_from_string(&s, eos, extrainfo_list, saved_location, 1, 0,
-                                NULL);
+                                NULL, invalid_digests);
 
   log_info(LD_DIR, "%d elements to add", smartlist_len(extrainfo_list));
 
   SMARTLIST_FOREACH_BEGIN(extrainfo_list, extrainfo_t *, ei) {
+      uint8_t d[DIGEST_LEN];
+      memcpy(d, ei->cache_info.signed_descriptor_digest, DIGEST_LEN);
       was_router_added_t added =
         router_add_extrainfo_to_routerlist(ei, &msg, from_cache, !from_cache);
       if (WRA_WAS_ADDED(added) && requested_fingerprints) {
@@ -3950,8 +3990,38 @@ router_load_extrainfo_from_string(const char *s, const char *eos,
          * so long as we would have wanted them anyway.  Since we always fetch
          * all the extrainfos we want, and we never actually act on them
          * inside Tor, this should be harmless. */
+      } else if (WRA_NEVER_DOWNLOADABLE(added)) {
+        signed_descriptor_t *sd = router_get_by_extrainfo_digest((char*)d);
+        if (sd) {
+          log_info(LD_GENERAL, "Marking extrainfo with descriptor %s as "
+                   "unparseable, and therefore undownloadable",
+                   hex_str((char*)d,DIGEST_LEN));
+          download_status_mark_impossible(&sd->ei_dl_status);
+        }
       }
   } SMARTLIST_FOREACH_END(ei);
+
+  SMARTLIST_FOREACH_BEGIN(invalid_digests, const uint8_t *, bad_digest) {
+    /* This digest is never going to be parseable. */
+    char fp[HEX_DIGEST_LEN+1];
+    base16_encode(fp, sizeof(fp), (char*)bad_digest, DIGEST_LEN);
+    if (requested_fingerprints) {
+      if (! smartlist_contains_string(requested_fingerprints, fp)) {
+        /* But we didn't ask for it, so we should assume shennanegans. */
+        continue;
+      }
+      smartlist_string_remove(requested_fingerprints, fp);
+    }
+    signed_descriptor_t *sd =
+      router_get_by_extrainfo_digest((char*)bad_digest);
+    if (sd) {
+      log_info(LD_GENERAL, "Marking extrainfo with descriptor %s as "
+               "unparseable, and therefore undownloadable", fp);
+      download_status_mark_impossible(&sd->ei_dl_status);
+    }
+  } SMARTLIST_FOREACH_END(bad_digest);
+  SMARTLIST_FOREACH(invalid_digests, uint8_t *, d, tor_free(d));
+  smartlist_free(invalid_digests);
 
   routerlist_assert_ok(routerlist);
   router_rebuild_store(0, &router_get_routerlist()->extrainfo_store);

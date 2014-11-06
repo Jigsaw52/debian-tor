@@ -1,7 +1,7 @@
 /* Copyright (c) 2001, Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -75,12 +75,10 @@
 /** Macro: is k a valid RSA private key? */
 #define PRIVATE_KEY_OK(k) ((k) && (k)->key && (k)->key->p)
 
-#ifdef TOR_IS_MULTITHREADED
 /** A number of preallocated mutexes for use by OpenSSL. */
 static tor_mutex_t **openssl_mutexes_ = NULL;
 /** How many mutexes have we allocated for use by OpenSSL? */
 static int n_openssl_mutexes_ = 0;
-#endif
 
 /** A public key, or a public/private key-pair. */
 struct crypto_pk_t
@@ -1686,7 +1684,7 @@ crypto_digest_get_digest(crypto_digest_t *digest,
       log_warn(LD_BUG, "Called with unknown algorithm %d", digest->algorithm);
       /* If fragile_assert is not enabled, then we should at least not
        * leak anything. */
-      memset(r, 0xff, sizeof(r));
+      memwipe(r, 0xff, sizeof(r));
       tor_fragile_assert();
       break;
   }
@@ -1840,7 +1838,7 @@ crypto_store_dynamic_dh_modulus(const char *fname)
     goto done;
   }
 
-  base64_encoded_dh = tor_malloc_zero(len * 2); /* should be enough */
+  base64_encoded_dh = tor_calloc(len, 2); /* should be enough */
   new_len = base64_encode(base64_encoded_dh, len * 2,
                           (char *)dh_string_repr, len);
   if (new_len < 0) {
@@ -2456,10 +2454,8 @@ crypto_strongest_rand(uint8_t *out, size_t out_len)
   if (!provider_set) {
     if (!CryptAcquireContext(&provider, NULL, NULL, PROV_RSA_FULL,
                              CRYPT_VERIFYCONTEXT)) {
-      if ((unsigned long)GetLastError() != (unsigned long)NTE_BAD_KEYSET) {
-        log_warn(LD_CRYPTO, "Can't get CryptoAPI provider [1]");
-        return -1;
-      }
+      log_warn(LD_CRYPTO, "Can't get CryptoAPI provider [1]");
+      return -1;
     }
     provider_set = 1;
   }
@@ -3003,50 +2999,6 @@ base32_decode(char *dest, size_t destlen, const char *src, size_t srclen)
   return 0;
 }
 
-/** Implement RFC2440-style iterated-salted S2K conversion: convert the
- * <b>secret_len</b>-byte <b>secret</b> into a <b>key_out_len</b> byte
- * <b>key_out</b>.  As in RFC2440, the first 8 bytes of s2k_specifier
- * are a salt; the 9th byte describes how much iteration to do.
- * Does not support <b>key_out_len</b> &gt; DIGEST_LEN.
- */
-void
-secret_to_key(char *key_out, size_t key_out_len, const char *secret,
-              size_t secret_len, const char *s2k_specifier)
-{
-  crypto_digest_t *d;
-  uint8_t c;
-  size_t count, tmplen;
-  char *tmp;
-  tor_assert(key_out_len < SIZE_T_CEILING);
-
-#define EXPBIAS 6
-  c = s2k_specifier[8];
-  count = ((uint32_t)16 + (c & 15)) << ((c >> 4) + EXPBIAS);
-#undef EXPBIAS
-
-  tor_assert(key_out_len <= DIGEST_LEN);
-
-  d = crypto_digest_new();
-  tmplen = 8+secret_len;
-  tmp = tor_malloc(tmplen);
-  memcpy(tmp,s2k_specifier,8);
-  memcpy(tmp+8,secret,secret_len);
-  secret_len += 8;
-  while (count) {
-    if (count >= secret_len) {
-      crypto_digest_add_bytes(d, tmp, secret_len);
-      count -= secret_len;
-    } else {
-      crypto_digest_add_bytes(d, tmp, count);
-      count = 0;
-    }
-  }
-  crypto_digest_get_digest(d, key_out, key_out_len);
-  memwipe(tmp, 0, tmplen);
-  tor_free(tmp);
-  crypto_digest_free(d);
-}
-
 /**
  * Destroy the <b>sz</b> bytes of data stored at <b>mem</b>, setting them to
  * the value <b>byte</b>.
@@ -3089,8 +3041,6 @@ memwipe(void *mem, uint8_t byte, size_t sz)
    **/
   memset(mem, byte, sz);
 }
-
-#ifdef TOR_IS_MULTITHREADED
 
 #ifndef OPENSSL_THREADS
 #error OpenSSL has been built without thread support. Tor requires an \
@@ -3168,7 +3118,7 @@ setup_openssl_threading(void)
   int i;
   int n = CRYPTO_num_locks();
   n_openssl_mutexes_ = n;
-  openssl_mutexes_ = tor_malloc(n*sizeof(tor_mutex_t *));
+  openssl_mutexes_ = tor_calloc(n, sizeof(tor_mutex_t *));
   for (i=0; i < n; ++i)
     openssl_mutexes_[i] = tor_mutex_new();
   CRYPTO_set_locking_callback(openssl_locking_cb_);
@@ -3178,13 +3128,6 @@ setup_openssl_threading(void)
   CRYPTO_set_dynlock_destroy_callback(openssl_dynlock_destroy_cb_);
   return 0;
 }
-#else
-static int
-setup_openssl_threading(void)
-{
-  return 0;
-}
-#endif
 
 /** Uninitialize the crypto library. Return 0 on success, -1 on failure.
  */
@@ -3208,7 +3151,7 @@ crypto_global_cleanup(void)
 
   CONF_modules_unload(1);
   CRYPTO_cleanup_all_ex_data();
-#ifdef TOR_IS_MULTITHREADED
+
   if (n_openssl_mutexes_) {
     int n = n_openssl_mutexes_;
     tor_mutex_t **ms = openssl_mutexes_;
@@ -3220,7 +3163,7 @@ crypto_global_cleanup(void)
     }
     tor_free(ms);
   }
-#endif
+
   tor_free(crypto_openssl_version_str);
   tor_free(crypto_openssl_header_version_str);
   return 0;

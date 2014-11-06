@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -29,6 +29,7 @@ setopt_err_t options_trial_assign(config_line_t *list, int use_defaults,
                                   int clear_first, char **msg);
 
 uint32_t get_last_resolved_addr(void);
+void reset_last_resolved_addr(void);
 int resolve_my_address(int warn_severity, const or_options_t *options,
                        uint32_t *addr_out,
                        const char **method_out, char **hostname_out);

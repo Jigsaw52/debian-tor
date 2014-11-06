@@ -1,6 +1,6 @@
 /* Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #include "or.h"
@@ -197,9 +197,9 @@ dir_conn_purpose_to_string(int purpose)
   return "(unknown)";
 }
 
-/** Return true iff <b>identity_digest</b> is the digest of a router we
- * believe to support extrainfo downloads.  (If <b>is_authority</b> we do
- * additional checking that's only valid for authorities.) */
+/** Return true iff <b>identity_digest</b> is the digest of a router which
+ * says that it caches extrainfos.  (If <b>is_authority</b> we always
+ * believe that to be true.) */
 int
 router_supports_extrainfo(const char *identity_digest, int is_authority)
 {
@@ -452,7 +452,7 @@ directory_get_from_dirserver(uint8_t dir_purpose, uint8_t router_purpose,
     return;
 
   if (!get_via_tor) {
-    if (options->UseBridges && type != BRIDGE_DIRINFO) {
+    if (options->UseBridges && !(type & BRIDGE_DIRINFO)) {
       /* We want to ask a running bridge for which we have a descriptor.
        *
        * When we ask choose_random_entry() for a bridge, we specify what
@@ -479,7 +479,7 @@ directory_get_from_dirserver(uint8_t dir_purpose, uint8_t router_purpose,
                            "nodes are available yet.");
       return;
     } else {
-      if (prefer_authority || type == BRIDGE_DIRINFO) {
+      if (prefer_authority || (type & BRIDGE_DIRINFO)) {
         /* only ask authdirservers, and don't ask myself */
         rs = router_pick_trusteddirserver(type, pds_flags);
         if (rs == NULL && (pds_flags & (PDS_NO_EXISTING_SERVERDESC_FETCH|
@@ -506,7 +506,7 @@ directory_get_from_dirserver(uint8_t dir_purpose, uint8_t router_purpose,
           return;
         }
       }
-      if (!rs && type != BRIDGE_DIRINFO) {
+      if (!rs && !(type & BRIDGE_DIRINFO)) {
         /* */
         rs = directory_pick_generic_dirserver(type, pds_flags,
                                               dir_purpose);
@@ -523,12 +523,12 @@ directory_get_from_dirserver(uint8_t dir_purpose, uint8_t router_purpose,
       /* anybody with a non-zero dirport will do. Disregard firewalls. */
       pds_flags |= PDS_IGNORE_FASCISTFIREWALL;
       rs = router_pick_directory_server(type, pds_flags);
-      /* If we have any hope of building an indirect conn, we know some router
-       * descriptors.  If (rs==NULL), we can't build circuits anyway, so
-       * there's no point in falling back to the authorities in this case. */
     }
   }
 
+  /* If we have any hope of building an indirect conn, we know some router
+   * descriptors.  If (rs==NULL), we can't build circuits anyway, so
+   * there's no point in falling back to the authorities in this case. */
   if (rs) {
     const dir_indirection_t indirection =
       get_via_tor ? DIRIND_ANONYMOUS : DIRIND_ONEHOP;
@@ -3442,6 +3442,9 @@ download_status_increment_failure(download_status_t *dls, int status_code,
 void
 download_status_reset(download_status_t *dls)
 {
+  if (dls->n_download_failures == IMPOSSIBLE_TO_DOWNLOAD)
+    return; /* Don't reset this. */
+
   const smartlist_t *schedule = find_dl_schedule_and_len(
                           dls, get_options()->DirPort_set);
 

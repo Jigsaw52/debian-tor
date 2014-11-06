@@ -1,5 +1,5 @@
 /* Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -524,7 +524,6 @@ rend_config_services(const or_options_t *options, int validate_only)
    * other ones. */
   if (old_service_list && !validate_only) {
     smartlist_t *surviving_services = smartlist_new();
-    circuit_t *circ;
 
     /* Copy introduction points to new services. */
     /* XXXX This is O(n^2), but it's only called on reconfigure, so it's
@@ -544,7 +543,7 @@ rend_config_services(const or_options_t *options, int validate_only)
     /* XXXX it would be nicer if we had a nicer abstraction to use here,
      * so we could just iterate over the list of services to close, but
      * once again, this isn't critical-path code. */
-    TOR_LIST_FOREACH(circ, circuit_get_global_list(), head) {
+    SMARTLIST_FOREACH_BEGIN(circuit_get_global_list(), circuit_t *, circ) {
       if (!circ->marked_for_close &&
           circ->state == CIRCUIT_STATE_OPEN &&
           (circ->purpose == CIRCUIT_PURPOSE_S_ESTABLISH_INTRO ||
@@ -569,6 +568,7 @@ rend_config_services(const or_options_t *options, int validate_only)
         /* XXXX Is there another reason we should use here? */
       }
     }
+    SMARTLIST_FOREACH_END(circ);
     smartlist_free(surviving_services);
     SMARTLIST_FOREACH(old_service_list, rend_service_t *, ptr,
                       rend_service_free(ptr));
@@ -1446,10 +1446,7 @@ rend_service_introduce(origin_circuit_t *circuit, const uint8_t *request,
   memwipe(hexcookie, 0, sizeof(hexcookie));
 
   /* Free the parsed cell */
-  if (parsed_req) {
-    rend_service_free_intro(parsed_req);
-    parsed_req = NULL;
-  }
+  rend_service_free_intro(parsed_req);
 
   /* Free rp if we must */
   if (need_rp_free) extend_info_free(rp);
@@ -1539,7 +1536,6 @@ void
 rend_service_free_intro(rend_intro_cell_t *request)
 {
   if (!request) {
-    log_info(LD_BUG, "rend_service_free_intro() called with NULL request!");
     return;
   }
 
@@ -1648,8 +1644,9 @@ rend_service_begin_parse_intro(const uint8_t *request,
   goto done;
 
  err:
-  if (rv) rend_service_free_intro(rv);
+  rend_service_free_intro(rv);
   rv = NULL;
+
   if (err_msg_out && !err_msg) {
     tor_asprintf(&err_msg,
                  "unknown INTRODUCE%d error",
@@ -1757,7 +1754,7 @@ rend_service_parse_intro_for_v2(
 
   /*
    * We accept version 3 too so that the v3 parser can call this with
-   * and adjusted buffer for the latter part of a v3 cell, which is
+   * an adjusted buffer for the latter part of a v3 cell, which is
    * identical to a v2 cell.
    */
   if (!(intro->version == 2 ||
@@ -1985,7 +1982,7 @@ rend_service_decrypt_intro(
   char service_id[REND_SERVICE_ID_LEN_BASE32+1];
   ssize_t key_len;
   uint8_t buf[RELAY_PAYLOAD_SIZE];
-  int result, status = 0;
+  int result, status = -1;
 
   if (!intro || !key) {
     if (err_msg_out) {
@@ -2064,6 +2061,8 @@ rend_service_decrypt_intro(
   intro->plaintext = tor_malloc(intro->plaintext_len);
   memcpy(intro->plaintext, buf, intro->plaintext_len);
 
+  status = 0;
+
   goto done;
 
  err:
@@ -2072,7 +2071,6 @@ rend_service_decrypt_intro(
                  "unknown INTRODUCE%d error decrypting encrypted part",
                  intro ? (int)(intro->type) : -1);
   }
-  if (status >= 0) status = -1;
 
  done:
   if (err_msg_out) *err_msg_out = err_msg;
@@ -2099,7 +2097,7 @@ rend_service_parse_intro_plaintext(
   char *err_msg = NULL;
   ssize_t ver_specific_len, ver_invariant_len;
   uint8_t version;
-  int status = 0;
+  int status = -1;
 
   if (!intro) {
     if (err_msg_out) {
@@ -2158,6 +2156,7 @@ rend_service_parse_intro_plaintext(
         (int)(intro->type),
         (long)(intro->plaintext_len));
     status = -6;
+    goto err;
   } else {
     memcpy(intro->rc,
            intro->plaintext + ver_specific_len,
@@ -2170,6 +2169,7 @@ rend_service_parse_intro_plaintext(
   /* Flag it as being fully parsed */
   intro->parsed = 1;
 
+  status = 0;
   goto done;
 
  err:
@@ -2178,7 +2178,6 @@ rend_service_parse_intro_plaintext(
                  "unknown INTRODUCE%d error parsing encrypted part",
                  intro ? (int)(intro->type) : -1);
   }
-  if (status >= 0) status = -1;
 
  done:
   if (err_msg_out) *err_msg_out = err_msg;
@@ -2384,8 +2383,7 @@ static int
 count_established_intro_points(const char *query)
 {
   int num_ipos = 0;
-  circuit_t *circ;
-  TOR_LIST_FOREACH(circ, circuit_get_global_list(), head) {
+  SMARTLIST_FOREACH_BEGIN(circuit_get_global_list(), circuit_t *, circ) {
     if (!circ->marked_for_close &&
         circ->state == CIRCUIT_STATE_OPEN &&
         (circ->purpose == CIRCUIT_PURPOSE_S_ESTABLISH_INTRO ||
@@ -2396,6 +2394,7 @@ count_established_intro_points(const char *query)
         num_ipos++;
     }
   }
+  SMARTLIST_FOREACH_END(circ);
   return num_ipos;
 }
 

@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -21,27 +21,11 @@
 /** Smallest allowable voting interval. */
 #define MIN_VOTE_INTERVAL 300
 
+/** The lowest consensus method that we currently support. */
+#define MIN_SUPPORTED_CONSENSUS_METHOD 13
+
 /** The highest consensus method that we currently support. */
 #define MAX_SUPPORTED_CONSENSUS_METHOD 18
-
-/** Lowest consensus method that contains a 'directory-footer' marker */
-#define MIN_METHOD_FOR_FOOTER 9
-
-/** Lowest consensus method that contains bandwidth weights */
-#define MIN_METHOD_FOR_BW_WEIGHTS 9
-
-/** Lowest consensus method that contains consensus params */
-#define MIN_METHOD_FOR_PARAMS 7
-
-/** Lowest consensus method that generates microdescriptors */
-#define MIN_METHOD_FOR_MICRODESC 8
-
-/** Lowest consensus method that doesn't count bad exits as exits for weight */
-#define MIN_METHOD_TO_CUT_BADEXIT_WEIGHT 11
-
-/** Lowest consensus method that ensures a majority of authorities voted
-  * for a param. */
-#define MIN_METHOD_FOR_MAJORITY_PARAMS 12
 
 /** Lowest consensus method where microdesc consensuses omit any entry
  * with no microdesc. */
@@ -116,8 +100,8 @@ const cached_dir_t *dirvote_get_vote(const char *fp, int flags);
 void set_routerstatus_from_routerinfo(routerstatus_t *rs,
                                       node_t *node,
                                       routerinfo_t *ri, time_t now,
-                                      int naming, int listbadexits,
-                                      int listbaddirs, int vote_on_hsdirs);
+                                      int listbadexits,
+                                      int vote_on_hsdirs);
 networkstatus_t *
 dirserv_generate_networkstatus_vote_obj(crypto_pk_t *private_key,
                                         authority_cert_t *cert);

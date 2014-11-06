@@ -1,4 +1,4 @@
-/* Copyright (c) 2009-2013, The Tor Project, Inc. */
+/* Copyright (c) 2009-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -210,6 +210,9 @@ tor_libevent_initialize(tor_libevent_cfg *torcfg)
     } else {
       using_iocp_bufferevents = 0;
     }
+#elif defined(__COVERITY__)
+    /* Avoid a 'dead code' warning below. */
+    using_threads = ! torcfg->disable_iocp;
 #endif
 
     if (!using_threads) {

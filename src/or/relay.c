@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -2328,15 +2328,15 @@ packed_cell_free(packed_cell_t *cell)
 void
 dump_cell_pool_usage(int severity)
 {
-  circuit_t *c;
   int n_circs = 0;
   int n_cells = 0;
-  TOR_LIST_FOREACH(c, circuit_get_global_list(), head) {
+  SMARTLIST_FOREACH_BEGIN(circuit_get_global_list(), circuit_t *, c) {
     n_cells += c->n_chan_cells.n;
     if (!CIRCUIT_IS_ORIGIN(c))
       n_cells += TO_OR_CIRCUIT(c)->p_chan_cells.n;
     ++n_circs;
   }
+  SMARTLIST_FOREACH_END(c);
   tor_log(severity, LD_MM,
           "%d cells allocated on %d circuits. %d cells leaked.",
           n_cells, n_circs, (int)total_cells_allocated - n_cells);
@@ -2439,6 +2439,7 @@ cell_queues_check_size(void)
 {
   size_t alloc = cell_queues_get_total_allocation();
   alloc += buf_get_total_allocation();
+  alloc += tor_zlib_get_total_allocation();
   if (alloc >= get_options()->MaxMemInQueues) {
     circuits_handle_oom(alloc);
     return 1;

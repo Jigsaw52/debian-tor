@@ -57,6 +57,7 @@ cscope.*
 /mkinstalldirs
 /Tor*Bundle.dmg
 /tor-*-win32.exe
+/coverage_html/
 
 # /contrib/
 /contrib/dist/tor.sh
@@ -135,6 +136,11 @@ cscope.*
 /src/config/sample-server-torrc
 /src/config/torrc
 /src/config/torrc.sample
+/src/config/torrc.minimal
+
+# /src/ext/
+/src/ext/ed25519/ref10/libed25519_ref10.a
+/src/ext/ed25519/ref10/libed25519_ref10.lib
 
 # /src/or/
 /src/or/Makefile
@@ -171,6 +177,10 @@ cscope.*
 /src/tools/tor-gencert.exe
 /src/tools/Makefile
 /src/tools/Makefile.in
+
+# /src/trunnel/
+/src/trunnel/libor-trunnel-testing.a
+/src/trunnel/libor-trunnel.a
 
 # /src/tools/tor-fw-helper/
 /src/tools/tor-fw-helper/tor-fw-helper

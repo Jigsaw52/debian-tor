@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #include "or.h"
@@ -53,8 +53,8 @@ node_id_eq(const node_t *node1, const node_t *node2)
 }
 
 HT_PROTOTYPE(nodelist_map, node_t, ht_ent, node_id_hash, node_id_eq);
-HT_GENERATE(nodelist_map, node_t, ht_ent, node_id_hash, node_id_eq,
-            0.6, malloc, realloc, free);
+HT_GENERATE2(nodelist_map, node_t, ht_ent, node_id_hash, node_id_eq,
+             0.6, tor_reallocarray_, tor_free_)
 
 /** The global nodelist. */
 static nodelist_t *the_nodelist=NULL;
@@ -241,7 +241,6 @@ nodelist_set_consensus(networkstatus_t *ns)
       node->is_stable = rs->is_stable;
       node->is_possible_guard = rs->is_possible_guard;
       node->is_exit = rs->is_exit;
-      node->is_bad_directory = rs->is_bad_directory;
       node->is_bad_exit = rs->is_bad_exit;
       node->is_hs_dir = rs->is_hs_dir;
       node->ipv6_preferred = 0;
@@ -267,8 +266,7 @@ nodelist_set_consensus(networkstatus_t *ns)
           node->is_valid = node->is_running = node->is_hs_dir =
             node->is_fast = node->is_stable =
             node->is_possible_guard = node->is_exit =
-            node->is_bad_exit = node->is_bad_directory =
-            node->ipv6_preferred = 0;
+            node->is_bad_exit = node->ipv6_preferred = 0;
         }
       }
     } SMARTLIST_FOREACH_END(node);
@@ -474,8 +472,8 @@ nodelist_assert_ok(void)
 /** Return a list of a node_t * for every node we know about.  The caller
  * MUST NOT modify the list. (You can set and clear flags in the nodes if
  * you must, but you must not add or remove nodes.) */
-smartlist_t *
-nodelist_get_list(void)
+MOCK_IMPL(smartlist_t *,
+nodelist_get_list,(void))
 {
   init_nodelist();
   return the_nodelist->nodes;
@@ -517,8 +515,8 @@ node_get_by_hex_id(const char *hex_id)
  * the corresponding node_t, or NULL if none exists.  Warn the user if
  * <b>warn_if_unnamed</b> is set, and they have specified a router by
  * nickname, but the Named flag isn't set for that router. */
-const node_t *
-node_get_by_nickname(const char *nickname, int warn_if_unnamed)
+MOCK_IMPL(const node_t *,
+node_get_by_nickname,(const char *nickname, int warn_if_unnamed))
 {
   const node_t *node;
   if (!the_nodelist)

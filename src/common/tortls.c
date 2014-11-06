@@ -1,6 +1,6 @@
 /* Copyright (c) 2003, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -15,10 +15,6 @@
  */
 
 #include "orconfig.h"
-
-#if defined (WINCE)
-#include <WinSock2.h>
-#endif
 
 #include <assert.h>
 #ifdef _WIN32 /*wrkard for dtls1.h >= 0.9.8m of "#include <winsock.h>"*/
@@ -786,8 +782,7 @@ static const cipher_info_t CLIENT_CIPHER_INFO_LIST[] = {
 };
 
 /** The length of CLIENT_CIPHER_INFO_LIST and CLIENT_CIPHER_DUMMIES. */
-static const int N_CLIENT_CIPHERS =
-  sizeof(CLIENT_CIPHER_INFO_LIST)/sizeof(CLIENT_CIPHER_INFO_LIST[0]);
+static const int N_CLIENT_CIPHERS = ARRAY_LENGTH(CLIENT_CIPHER_INFO_LIST);
 #endif
 
 #ifndef V2_HANDSHAKE_CLIENT
@@ -1175,6 +1170,9 @@ tor_tls_context_init_one(tor_tls_context_t **ppcontext,
   return ((new_ctx != NULL) ? 0 : -1);
 }
 
+/** The group we should use for ecdhe when none was selected. */
+#define  NID_tor_default_ecdhe_group NID_X9_62_prime256v1
+
 /** Create a new TLS context for use with Tor TLS handshakes.
  * <b>identity</b> should be set to the identity key used to sign the
  * certificate.
@@ -1370,7 +1368,7 @@ tor_tls_context_new(crypto_pk_t *identity, unsigned int key_lifetime,
     else if (flags & TOR_TLS_CTX_USE_ECDHE_P256)
       nid = NID_X9_62_prime256v1;
     else
-      nid = NID_X9_62_prime256v1;
+      nid = NID_tor_default_ecdhe_group;
     /* Use P-256 for ECDHE. */
     ec_key = EC_KEY_new_by_curve_name(nid);
     if (ec_key != NULL) /*XXXX Handle errors? */
@@ -2645,16 +2643,20 @@ check_no_tls_errors_(const char *fname, int line)
 int
 tor_tls_used_v1_handshake(tor_tls_t *tls)
 {
+#if defined(V2_HANDSHAKE_SERVER) && defined(V2_HANDSHAKE_CLIENT)
+  return ! tls->wasV2Handshake;
+#else
   if (tls->isServer) {
-#ifdef V2_HANDSHAKE_SERVER
+# ifdef V2_HANDSHAKE_SERVER
     return ! tls->wasV2Handshake;
-#endif
+# endif
   } else {
-#ifdef V2_HANDSHAKE_CLIENT
+# ifdef V2_HANDSHAKE_CLIENT
     return ! tls->wasV2Handshake;
-#endif
+# endif
   }
   return 1;
+#endif
 }
 
 /** Return true iff <b>name</b> is a DN of a kind that could only

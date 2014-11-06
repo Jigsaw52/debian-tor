@@ -1,6 +1,6 @@
 /* Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #define DIRVOTE_PRIVATE
@@ -64,7 +64,7 @@ STATIC char *
 format_networkstatus_vote(crypto_pk_t *private_signing_key,
                           networkstatus_t *v3_ns)
 {
-  smartlist_t *chunks;
+  smartlist_t *chunks = smartlist_new();
   const char *client_versions = NULL, *server_versions = NULL;
   char fingerprint[FINGERPRINT_LEN+1];
   char digest[DIGEST_LEN];
@@ -98,7 +98,6 @@ format_networkstatus_vote(crypto_pk_t *private_signing_key,
     server_versions_line = tor_strdup("");
   }
 
-  chunks = smartlist_new();
   {
     char published[ISO_TIME_LEN+1];
     char va[ISO_TIME_LEN+1];
@@ -110,7 +109,8 @@ format_networkstatus_vote(crypto_pk_t *private_signing_key,
     char *params;
     authority_cert_t *cert = v3_ns->cert;
     char *methods =
-      make_consensus_method_list(1, MAX_SUPPORTED_CONSENSUS_METHOD, " ");
+      make_consensus_method_list(MIN_SUPPORTED_CONSENSUS_METHOD,
+                                 MAX_SUPPORTED_CONSENSUS_METHOD, " ");
     format_iso_time(published, v3_ns->published);
     format_iso_time(va, v3_ns->valid_after);
     format_iso_time(fu, v3_ns->fresh_until);
@@ -230,10 +230,9 @@ format_networkstatus_vote(crypto_pk_t *private_signing_key,
  done:
   tor_free(client_versions_line);
   tor_free(server_versions_line);
-  if (chunks) {
-    SMARTLIST_FOREACH(chunks, char *, cp, tor_free(cp));
-    smartlist_free(chunks);
-  }
+
+  SMARTLIST_FOREACH(chunks, char *, cp, tor_free(cp));
+  smartlist_free(chunks);
   return status;
 }
 
@@ -458,8 +457,7 @@ compute_routerstatus_consensus(smartlist_t *votes, int consensus_method,
     smartlist_free(alt_orports);
   }
 
-  if (consensus_method >= MIN_METHOD_FOR_MICRODESC &&
-      microdesc_digest256_out) {
+  if (microdesc_digest256_out) {
     smartlist_t *digests = smartlist_new();
     const char *best_microdesc_digest;
     SMARTLIST_FOREACH_BEGIN(votes, vote_routerstatus_t *, rs) {
@@ -541,7 +539,8 @@ compute_consensus_method(smartlist_t *votes)
 static int
 consensus_method_is_supported(int method)
 {
-  return (method >= 1) && (method <= MAX_SUPPORTED_CONSENSUS_METHOD);
+  return (method >= MIN_SUPPORTED_CONSENSUS_METHOD) &&
+    (method <= MAX_SUPPORTED_CONSENSUS_METHOD);
 }
 
 /** Return a newly allocated string holding the numbers between low and high
@@ -605,13 +604,14 @@ dirvote_compute_params(smartlist_t *votes, int method, int total_authorities)
   const int n_votes = smartlist_len(votes);
   smartlist_t *output;
   smartlist_t *param_list = smartlist_new();
+  (void) method;
 
   /* We require that the parameter lists in the votes are well-formed: that
      is, that their keywords are unique and sorted, and that their values are
      between INT32_MIN and INT32_MAX inclusive.  This should be guaranteed by
      the parsing code. */
 
-  vals = tor_malloc(sizeof(int)*n_votes);
+  vals = tor_calloc(sizeof(int), n_votes);
 
   SMARTLIST_FOREACH_BEGIN(votes, networkstatus_t *, v) {
     if (!v->net_params)
@@ -647,12 +647,13 @@ dirvote_compute_params(smartlist_t *votes, int method, int total_authorities)
       next_param = NULL;
     else
       next_param = smartlist_get(param_list, param_sl_idx+1);
+    /* resolve spurious clang shallow analysis null pointer errors */
+    tor_assert(param);
     if (!next_param || strncmp(next_param, param, cur_param_len)) {
       /* We've reached the end of a series. */
       /* Make sure enough authorities voted on this param, unless the
        * the consensus method we use is too old for that. */
-      if (method < MIN_METHOD_FOR_MAJORITY_PARAMS ||
-          i > total_authorities/2 ||
+      if (i > total_authorities/2 ||
           i >= MIN_VOTES_FOR_PARAM) {
         int32_t median = median_int32(vals, i);
         char *out_string = tor_malloc(64+cur_param_len);
@@ -1005,300 +1006,6 @@ networkstatus_compute_bw_weights_v10(smartlist_t *chunks, int64_t G,
              I64_PRINTF_ARG(D), I64_PRINTF_ARG(T));
   return 1;
 }
-/**
- * This function computes the bandwidth weights for consensus method 9.
- *
- * It has been obsoleted in favor of consensus method 10.
- */
-static void
-networkstatus_compute_bw_weights_v9(smartlist_t *chunks, int64_t G, int64_t M,
-                              int64_t E, int64_t D, int64_t T,
-                              int64_t weight_scale)
-{
-  int64_t Wgg = -1, Wgd = -1;
-  int64_t Wmg = -1, Wme = -1, Wmd = -1;
-  int64_t Wed = -1, Wee = -1;
-  const char *casename;
-
-  if (G <= 0 || M <= 0 || E <= 0 || D <= 0) {
-    log_warn(LD_DIR, "Consensus with empty bandwidth: "
-                     "G="I64_FORMAT" M="I64_FORMAT" E="I64_FORMAT
-                     " D="I64_FORMAT" T="I64_FORMAT,
-             I64_PRINTF_ARG(G), I64_PRINTF_ARG(M), I64_PRINTF_ARG(E),
-             I64_PRINTF_ARG(D), I64_PRINTF_ARG(T));
-    return;
-  }
-
-  /*
-   * Computed from cases in 3.4.3 of dir-spec.txt
-   *
-   * 1. Neither are scarce
-   * 2. Both Guard and Exit are scarce
-   *    a. R+D <= S
-   *    b. R+D > S
-   * 3. One of Guard or Exit is scarce
-   *    a. S+D < T/3
-   *    b. S+D >= T/3
-   */
-  if (3*E >= T && 3*G >= T) { // E >= T/3 && G >= T/3
-    bw_weights_error_t berr = 0;
-    /* Case 1: Neither are scarce.
-     *
-     * Attempt to ensure that we have a large amount of exit bandwidth
-     * in the middle position.
-     */
-    casename = "Case 1 (Wme*E = Wmd*D)";
-    Wgg = (weight_scale*(D+E+G+M))/(3*G);
-    if (D==0) Wmd = 0;
-    else Wmd = (weight_scale*(2*D + 2*E - G - M))/(6*D);
-    Wme = (weight_scale*(2*D + 2*E - G - M))/(6*E);
-    Wee = (weight_scale*(-2*D + 4*E + G + M))/(6*E);
-    Wgd = 0;
-    Wmg = weight_scale - Wgg;
-    Wed = weight_scale - Wmd;
-
-    berr = networkstatus_check_weights(Wgg, Wgd, Wmg, Wme, Wmd, Wee, Wed,
-                                       weight_scale, G, M, E, D, T, 10, 1);
-
-    if (berr) {
-      log_warn(LD_DIR, "Bw Weights error %d for case %s. "
-                       "G="I64_FORMAT" M="I64_FORMAT" E="I64_FORMAT
-                       " D="I64_FORMAT" T="I64_FORMAT,
-               berr, casename,
-               I64_PRINTF_ARG(G), I64_PRINTF_ARG(M), I64_PRINTF_ARG(E),
-               I64_PRINTF_ARG(D), I64_PRINTF_ARG(T));
-    }
-  } else if (3*E < T && 3*G < T) { // E < T/3 && G < T/3
-    int64_t R = MIN(E, G);
-    int64_t S = MAX(E, G);
-    /*
-     * Case 2: Both Guards and Exits are scarce
-     * Balance D between E and G, depending upon
-     * D capacity and scarcity.
-     */
-    if (R+D < S) { // Subcase a
-      Wgg = weight_scale;
-      Wee = weight_scale;
-      Wmg = 0;
-      Wme = 0;
-      Wmd = 0;
-      if (E < G) {
-        casename = "Case 2a (E scarce)";
-        Wed = weight_scale;
-        Wgd = 0;
-      } else { /* E >= G */
-        casename = "Case 2a (G scarce)";
-        Wed = 0;
-        Wgd = weight_scale;
-      }
-    } else { // Subcase b: R+D > S
-      bw_weights_error_t berr = 0;
-      casename = "Case 2b (Wme*E == Wmd*D)";
-      if (D != 0) {
-        Wgg = weight_scale;
-        Wgd = (weight_scale*(D + E - 2*G + M))/(3*D); // T/3 >= G (Ok)
-        Wmd = (weight_scale*(D + E + G - 2*M))/(6*D); // T/3 >= M
-        Wme = (weight_scale*(D + E + G - 2*M))/(6*E);
-        Wee = (weight_scale*(-D + 5*E - G + 2*M))/(6*E); // 2E+M >= T/3
-        Wmg = 0;
-        Wed = weight_scale - Wgd - Wmd;
-
-        berr = networkstatus_check_weights(Wgg, Wgd, Wmg, Wme, Wmd, Wee, Wed,
-                                       weight_scale, G, M, E, D, T, 10, 1);
-      }
-
-      if (D == 0 || berr) { // Can happen if M > T/3
-        casename = "Case 2b (E=G)";
-        Wgg = weight_scale;
-        Wee = weight_scale;
-        Wmg = 0;
-        Wme = 0;
-        Wmd = 0;
-        if (D == 0) Wgd = 0;
-        else Wgd = (weight_scale*(D+E-G))/(2*D);
-        Wed = weight_scale - Wgd;
-        berr = networkstatus_check_weights(Wgg, Wgd, Wmg, Wme, Wmd, Wee,
-                Wed, weight_scale, G, M, E, D, T, 10, 1);
-      }
-      if (berr != BW_WEIGHTS_NO_ERROR &&
-              berr != BW_WEIGHTS_BALANCE_MID_ERROR) {
-        log_warn(LD_DIR, "Bw Weights error %d for case %s. "
-                         "G="I64_FORMAT" M="I64_FORMAT" E="I64_FORMAT
-                         " D="I64_FORMAT" T="I64_FORMAT,
-                 berr, casename,
-                 I64_PRINTF_ARG(G), I64_PRINTF_ARG(M), I64_PRINTF_ARG(E),
-                 I64_PRINTF_ARG(D), I64_PRINTF_ARG(T));
-      }
-    }
-  } else { // if (E < T/3 || G < T/3) {
-    int64_t S = MIN(E, G);
-    // Case 3: Exactly one of Guard or Exit is scarce
-    if (!(3*E < T || 3*G < T) || !(3*G >= T || 3*E >= T)) {
-      log_warn(LD_BUG,
-           "Bw-Weights Case 3 but with G="I64_FORMAT" M="
-           I64_FORMAT" E="I64_FORMAT" D="I64_FORMAT" T="I64_FORMAT,
-               I64_PRINTF_ARG(G), I64_PRINTF_ARG(M), I64_PRINTF_ARG(E),
-               I64_PRINTF_ARG(D), I64_PRINTF_ARG(T));
-    }
-
-    if (3*(S+D) < T) { // Subcase a: S+D < T/3
-      if (G < E) {
-        casename = "Case 3a (G scarce)";
-        Wgg = Wgd = weight_scale;
-        Wmd = Wed = Wmg = 0;
-        // Minor subcase, if E is more scarce than M,
-        // keep its bandwidth in place.
-        if (E < M) Wme = 0;
-        else Wme = (weight_scale*(E-M))/(2*E);
-        Wee = weight_scale-Wme;
-      } else { // G >= E
-        casename = "Case 3a (E scarce)";
-        Wee = Wed = weight_scale;
-        Wmd = Wgd = Wme = 0;
-        // Minor subcase, if G is more scarce than M,
-        // keep its bandwidth in place.
-        if (G < M) Wmg = 0;
-        else Wmg = (weight_scale*(G-M))/(2*G);
-        Wgg = weight_scale-Wmg;
-      }
-    } else { // Subcase b: S+D >= T/3
-      bw_weights_error_t berr = 0;
-      // D != 0 because S+D >= T/3
-      if (G < E) {
-        casename = "Case 3b (G scarce, Wme*E == Wmd*D)";
-        Wgd = (weight_scale*(D + E - 2*G + M))/(3*D);
-        Wmd = (weight_scale*(D + E + G - 2*M))/(6*D);
-        Wme = (weight_scale*(D + E + G - 2*M))/(6*E);
-        Wee = (weight_scale*(-D + 5*E - G + 2*M))/(6*E);
-        Wgg = weight_scale;
-        Wmg = 0;
-        Wed = weight_scale - Wgd - Wmd;
-
-        berr = networkstatus_check_weights(Wgg, Wgd, Wmg, Wme, Wmd, Wee,
-                    Wed, weight_scale, G, M, E, D, T, 10, 1);
-      } else { // G >= E
-        casename = "Case 3b (E scarce, Wme*E == Wmd*D)";
-        Wgg = (weight_scale*(D + E + G + M))/(3*G);
-        Wmd = (weight_scale*(2*D + 2*E - G - M))/(6*D);
-        Wme = (weight_scale*(2*D + 2*E - G - M))/(6*E);
-        Wee = (weight_scale*(-2*D + 4*E + G + M))/(6*E);
-        Wgd = 0;
-        Wmg = weight_scale - Wgg;
-        Wed = weight_scale - Wmd;
-
-        berr = networkstatus_check_weights(Wgg, Wgd, Wmg, Wme, Wmd, Wee,
-                      Wed, weight_scale, G, M, E, D, T, 10, 1);
-      }
-      if (berr) {
-        log_warn(LD_DIR, "Bw Weights error %d for case %s. "
-                         "G="I64_FORMAT" M="I64_FORMAT
-                         " E="I64_FORMAT" D="I64_FORMAT" T="I64_FORMAT,
-                 berr, casename,
-               I64_PRINTF_ARG(G), I64_PRINTF_ARG(M), I64_PRINTF_ARG(E),
-               I64_PRINTF_ARG(D), I64_PRINTF_ARG(T));
-      }
-    }
-  }
-
-  /* We cast down the weights to 32 bit ints on the assumption that
-   * weight_scale is ~= 10000. We need to ensure a rogue authority
-   * doesn't break this assumption to rig our weights */
-  tor_assert(0 < weight_scale && weight_scale <= INT32_MAX);
-
-  if (Wgg < 0 || Wgg > weight_scale) {
-    log_warn(LD_DIR, "Bw %s: Wgg="I64_FORMAT"! G="I64_FORMAT
-            " M="I64_FORMAT" E="I64_FORMAT" D="I64_FORMAT
-            " T="I64_FORMAT,
-             casename, I64_PRINTF_ARG(Wgg),
-             I64_PRINTF_ARG(G), I64_PRINTF_ARG(M), I64_PRINTF_ARG(E),
-             I64_PRINTF_ARG(D), I64_PRINTF_ARG(T));
-
-    Wgg = MAX(MIN(Wgg, weight_scale), 0);
-  }
-  if (Wgd < 0 || Wgd > weight_scale) {
-    log_warn(LD_DIR, "Bw %s: Wgd="I64_FORMAT"! G="I64_FORMAT
-            " M="I64_FORMAT" E="I64_FORMAT" D="I64_FORMAT
-            " T="I64_FORMAT,
-             casename, I64_PRINTF_ARG(Wgd),
-             I64_PRINTF_ARG(G), I64_PRINTF_ARG(M), I64_PRINTF_ARG(E),
-             I64_PRINTF_ARG(D), I64_PRINTF_ARG(T));
-    Wgd = MAX(MIN(Wgd, weight_scale), 0);
-  }
-  if (Wmg < 0 || Wmg > weight_scale) {
-    log_warn(LD_DIR, "Bw %s: Wmg="I64_FORMAT"! G="I64_FORMAT
-            " M="I64_FORMAT" E="I64_FORMAT" D="I64_FORMAT
-            " T="I64_FORMAT,
-             casename, I64_PRINTF_ARG(Wmg),
-             I64_PRINTF_ARG(G), I64_PRINTF_ARG(M), I64_PRINTF_ARG(E),
-             I64_PRINTF_ARG(D), I64_PRINTF_ARG(T));
-    Wmg = MAX(MIN(Wmg, weight_scale), 0);
-  }
-  if (Wme < 0 || Wme > weight_scale) {
-    log_warn(LD_DIR, "Bw %s: Wme="I64_FORMAT"! G="I64_FORMAT
-            " M="I64_FORMAT" E="I64_FORMAT" D="I64_FORMAT
-            " T="I64_FORMAT,
-             casename, I64_PRINTF_ARG(Wme),
-             I64_PRINTF_ARG(G), I64_PRINTF_ARG(M), I64_PRINTF_ARG(E),
-             I64_PRINTF_ARG(D), I64_PRINTF_ARG(T));
-    Wme = MAX(MIN(Wme, weight_scale), 0);
-  }
-  if (Wmd < 0 || Wmd > weight_scale) {
-    log_warn(LD_DIR, "Bw %s: Wmd="I64_FORMAT"! G="I64_FORMAT
-            " M="I64_FORMAT" E="I64_FORMAT" D="I64_FORMAT
-            " T="I64_FORMAT,
-             casename, I64_PRINTF_ARG(Wmd),
-             I64_PRINTF_ARG(G), I64_PRINTF_ARG(M), I64_PRINTF_ARG(E),
-             I64_PRINTF_ARG(D), I64_PRINTF_ARG(T));
-    Wmd = MAX(MIN(Wmd, weight_scale), 0);
-  }
-  if (Wee < 0 || Wee > weight_scale) {
-    log_warn(LD_DIR, "Bw %s: Wee="I64_FORMAT"! G="I64_FORMAT
-            " M="I64_FORMAT" E="I64_FORMAT" D="I64_FORMAT
-            " T="I64_FORMAT,
-             casename, I64_PRINTF_ARG(Wee),
-             I64_PRINTF_ARG(G), I64_PRINTF_ARG(M), I64_PRINTF_ARG(E),
-             I64_PRINTF_ARG(D), I64_PRINTF_ARG(T));
-    Wee = MAX(MIN(Wee, weight_scale), 0);
-  }
-  if (Wed < 0 || Wed > weight_scale) {
-    log_warn(LD_DIR, "Bw %s: Wed="I64_FORMAT"! G="I64_FORMAT
-            " M="I64_FORMAT" E="I64_FORMAT" D="I64_FORMAT
-            " T="I64_FORMAT,
-             casename, I64_PRINTF_ARG(Wed),
-             I64_PRINTF_ARG(G), I64_PRINTF_ARG(M), I64_PRINTF_ARG(E),
-             I64_PRINTF_ARG(D), I64_PRINTF_ARG(T));
-    Wed = MAX(MIN(Wed, weight_scale), 0);
-  }
-
-  // Add consensus weight keywords
-  smartlist_add(chunks, tor_strdup("bandwidth-weights "));
-  /*
-   * Provide Wgm=Wgg, Wmm=1, Wem=Wee, Weg=Wed. May later determine
-   * that middle nodes need different bandwidth weights for dirport traffic,
-   * or that weird exit policies need special weight, or that bridges
-   * need special weight.
-   *
-   * NOTE: This list is sorted.
-   */
-  smartlist_add_asprintf(chunks,
-     "Wbd=%d Wbe=%d Wbg=%d Wbm=%d "
-     "Wdb=%d "
-     "Web=%d Wed=%d Wee=%d Weg=%d Wem=%d "
-     "Wgb=%d Wgd=%d Wgg=%d Wgm=%d "
-     "Wmb=%d Wmd=%d Wme=%d Wmg=%d Wmm=%d\n",
-     (int)Wmd, (int)Wme, (int)Wmg, (int)weight_scale,
-     (int)weight_scale,
-     (int)weight_scale, (int)Wed, (int)Wee, (int)Wed, (int)Wee,
-     (int)weight_scale, (int)Wgd, (int)Wgg, (int)Wgg,
-     (int)weight_scale, (int)Wmd, (int)Wme, (int)Wmg, (int)weight_scale);
-
-  log_notice(LD_CIRC, "Computed bandwidth weights for %s with v9: "
-             "G="I64_FORMAT" M="I64_FORMAT" E="I64_FORMAT" D="I64_FORMAT
-             " T="I64_FORMAT,
-             casename,
-             I64_PRINTF_ARG(G), I64_PRINTF_ARG(M), I64_PRINTF_ARG(E),
-             I64_PRINTF_ARG(D), I64_PRINTF_ARG(T));
-}
 
 /** Given a list of vote networkstatus_t in <b>votes</b>, our public
  * authority <b>identity_key</b>, our private authority <b>signing_key</b>,
@@ -1350,18 +1057,18 @@ networkstatus_compute_consensus(smartlist_t *votes,
     log_warn(LD_DIR, "The other authorities will use consensus method %d, "
              "which I don't support.  Maybe I should upgrade!",
              consensus_method);
-    consensus_method = 1;
+    consensus_method = MAX_SUPPORTED_CONSENSUS_METHOD;
   }
 
   /* Compute medians of time-related things, and figure out how many
    * routers we might need to talk about. */
   {
     int n_votes = smartlist_len(votes);
-    time_t *va_times = tor_malloc(n_votes * sizeof(time_t));
-    time_t *fu_times = tor_malloc(n_votes * sizeof(time_t));
-    time_t *vu_times = tor_malloc(n_votes * sizeof(time_t));
-    int *votesec_list = tor_malloc(n_votes * sizeof(int));
-    int *distsec_list = tor_malloc(n_votes * sizeof(int));
+    time_t *va_times = tor_calloc(n_votes, sizeof(time_t));
+    time_t *fu_times = tor_calloc(n_votes, sizeof(time_t));
+    time_t *vu_times = tor_calloc(n_votes, sizeof(time_t));
+    int *votesec_list = tor_calloc(n_votes, sizeof(int));
+    int *distsec_list = tor_calloc(n_votes, sizeof(int));
     int n_versioning_clients = 0, n_versioning_servers = 0;
     smartlist_t *combined_client_versions = smartlist_new();
     smartlist_t *combined_server_versions = smartlist_new();
@@ -1441,10 +1148,8 @@ networkstatus_compute_consensus(smartlist_t *votes,
                  flavor == FLAV_NS ? "" : " ",
                  flavor == FLAV_NS ? "" : flavor_name);
 
-    if (consensus_method >= 2) {
-      smartlist_add_asprintf(chunks, "consensus-method %d\n",
-                   consensus_method);
-    }
+    smartlist_add_asprintf(chunks, "consensus-method %d\n",
+                           consensus_method);
 
     smartlist_add_asprintf(chunks,
                  "valid-after %s\n"
@@ -1461,14 +1166,12 @@ networkstatus_compute_consensus(smartlist_t *votes,
     tor_free(flaglist);
   }
 
-  if (consensus_method >= MIN_METHOD_FOR_PARAMS) {
-    params = dirvote_compute_params(votes, consensus_method,
-                                    total_authorities);
-    if (params) {
-      smartlist_add(chunks, tor_strdup("params "));
-      smartlist_add(chunks, params);
-      smartlist_add(chunks, tor_strdup("\n"));
-    }
+  params = dirvote_compute_params(votes, consensus_method,
+                                  total_authorities);
+  if (params) {
+    smartlist_add(chunks, tor_strdup("params "));
+    smartlist_add(chunks, params);
+    smartlist_add(chunks, tor_strdup("\n"));
   }
 
   /* Sort the votes. */
@@ -1482,8 +1185,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
       e->digest = get_voter(v)->identity_digest;
       e->is_legacy = 0;
       smartlist_add(dir_sources, e);
-      if (consensus_method >= 3 &&
-          !tor_digest_is_zero(get_voter(v)->legacy_id_digest)) {
+      if (!tor_digest_is_zero(get_voter(v)->legacy_id_digest)) {
         dir_src_ent_t *e_legacy = tor_malloc_zero(sizeof(dir_src_ent_t));
         e_legacy->v = v;
         e_legacy->digest = get_voter(v)->legacy_id_digest;
@@ -1498,9 +1200,6 @@ networkstatus_compute_consensus(smartlist_t *votes,
       char votedigest[HEX_DIGEST_LEN+1];
       networkstatus_t *v = e->v;
       networkstatus_voter_info_t *voter = get_voter(v);
-
-      if (e->is_legacy)
-        tor_assert(consensus_method >= 2);
 
       base16_encode(fingerprint, sizeof(fingerprint), e->digest, DIGEST_LEN);
       base16_encode(votedigest, sizeof(votedigest), voter->vote_digest,
@@ -1559,9 +1258,9 @@ networkstatus_compute_consensus(smartlist_t *votes,
     smartlist_t *chosen_flags = smartlist_new();
     smartlist_t *versions = smartlist_new();
     smartlist_t *exitsummaries = smartlist_new();
-    uint32_t *bandwidths_kb = tor_malloc(sizeof(uint32_t) *
+    uint32_t *bandwidths_kb = tor_calloc(sizeof(uint32_t),
                                          smartlist_len(votes));
-    uint32_t *measured_bws_kb = tor_malloc(sizeof(uint32_t) *
+    uint32_t *measured_bws_kb = tor_calloc(sizeof(uint32_t),
                                            smartlist_len(votes));
     int num_bandwidths;
     int num_mbws;
@@ -1574,7 +1273,6 @@ networkstatus_compute_consensus(smartlist_t *votes,
                      * is the same flag as votes[j]->known_flags[b]. */
     int *named_flag; /* Index of the flag "Named" for votes[j] */
     int *unnamed_flag; /* Index of the flag "Unnamed" for votes[j] */
-    int chosen_named_idx;
     int n_authorities_measuring_bandwidth;
 
     strmap_t *name_to_id_map = strmap_new();
@@ -1583,16 +1281,15 @@ networkstatus_compute_consensus(smartlist_t *votes,
     memset(conflict, 0, sizeof(conflict));
     memset(unknown, 0xff, sizeof(conflict));
 
-    index = tor_malloc_zero(sizeof(int)*smartlist_len(votes));
-    size = tor_malloc_zero(sizeof(int)*smartlist_len(votes));
-    n_voter_flags = tor_malloc_zero(sizeof(int) * smartlist_len(votes));
-    n_flag_voters = tor_malloc_zero(sizeof(int) * smartlist_len(flags));
-    flag_map = tor_malloc_zero(sizeof(int*) * smartlist_len(votes));
-    named_flag = tor_malloc_zero(sizeof(int) * smartlist_len(votes));
-    unnamed_flag = tor_malloc_zero(sizeof(int) * smartlist_len(votes));
+    index = tor_calloc(sizeof(int), smartlist_len(votes));
+    size = tor_calloc(sizeof(int), smartlist_len(votes));
+    n_voter_flags = tor_calloc(sizeof(int), smartlist_len(votes));
+    n_flag_voters = tor_calloc(sizeof(int), smartlist_len(flags));
+    flag_map = tor_calloc(sizeof(int *), smartlist_len(votes));
+    named_flag = tor_calloc(sizeof(int), smartlist_len(votes));
+    unnamed_flag = tor_calloc(sizeof(int), smartlist_len(votes));
     for (i = 0; i < smartlist_len(votes); ++i)
       unnamed_flag[i] = named_flag[i] = -1;
-    chosen_named_idx = smartlist_string_pos(flags, "Named");
 
     /* Build the flag indexes. Note that no vote can have more than 64 members
      * for known_flags, so no value will be greater than 63, so it's safe to
@@ -1601,8 +1298,8 @@ networkstatus_compute_consensus(smartlist_t *votes,
      * that they're actually set before doing U64_LITERAL(1) << index with
      * them.*/
     SMARTLIST_FOREACH_BEGIN(votes, networkstatus_t *, v) {
-      flag_map[v_sl_idx] = tor_malloc_zero(
-                           sizeof(int)*smartlist_len(v->known_flags));
+      flag_map[v_sl_idx] = tor_calloc(sizeof(int),
+                                      smartlist_len(v->known_flags));
       if (smartlist_len(v->known_flags) > MAX_KNOWN_FLAGS_IN_VOTE) {
         log_warn(LD_BUG, "Somehow, a vote has %d entries in known_flags",
                  smartlist_len(v->known_flags));
@@ -1622,7 +1319,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
     } SMARTLIST_FOREACH_END(v);
 
     /* Named and Unnamed get treated specially */
-    if (consensus_method >= 2) {
+    {
       SMARTLIST_FOREACH_BEGIN(votes, networkstatus_t *, v) {
         uint64_t nf;
         if (named_flag[v_sl_idx]<0)
@@ -1682,7 +1379,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
     );
 
     /* Now go through all the votes */
-    flag_counts = tor_malloc(sizeof(int) * smartlist_len(flags));
+    flag_counts = tor_calloc(sizeof(int), smartlist_len(flags));
     while (1) {
       vote_routerstatus_t *rs;
       routerstatus_t rs_out;
@@ -1791,10 +1488,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
         strlcpy(rs_out.nickname, rs->status.nickname, sizeof(rs_out.nickname));
       }
 
-      if (consensus_method == 1) {
-        is_named = chosen_named_idx >= 0 &&
-          (!naming_conflict && flag_counts[chosen_named_idx]);
-      } else {
+      {
         const char *d = strmap_get_lc(name_to_id_map, rs_out.nickname);
         if (!d) {
           is_named = is_unnamed = 0;
@@ -1811,7 +1505,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
         if (!strcmp(fl, "Named")) {
           if (is_named)
             smartlist_add(chosen_flags, (char*)fl);
-        } else if (!strcmp(fl, "Unnamed") && consensus_method >= 2) {
+        } else if (!strcmp(fl, "Unnamed")) {
           if (is_unnamed)
             smartlist_add(chosen_flags, (char*)fl);
         } else {
@@ -1831,7 +1525,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
 
       /* Starting with consensus method 4 we do not list servers
        * that are not running in a consensus.  See Proposal 138 */
-      if (consensus_method >= 4 && !is_running)
+      if (!is_running)
         continue;
 
       /* Pick the version. */
@@ -1843,11 +1537,11 @@ networkstatus_compute_consensus(smartlist_t *votes,
       }
 
       /* Pick a bandwidth */
-      if (consensus_method >= 6 && num_mbws > 2) {
+      if (num_mbws > 2) {
         rs_out.has_bandwidth = 1;
         rs_out.bw_is_unmeasured = 0;
         rs_out.bandwidth_kb = median_uint32(measured_bws_kb, num_mbws);
-      } else if (consensus_method >= 5 && num_bandwidths > 0) {
+      } else if (num_bandwidths > 0) {
         rs_out.has_bandwidth = 1;
         rs_out.bw_is_unmeasured = 1;
         rs_out.bandwidth_kb = median_uint32(bandwidths_kb, num_bandwidths);
@@ -1861,11 +1555,9 @@ networkstatus_compute_consensus(smartlist_t *votes,
       }
 
       /* Fix bug 2203: Do not count BadExit nodes as Exits for bw weights */
-      if (consensus_method >= MIN_METHOD_TO_CUT_BADEXIT_WEIGHT) {
-        is_exit = is_exit && !is_bad_exit;
-      }
+      is_exit = is_exit && !is_bad_exit;
 
-      if (consensus_method >= MIN_METHOD_FOR_BW_WEIGHTS) {
+      {
         if (rs_out.has_bandwidth) {
           T += rs_out.bandwidth_kb;
           if (is_exit && is_guard)
@@ -1896,7 +1588,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
        * the policy that was most often listed in votes, again breaking
        * ties like in the previous case.
        */
-      if (consensus_method >= 5) {
+      {
         /* Okay, go through all the votes for this router.  We prepared
          * that list previously */
         const char *chosen_exitsummary = NULL;
@@ -1967,7 +1659,6 @@ networkstatus_compute_consensus(smartlist_t *votes,
       }
 
       if (flavor == FLAV_MICRODESC &&
-          consensus_method >= MIN_METHOD_FOR_MANDATORY_MICRODESC &&
           tor_digest256_is_zero(microdesc_digest)) {
         /* With no microdescriptor digest, we omit the entry entirely. */
         continue;
@@ -2033,13 +1724,10 @@ networkstatus_compute_consensus(smartlist_t *votes,
     tor_free(measured_bws_kb);
   }
 
-  if (consensus_method >= MIN_METHOD_FOR_FOOTER) {
-    /* Starting with consensus method 9, we clearly mark the directory
-     * footer region */
-    smartlist_add(chunks, tor_strdup("directory-footer\n"));
-  }
+  /* Mark the directory footer region */
+  smartlist_add(chunks, tor_strdup("directory-footer\n"));
 
-  if (consensus_method >= MIN_METHOD_FOR_BW_WEIGHTS) {
+  {
     int64_t weight_scale = BW_WEIGHT_SCALE;
     char *bw_weight_param = NULL;
 
@@ -2072,13 +1760,8 @@ networkstatus_compute_consensus(smartlist_t *votes,
       }
     }
 
-    if (consensus_method < 10) {
-      networkstatus_compute_bw_weights_v9(chunks, G, M, E, D, T, weight_scale);
-      added_weights = 1;
-    } else {
-      added_weights = networkstatus_compute_bw_weights_v10(chunks, G, M, E, D,
-                                                           T, weight_scale);
-    }
+    added_weights = networkstatus_compute_bw_weights_v10(chunks, G, M, E, D,
+                                                         T, weight_scale);
   }
 
   /* Add a signature. */
@@ -2119,7 +1802,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
     }
     smartlist_add(chunks, signature);
 
-    if (legacy_id_key_digest && legacy_signing_key && consensus_method >= 3) {
+    if (legacy_id_key_digest && legacy_signing_key) {
       smartlist_add(chunks, tor_strdup("directory-signature "));
       base16_encode(fingerprint, sizeof(fingerprint),
                     legacy_id_key_digest, DIGEST_LEN);
@@ -2155,7 +1838,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
       goto done;
     }
     // Verify balancing parameters
-    if (consensus_method >= MIN_METHOD_FOR_BW_WEIGHTS && added_weights) {
+    if (added_weights) {
       networkstatus_verify_bw_weights(c, consensus_method);
     }
     networkstatus_vote_free(c);
@@ -2279,8 +1962,11 @@ networkstatus_add_detached_signatures(networkstatus_t *target,
     if (!sig->good_signature && !sig->bad_signature) {
       cert = authority_cert_get_by_digests(sig->identity_digest,
                                            sig->signing_key_digest);
-      if (cert)
-        networkstatus_check_document_signature(target, sig, cert);
+      if (cert) {
+        /* Not checking the return value here, since we are going to look
+         * at the status of sig->good_signature in a moment. */
+        (void) networkstatus_check_document_signature(target, sig, cert);
+      }
     }
 
     /* If this signature is good, or we don't have any signature yet,
@@ -3602,8 +3288,8 @@ dirvote_create_microdescriptor(const routerinfo_t *ri, int consensus_method)
 
   {
     smartlist_t *lst = microdescs_parse_from_string(output,
-                                                 output+strlen(output), 0,
-                                                    SAVED_NOWHERE);
+                                                    output+strlen(output), 0,
+                                                    SAVED_NOWHERE, NULL);
     if (smartlist_len(lst) != 1) {
       log_warn(LD_DIR, "We generated a microdescriptor we couldn't parse.");
       SMARTLIST_FOREACH(lst, microdesc_t *, md, microdesc_free(md));
@@ -3664,7 +3350,7 @@ static const struct consensus_method_range_t {
   int low;
   int high;
 } microdesc_consensus_methods[] = {
-  {MIN_METHOD_FOR_MICRODESC, MIN_METHOD_FOR_A_LINES - 1},
+  {MIN_SUPPORTED_CONSENSUS_METHOD, MIN_METHOD_FOR_A_LINES - 1},
   {MIN_METHOD_FOR_A_LINES, MIN_METHOD_FOR_P6_LINES - 1},
   {MIN_METHOD_FOR_P6_LINES, MIN_METHOD_FOR_NTOR_KEY - 1},
   {MIN_METHOD_FOR_NTOR_KEY, MIN_METHOD_FOR_ID_HASH_IN_MD - 1},

@@ -1,5 +1,5 @@
 /* Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -1998,12 +1998,9 @@ void
 rep_hist_exit_stats_init(time_t now)
 {
   start_of_exit_stats_interval = now;
-  exit_bytes_read = tor_malloc_zero(EXIT_STATS_NUM_PORTS *
-                                    sizeof(uint64_t));
-  exit_bytes_written = tor_malloc_zero(EXIT_STATS_NUM_PORTS *
-                                       sizeof(uint64_t));
-  exit_streams = tor_malloc_zero(EXIT_STATS_NUM_PORTS *
-                                 sizeof(uint32_t));
+  exit_bytes_read = tor_calloc(EXIT_STATS_NUM_PORTS, sizeof(uint64_t));
+  exit_bytes_written = tor_calloc(EXIT_STATS_NUM_PORTS, sizeof(uint64_t));
+  exit_streams = tor_calloc(EXIT_STATS_NUM_PORTS, sizeof(uint32_t));
 }
 
 /** Reset counters for exit port statistics. */
@@ -2474,7 +2471,6 @@ rep_hist_format_buffer_stats(time_t now)
 time_t
 rep_hist_buffer_stats_write(time_t now)
 {
-  circuit_t *circ;
   char *str = NULL;
 
   if (!start_of_buffer_stats_interval)
@@ -2483,9 +2479,10 @@ rep_hist_buffer_stats_write(time_t now)
     goto done; /* Not ready to write */
 
   /* Add open circuits to the history. */
-  TOR_LIST_FOREACH(circ, circuit_get_global_list(), head) {
+  SMARTLIST_FOREACH_BEGIN(circuit_get_global_list(), circuit_t *, circ) {
     rep_hist_buffer_stats_add_circ(circ, now);
   }
+  SMARTLIST_FOREACH_END(circ);
 
   /* Generate history string. */
   str = rep_hist_format_buffer_stats(now);
@@ -2572,7 +2569,7 @@ rep_hist_format_desc_stats(time_t now)
 
   size = digestmap_size(served_descs);
   if (size > 0) {
-    vals = tor_malloc(size * sizeof(int));
+    vals = tor_calloc(size, sizeof(int));
     for (iter = digestmap_iter_init(served_descs);
          !digestmap_iter_done(iter);
          iter = digestmap_iter_next(served_descs, iter)) {
@@ -2727,8 +2724,8 @@ bidi_map_ent_hash(const bidi_map_entry_t *entry)
 
 HT_PROTOTYPE(bidimap, bidi_map_entry_t, node, bidi_map_ent_hash,
              bidi_map_ent_eq);
-HT_GENERATE(bidimap, bidi_map_entry_t, node, bidi_map_ent_hash,
-            bidi_map_ent_eq, 0.6, malloc, realloc, free);
+HT_GENERATE2(bidimap, bidi_map_entry_t, node, bidi_map_ent_hash,
+             bidi_map_ent_eq, 0.6, tor_reallocarray_, tor_free_)
 
 /* DOCDOC bidi_map_free */
 static void

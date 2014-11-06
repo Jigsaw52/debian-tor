@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -14,7 +14,7 @@
 
 #include "orconfig.h"
 
-#ifdef __COVERITY__
+#if defined(__clang_analyzer__) || defined(__COVERITY__)
 /* If we're building for a static analysis, turn on all the off-by-default
  * features. */
 #ifndef INSTRUMENT_DOWNLOADS
@@ -1958,6 +1958,7 @@ typedef struct download_status_t {
   uint8_t n_download_failures; /**< Number of failures trying to download the
                                 * most recent descriptor. */
   download_schedule_bitfield_t schedule : 8;
+
 } download_status_t;
 
 /** If n_download_failures is this high, the download can never happen. */
@@ -2139,8 +2140,6 @@ typedef struct routerstatus_t {
                                      * choice as an entry guard. */
   unsigned int is_bad_exit:1; /**< True iff this node is a bad choice for
                                * an exit node. */
-  unsigned int is_bad_directory:1; /**< Do we think this directory is junky,
-                                    * underpowered, or otherwise useless? */
   unsigned int is_hs_dir:1; /**< True iff this router is a v2-or-later hidden
                              * service directory. */
   /** True iff we know version info for this router. (i.e., a "v" entry was
@@ -2151,9 +2150,6 @@ typedef struct routerstatus_t {
   /** True iff this router is a version that, if it caches directory info,
    * we can get microdescriptors from. */
   unsigned int version_supports_microdesc_cache:1;
-  /** True iff this router is a version that allows DATA cells to arrive on
-   * a stream before it has sent a CONNECTED cell. */
-  unsigned int version_supports_optimistic_data:1;
   /** True iff this router has a version that allows it to accept EXTEND2
    * cells */
   unsigned int version_supports_extend2_cells:1;
@@ -2300,8 +2296,6 @@ typedef struct node_t {
   unsigned int is_exit:1; /**< Do we think this is an OK exit? */
   unsigned int is_bad_exit:1; /**< Do we think this exit is censored, borked,
                                * or otherwise nasty? */
-  unsigned int is_bad_directory:1; /**< Do we think this directory is junky,
-                                    * underpowered, or otherwise useless? */
   unsigned int is_hs_dir:1; /**< True iff this router is a hidden service
                              * directory according to the authorities. */
 
@@ -2560,9 +2554,7 @@ typedef struct extend_info_t {
   uint16_t port; /**< OR port. */
   tor_addr_t addr; /**< IP address. */
   crypto_pk_t *onion_key; /**< Current onionskin key. */
-#ifdef CURVE25519_ENABLED
   curve25519_public_key_t curve25519_onion_key;
-#endif
 } extend_info_t;
 
 /** Certificate for v3 directory protocol: binds long-term authority identity
@@ -2865,8 +2857,8 @@ typedef struct circuit_t {
   /** Unique ID for measuring tunneled network status requests. */
   uint64_t dirreq_id;
 
-  /** Next circuit in linked list of all circuits (global_circuitlist). */
-  TOR_LIST_ENTRY(circuit_t) head;
+  /** Index in smartlist of all circuits (global_circuitlist). */
+  int global_circuitlist_idx;
 
   /** Next circuit in the doubly-linked ring of circuits waiting to add
    * cells to n_conn.  NULL if we have no cells pending, or if we're not
@@ -3236,6 +3228,14 @@ static const or_circuit_t *CONST_TO_OR_CIRCUIT(const circuit_t *);
 static origin_circuit_t *TO_ORIGIN_CIRCUIT(circuit_t *);
 static const origin_circuit_t *CONST_TO_ORIGIN_CIRCUIT(const circuit_t *);
 
+/** Return 1 iff <b>node</b> has Exit flag and no BadExit flag.
+ * Otherwise, return 0.
+ */
+static INLINE int node_is_good_exit(const node_t *node)
+{
+  return node->is_exit && ! node->is_bad_exit;
+}
+
 static INLINE or_circuit_t *TO_OR_CIRCUIT(circuit_t *x)
 {
   tor_assert(x->magic == OR_CIRCUIT_MAGIC);
@@ -3403,6 +3403,8 @@ typedef struct {
 
   int LogMessageDomains; /**< Boolean: Should we log the domain(s) in which
                           * each log message occurs? */
+  int TruncateLogFile; /**< Boolean: Should we truncate the log file
+                            before we start writing? */
 
   char *DebugLogFile; /**< Where to send verbose log messages. */
   char *DataDirectory; /**< OR only: where to store long-term data. */
@@ -3531,8 +3533,6 @@ typedef struct {
   int AuthoritativeDir; /**< Boolean: is this an authoritative directory? */
   int V3AuthoritativeDir; /**< Boolean: is this an authoritative directory
                            * for version 3 directories? */
-  int NamingAuthoritativeDir; /**< Boolean: is this an authoritative directory
-                               * that's willing to bind names? */
   int VersioningAuthoritativeDir; /**< Boolean: is this an authoritative
                                    * directory that's willing to recommend
                                    * versions? */
@@ -3742,8 +3742,6 @@ typedef struct {
   config_line_t *NodeFamilies; /**< List of config lines for
                                 * node families */
   smartlist_t *NodeFamilySets; /**< List of parsed NodeFamilies values. */
-  config_line_t *AuthDirBadDir; /**< Address policy for descriptors to
-                                 * mark as bad dir mirrors. */
   config_line_t *AuthDirBadExit; /**< Address policy for descriptors to
                                   * mark as bad exits. */
   config_line_t *AuthDirReject; /**< Address policy for descriptors to
@@ -3752,23 +3750,18 @@ typedef struct {
                                   * never mark as valid. */
   /** @name AuthDir...CC
    *
-   * Lists of country codes to mark as BadDir, BadExit, or Invalid, or to
+   * Lists of country codes to mark as BadExit, or Invalid, or to
    * reject entirely.
    *
    * @{
    */
-  smartlist_t *AuthDirBadDirCCs;
   smartlist_t *AuthDirBadExitCCs;
   smartlist_t *AuthDirInvalidCCs;
   smartlist_t *AuthDirRejectCCs;
   /**@}*/
 
-  int AuthDirListBadDirs; /**< True iff we should list bad dirs,
-                           * and vote for all other dir mirrors as good. */
   int AuthDirListBadExits; /**< True iff we should list bad exits,
                             * and vote for all other exits as good. */
-  int AuthDirRejectUnlisted; /**< Boolean: do we reject all routers that
-                              * aren't named in our fingerprint file? */
   int AuthDirMaxServersPerAddr; /**< Do not permit more than this
                                  * number of servers per IP address. */
   int AuthDirMaxServersPerAuthAddr; /**< Do not permit more than this
@@ -3789,6 +3782,11 @@ typedef struct {
   uint64_t AccountingMax; /**< How many bytes do we allow per accounting
                            * interval before hibernation?  0 for "never
                            * hibernate." */
+  /** How do we determine when our AccountingMax has been reached?
+   * "max" for when in or out reaches AccountingMax
+   * "sum for when in plus out reaches AccountingMax */
+  char *AccountingRule_option;
+  enum { ACCT_MAX, ACCT_SUM } AccountingRule;
 
   /** Base64-encoded hash of accepted passwords for the control system. */
   config_line_t *HashedControlPassword;
@@ -3921,8 +3919,11 @@ typedef struct {
    * instead of a hostname. */
   int WarnUnsafeSocks;
 
-  /** If true, the user wants us to collect statistics on clients
+  /** If true, we're configured to collect statistics on clients
    * requesting network statuses from us as directory. */
+  int DirReqStatistics_option;
+  /** Internal variable to remember whether we're actually acting on
+   * DirReqStatistics_option -- yes if it's set and we're a server, else no. */
   int DirReqStatistics;
 
   /** If true, the user wants us to collect statistics on port usage. */
@@ -4061,6 +4062,10 @@ typedef struct {
 
   /** Minimum value for the Fast flag threshold on testing networks. */
   uint64_t TestingMinFastFlagThreshold;
+
+  /** Relays in a testing network which should be voted Exit
+   * regardless of exit policy. */
+  routerset_t *TestingDirAuthVoteExit;
 
   /** Relays in a testing network which should be voted Guard
    * regardless of uptime and bandwidth. */
@@ -4999,7 +5004,8 @@ typedef enum was_router_added_t {
   ROUTER_NOT_IN_CONSENSUS = -3,
   ROUTER_NOT_IN_CONSENSUS_OR_NETWORKSTATUS = -4,
   ROUTER_AUTHDIR_REJECTS = -5,
-  ROUTER_WAS_NOT_WANTED = -6
+  ROUTER_WAS_NOT_WANTED = -6,
+  ROUTER_WAS_TOO_OLD = -7,
 } was_router_added_t;
 
 /********************************* routerparse.c ************************/
