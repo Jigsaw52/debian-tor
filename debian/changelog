@@ -1,8 +1,9 @@
-tor (0.2.6.0-1) experimental; urgency=medium
+tor (0.2.6.1-alpha-1) experimental; urgency=medium
 
-  * New upstream tree: 0.2.6.x.
+  * New upstream version.
+  * New upstream tree in experimental: 0.2.6.x.
 
- -- Peter Palfrader <weasel@debian.org>  Thu, 06 Nov 2014 15:31:27 +0100
+ -- Peter Palfrader <weasel@debian.org>  Thu, 06 Nov 2014 15:40:23 +0100
 
 tor (0.2.5.10-1) unstable; urgency=medium
 
