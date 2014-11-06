@@ -1,7 +1,7 @@
 /* Copyright (c) 2001, Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -121,7 +121,7 @@ typedef struct log_severity_list_t {
 /** Callback type used for add_callback_log. */
 typedef void (*log_callback)(int severity, uint32_t domain, const char *msg);
 
-void init_logging(void);
+void init_logging(int disable_startup_queue);
 int parse_log_level(const char *level);
 const char *log_level_to_string(int level);
 int parse_log_severity_config(const char **cfg,
@@ -130,7 +130,8 @@ void set_log_severity_config(int minSeverity, int maxSeverity,
                              log_severity_list_t *severity_out);
 void add_stream_log(const log_severity_list_t *severity, const char *name,
                     int fd);
-int add_file_log(const log_severity_list_t *severity, const char *filename);
+int add_file_log(const log_severity_list_t *severity, const char *filename,
+                 const int truncate);
 #ifdef HAVE_SYSLOG_H
 int add_syslog_log(const log_severity_list_t *severity);
 #endif
@@ -146,8 +147,10 @@ void mark_logs_temp(void);
 void change_callback_log_severity(int loglevelMin, int loglevelMax,
                                   log_callback cb);
 void flush_pending_log_callbacks(void);
+void flush_log_messages_from_startup(void);
 void log_set_application_name(const char *name);
 void set_log_time_granularity(int granularity_msec);
+void truncate_logs(void);
 
 void tor_log(int severity, log_domain_mask_t domain, const char *format, ...)
   CHECK_PRINTF(3,4);

@@ -1,6 +1,6 @@
 /* Copyright (c) 2003, Roger Dingledine
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -94,6 +94,10 @@
 #endif
 #ifdef HAVE_SYS_WAIT_H
 #include <sys/wait.h>
+#endif
+
+#ifdef __clang_analyzer__
+#undef MALLOC_ZERO_WORKS
 #endif
 
 /* =====
@@ -231,6 +235,13 @@ tor_realloc_(void *ptr, size_t size DMALLOC_PARAMS)
 
   tor_assert(size < SIZE_T_CEILING);
 
+#ifndef MALLOC_ZERO_WORKS
+  /* Some libc mallocs don't work when size==0. Override them. */
+  if (size==0) {
+    size=1;
+  }
+#endif
+
 #ifdef USE_DMALLOC
   result = dmalloc_realloc(file, line, ptr, size, DMALLOC_FUNC_REALLOC, 0);
 #else
@@ -242,6 +253,20 @@ tor_realloc_(void *ptr, size_t size DMALLOC_PARAMS)
     exit(1);
   }
   return result;
+}
+
+/**
+ * Try to realloc <b>ptr</b> so that it takes up sz1 * sz2 bytes.  Check for
+ * overflow. Unlike other allocation functions, return NULL on overflow.
+ */
+void *
+tor_reallocarray_(void *ptr, size_t sz1, size_t sz2 DMALLOC_PARAMS)
+{
+  /* XXXX we can make this return 0, but we would need to check all the
+   * reallocarray users. */
+  tor_assert(sz2 == 0 || sz1 < SIZE_T_CEILING / sz2);
+
+  return tor_realloc(ptr, (sz1 * sz2) DMALLOC_FN_ARGS);
 }
 
 /** Return a newly allocated copy of the NUL-terminated string s. On
@@ -1183,9 +1208,14 @@ esc_for_log(const char *s)
     }
   }
 
+  tor_assert(len <= SSIZE_MAX);
+
   result = outp = tor_malloc(len);
   *outp++ = '\"';
   for (cp = s; *cp; ++cp) {
+    /* This assertion should always succeed, since we will write at least
+     * one char here, and two chars for closing quote and nul later */
+    tor_assert((outp-result) < (ssize_t)len-2);
     switch (*cp) {
       case '\\':
       case '\"':
@@ -1209,6 +1239,7 @@ esc_for_log(const char *s)
         if (TOR_ISPRINT(*cp) && ((uint8_t)*cp)<127) {
           *outp++ = *cp;
         } else {
+          tor_assert((outp-result) < (ssize_t)len-4);
           tor_snprintf(outp, 5, "\\%03o", (int)(uint8_t) *cp);
           outp += 4;
         }
@@ -1216,6 +1247,7 @@ esc_for_log(const char *s)
     }
   }
 
+  tor_assert((outp-result) <= (ssize_t)len-2);
   *outp++ = '\"';
   *outp++ = 0;
 
@@ -1344,7 +1376,8 @@ n_leapdays(int y1, int y2)
   --y2;
   return (y2/4 - y1/4) - (y2/100 - y1/100) + (y2/400 - y1/400);
 }
-/** Number of days per month in non-leap year; used by tor_timegm. */
+/** Number of days per month in non-leap year; used by tor_timegm and
+ * parse_rfc1123_time. */
 static const int days_per_month[] =
   { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 
@@ -1358,10 +1391,32 @@ tor_timegm(const struct tm *tm, time_t *time_out)
    * It's way more brute-force than fiddling with tzset().
    */
   time_t year, days, hours, minutes, seconds;
-  int i;
-  year = tm->tm_year + 1900;
-  if (year < 1970 || tm->tm_mon < 0 || tm->tm_mon > 11 ||
-      tm->tm_year >= INT32_MAX-1900) {
+  int i, invalid_year, dpm;
+  /* avoid int overflow on addition */
+  if (tm->tm_year < INT32_MAX-1900) {
+    year = tm->tm_year + 1900;
+  } else {
+    /* clamp year */
+    year = INT32_MAX;
+  }
+  invalid_year = (year < 1970 || tm->tm_year >= INT32_MAX-1900);
+
+  if (tm->tm_mon >= 0 && tm->tm_mon <= 11) {
+    dpm = days_per_month[tm->tm_mon];
+    if (tm->tm_mon == 1 && !invalid_year && IS_LEAPYEAR(tm->tm_year)) {
+      dpm = 29;
+    }
+  } else {
+    /* invalid month - default to 0 days per month */
+    dpm = 0;
+  }
+
+  if (invalid_year ||
+      tm->tm_mon < 0 || tm->tm_mon > 11 ||
+      tm->tm_mday < 1 || tm->tm_mday > dpm ||
+      tm->tm_hour < 0 || tm->tm_hour > 23 ||
+      tm->tm_min < 0 || tm->tm_min > 59 ||
+      tm->tm_sec < 0 || tm->tm_sec > 60) {
     log_warn(LD_BUG, "Out-of-range argument to tor_timegm");
     return -1;
   }
@@ -1425,8 +1480,9 @@ parse_rfc1123_time(const char *buf, time_t *t)
   struct tm tm;
   char month[4];
   char weekday[4];
-  int i, m;
+  int i, m, invalid_year;
   unsigned tm_mday, tm_year, tm_hour, tm_min, tm_sec;
+  unsigned dpm;
 
   if (strlen(buf) != RFC1123_TIME_LEN)
     return -1;
@@ -1439,18 +1495,6 @@ parse_rfc1123_time(const char *buf, time_t *t)
     tor_free(esc);
     return -1;
   }
-  if (tm_mday < 1 || tm_mday > 31 || tm_hour > 23 || tm_min > 59 ||
-      tm_sec > 60 || tm_year >= INT32_MAX || tm_year < 1970) {
-    char *esc = esc_for_log(buf);
-    log_warn(LD_GENERAL, "Got invalid RFC1123 time %s", esc);
-    tor_free(esc);
-    return -1;
-  }
-  tm.tm_mday = (int)tm_mday;
-  tm.tm_year = (int)tm_year;
-  tm.tm_hour = (int)tm_hour;
-  tm.tm_min = (int)tm_min;
-  tm.tm_sec = (int)tm_sec;
 
   m = -1;
   for (i = 0; i < 12; ++i) {
@@ -1466,6 +1510,26 @@ parse_rfc1123_time(const char *buf, time_t *t)
     return -1;
   }
   tm.tm_mon = m;
+
+  invalid_year = (tm_year >= INT32_MAX || tm_year < 1970);
+  tor_assert(m >= 0 && m <= 11);
+  dpm = days_per_month[m];
+  if (m == 1 && !invalid_year && IS_LEAPYEAR(tm_year)) {
+    dpm = 29;
+  }
+
+  if (invalid_year || tm_mday < 1 || tm_mday > dpm ||
+      tm_hour > 23 || tm_min > 59 || tm_sec > 60) {
+    char *esc = esc_for_log(buf);
+    log_warn(LD_GENERAL, "Got invalid RFC1123 time %s", esc);
+    tor_free(esc);
+    return -1;
+  }
+  tm.tm_mday = (int)tm_mday;
+  tm.tm_year = (int)tm_year;
+  tm.tm_hour = (int)tm_hour;
+  tm.tm_min = (int)tm_min;
+  tm.tm_sec = (int)tm_sec;
 
   if (tm.tm_year < 1970) {
     char *esc = esc_for_log(buf);
@@ -1638,7 +1702,11 @@ format_time_interval(char *out, size_t out_len, long interval)
 {
   /* We only report seconds if there's no hours. */
   long sec = 0, min = 0, hour = 0, day = 0;
-  if (interval < 0)
+
+  /* -LONG_MIN is LONG_MAX + 1, which causes signed overflow */
+  if (interval < -LONG_MAX)
+    interval = LONG_MAX;
+  else if (interval < 0)
     interval = -interval;
 
   if (interval >= 86400) {
@@ -1754,7 +1822,7 @@ write_all(tor_socket_t fd, const char *buf, size_t count, int isSocket)
 {
   size_t written = 0;
   ssize_t result;
-  tor_assert(count < SSIZE_T_MAX);
+  tor_assert(count < SSIZE_MAX);
 
   while (written != count) {
     if (isSocket)
@@ -1779,7 +1847,7 @@ read_all(tor_socket_t fd, char *buf, size_t count, int isSocket)
   size_t numread = 0;
   ssize_t result;
 
-  if (count > SIZE_T_CEILING || count > SSIZE_T_MAX)
+  if (count > SIZE_T_CEILING || count > SSIZE_MAX)
     return -1;
 
   while (numread != count) {
@@ -1893,7 +1961,7 @@ check_private_dir(const char *dirname, cpd_check_t check,
     }
     if (check & CPD_CREATE) {
       log_info(LD_GENERAL, "Creating directory %s", dirname);
-#if defined (_WIN32) && !defined (WINCE)
+#if defined (_WIN32)
       r = mkdir(dirname);
 #else
       r = mkdir(dirname, 0700);
@@ -2332,6 +2400,7 @@ read_file_to_str_until_eof(int fd, size_t max_bytes_to_read, size_t *sz_out)
     pos += r;
   } while (r > 0 && pos < max_bytes_to_read);
 
+  tor_assert(pos < string_max);
   *sz_out = pos;
   string[pos] = '\0';
   return string;
@@ -2804,10 +2873,14 @@ scan_unsigned(const char **bufp, unsigned long *out, int width, int base)
   while (**bufp && (hex?TOR_ISXDIGIT(**bufp):TOR_ISDIGIT(**bufp))
          && scanned_so_far < width) {
     int digit = hex?hex_decode_digit(*(*bufp)++):digit_to_num(*(*bufp)++);
-    unsigned long new_result = result * base + digit;
-    if (new_result < result)
-      return -1; /* over/underflow. */
-    result = new_result;
+    // Check for overflow beforehand, without actually causing any overflow
+    // This preserves functionality on compilers that don't wrap overflow
+    // (i.e. that trap or optimise away overflow)
+    // result * base + digit > ULONG_MAX
+    // result * base > ULONG_MAX - digit
+    if (result > (ULONG_MAX - digit)/base)
+      return -1; /* Processing this digit would overflow */
+    result = result * base + digit;
     ++scanned_so_far;
   }
 
@@ -2842,10 +2915,17 @@ scan_signed(const char **bufp, long *out, int width)
   if (scan_unsigned(bufp, &result, width, 10) < 0)
     return -1;
 
-  if (neg) {
+  if (neg && result > 0) {
     if (result > ((unsigned long)LONG_MAX) + 1)
       return -1; /* Underflow */
-    *out = -(long)result;
+    // Avoid overflow on the cast to signed long when result is LONG_MIN
+    // by subtracting 1 from the unsigned long positive value,
+    // then, after it has been cast to signed and negated,
+    // subtracting the original 1 (the double-subtraction is intentional).
+    // Otherwise, the cast to signed could cause a temporary long
+    // to equal LONG_MAX + 1, which is undefined.
+    // We avoid underflow on the subtraction by treating -0 as positive.
+    *out = (-(long)(result - 1)) - 1;
   } else {
     if (result > LONG_MAX)
       return -1; /* Overflow */
@@ -3378,8 +3458,8 @@ format_win_cmdline_argument(const char *arg)
     smartlist_add(arg_chars, (void*)&backslash);
 
   /* Allocate space for argument, quotes (if needed), and terminator */
-  formatted_arg = tor_malloc(sizeof(char) *
-      (smartlist_len(arg_chars) + (need_quotes?2:0) + 1));
+  formatted_arg = tor_calloc(sizeof(char),
+                    (smartlist_len(arg_chars) + (need_quotes ? 2 : 0) + 1));
 
   /* Add leading quote */
   i=0;
@@ -3544,7 +3624,13 @@ format_helper_exit_status(unsigned char child_state, int saved_errno,
 
   /* Convert errno to be unsigned for hex conversion */
   if (saved_errno < 0) {
-    unsigned_errno = (unsigned int) -saved_errno;
+    // Avoid overflow on the cast to unsigned int when result is INT_MIN
+    // by adding 1 to the signed int negative value,
+    // then, after it has been negated and cast to unsigned,
+    // adding the original 1 back (the double-addition is intentional).
+    // Otherwise, the cast to signed could cause a temporary int
+    // to equal INT_MAX + 1, which is undefined.
+    unsigned_errno = ((unsigned int) -(saved_errno + 1)) + 1;
   } else {
     unsigned_errno = (unsigned int) saved_errno;
   }
@@ -4038,8 +4124,11 @@ tor_spawn_background(const char *const filename, const char **argv,
 
   status = process_handle->status = PROCESS_STATUS_RUNNING;
   /* Set stdout/stderr pipes to be non-blocking */
-  fcntl(process_handle->stdout_pipe, F_SETFL, O_NONBLOCK);
-  fcntl(process_handle->stderr_pipe, F_SETFL, O_NONBLOCK);
+  if (fcntl(process_handle->stdout_pipe, F_SETFL, O_NONBLOCK) < 0 ||
+      fcntl(process_handle->stderr_pipe, F_SETFL, O_NONBLOCK) < 0) {
+    log_warn(LD_GENERAL, "Failed to set stderror/stdout pipes nonblocking "
+             "in parent process: %s", strerror(errno));
+  }
   /* Open the buffered IO streams */
   process_handle->stdout_handle = fdopen(process_handle->stdout_pipe, "r");
   process_handle->stderr_handle = fdopen(process_handle->stderr_pipe, "r");
@@ -4373,7 +4462,7 @@ tor_read_all_handle(HANDLE h, char *buf, size_t count,
   DWORD byte_count;
   BOOL process_exited = FALSE;
 
-  if (count > SIZE_T_CEILING || count > SSIZE_T_MAX)
+  if (count > SIZE_T_CEILING || count > SSIZE_MAX)
     return -1;
 
   while (numread != count) {
@@ -4439,7 +4528,7 @@ tor_read_all_handle(FILE *h, char *buf, size_t count,
   if (eof)
     *eof = 0;
 
-  if (count > SIZE_T_CEILING || count > SSIZE_T_MAX)
+  if (count > SIZE_T_CEILING || count > SSIZE_MAX)
     return -1;
 
   while (numread != count) {
@@ -5008,7 +5097,7 @@ tor_check_port_forwarding(const char *filename,
        for each smartlist element (one for "-p" and one for the
        ports), and one for the final NULL. */
     args_n = 1 + 2*smartlist_len(ports_to_forward) + 1;
-    argv = tor_malloc_zero(sizeof(char*)*args_n);
+    argv = tor_calloc(sizeof(char *), args_n);
 
     argv[argv_index++] = filename;
     SMARTLIST_FOREACH_BEGIN(ports_to_forward, const char *, port) {

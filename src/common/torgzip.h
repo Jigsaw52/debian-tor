@@ -1,6 +1,6 @@
 /* Copyright (c) 2003, Roger Dingledine
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -54,6 +54,9 @@ tor_zlib_output_t tor_zlib_process(tor_zlib_state_t *state,
                                    const char **in, size_t *in_len,
                                    int finish);
 void tor_zlib_free(tor_zlib_state_t *state);
+
+size_t tor_zlib_state_size(const tor_zlib_state_t *state);
+size_t tor_zlib_get_total_allocation(void);
 
 #endif
 

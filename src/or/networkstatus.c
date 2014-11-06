@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -83,7 +83,11 @@ static consensus_waiting_for_certs_t
  * before the current consensus becomes invalid. */
 static time_t time_to_download_next_consensus[N_CONSENSUS_FLAVORS];
 /** Download status for the current consensus networkstatus. */
-static download_status_t consensus_dl_status[N_CONSENSUS_FLAVORS];
+static download_status_t consensus_dl_status[N_CONSENSUS_FLAVORS] =
+  {
+    { 0, 0, DL_SCHED_CONSENSUS },
+    { 0, 0, DL_SCHED_CONSENSUS },
+  };
 
 /** True iff we have logged a warning about this OR's version being older than
  * listed by the authorities. */
@@ -591,10 +595,10 @@ networkstatus_vote_find_entry_idx(networkstatus_t *ns,
 
 /** As router_get_consensus_status_by_descriptor_digest, but does not return
  * a const pointer. */
-routerstatus_t *
-router_get_mutable_consensus_status_by_descriptor_digest(
+MOCK_IMPL(routerstatus_t *,
+router_get_mutable_consensus_status_by_descriptor_digest,(
                                                  networkstatus_t *consensus,
-                                                 const char *digest)
+                                                 const char *digest))
 {
   if (!consensus)
     consensus = current_consensus;
@@ -624,8 +628,8 @@ router_get_consensus_status_by_descriptor_digest(networkstatus_t *consensus,
 
 /** Given the digest of a router descriptor, return its current download
  * status, or NULL if the digest is unrecognized. */
-download_status_t *
-router_get_dl_status_by_descriptor_digest(const char *d)
+MOCK_IMPL(download_status_t *,
+router_get_dl_status_by_descriptor_digest,(const char *d))
 {
   routerstatus_t *rs;
   if (!current_ns_consensus)
@@ -753,6 +757,9 @@ update_consensus_networkstatus_downloads(time_t now)
       continue; /* Wait until the current consensus is older. */
 
     resource = networkstatus_get_flavor_name(i);
+
+    /* Let's make sure we remembered to update consensus_dl_status */
+    tor_assert(consensus_dl_status[i].schedule == DL_SCHED_CONSENSUS);
 
     if (!download_status_is_ready(&consensus_dl_status[i], now,
                              options->TestingConsensusMaxDownloadTries))
@@ -988,8 +995,8 @@ networkstatus_get_latest_consensus(void)
 
 /** Return the latest consensus we have whose flavor matches <b>f</b>, or NULL
  * if we don't have one. */
-networkstatus_t *
-networkstatus_get_latest_consensus_by_flavor(consensus_flavor_t f)
+MOCK_IMPL(networkstatus_t *,
+networkstatus_get_latest_consensus_by_flavor,(consensus_flavor_t f))
 {
   if (f == FLAV_NS)
     return current_ns_consensus;
@@ -1055,7 +1062,6 @@ routerstatus_has_changed(const routerstatus_t *a, const routerstatus_t *b)
          a->is_valid != b->is_valid ||
          a->is_possible_guard != b->is_possible_guard ||
          a->is_bad_exit != b->is_bad_exit ||
-         a->is_bad_directory != b->is_bad_directory ||
          a->is_hs_dir != b->is_hs_dir ||
          a->version_known != b->version_known;
 }
@@ -1117,7 +1123,7 @@ networkstatus_copy_old_consensus_info(networkstatus_t *new_c,
     rs_new->last_dir_503_at = rs_old->last_dir_503_at;
 
     if (tor_memeq(rs_old->descriptor_digest, rs_new->descriptor_digest,
-                DIGEST_LEN)) {
+                  DIGEST_LEN)) { /* XXXX Change this to digest256_len */
       /* And the same descriptor too! */
       memcpy(&rs_new->dl_status, &rs_old->dl_status,sizeof(download_status_t));
     }
@@ -1655,7 +1661,7 @@ networkstatus_getinfo_by_purpose(const char *purpose_string, time_t now)
     if (bridge_auth && ri->purpose == ROUTER_PURPOSE_BRIDGE)
       dirserv_set_router_is_running(ri, now);
     /* then generate and write out status lines for each of them */
-    set_routerstatus_from_routerinfo(&rs, node, ri, now, 0, 0, 0, 0);
+    set_routerstatus_from_routerinfo(&rs, node, ri, now, 0, 0);
     smartlist_add(statuses, networkstatus_getinfo_helper_single(&rs));
   } SMARTLIST_FOREACH_END(ri);
 
@@ -1672,17 +1678,22 @@ networkstatus_dump_bridge_status_to_file(time_t now)
   char *status = networkstatus_getinfo_by_purpose("bridge", now);
   const or_options_t *options = get_options();
   char *fname = NULL;
-  char *thresholds = NULL, *thresholds_and_status = NULL;
+  char *thresholds = NULL;
+  char *published_thresholds_and_status = NULL;
   routerlist_t *rl = router_get_routerlist();
+  char published[ISO_TIME_LEN+1];
+
+  format_iso_time(published, now);
   dirserv_compute_bridge_flag_thresholds(rl);
   thresholds = dirserv_get_flag_thresholds_line();
-  tor_asprintf(&thresholds_and_status, "flag-thresholds %s\n%s",
-               thresholds, status);
+  tor_asprintf(&published_thresholds_and_status,
+               "published %s\nflag-thresholds %s\n%s",
+               published, thresholds, status);
   tor_asprintf(&fname, "%s"PATH_SEPARATOR"networkstatus-bridges",
                options->DataDirectory);
-  write_str_to_file(fname,thresholds_and_status,0);
+  write_str_to_file(fname,published_thresholds_and_status,0);
   tor_free(thresholds);
-  tor_free(thresholds_and_status);
+  tor_free(published_thresholds_and_status);
   tor_free(fname);
   tor_free(status);
 }

@@ -1,5 +1,5 @@
 /* Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson
- * Copyright (c) 2007-2013, The Tor Project, Inc.
+ * Copyright (c) 2007-2014, The Tor Project, Inc.
  */
 /* See LICENSE for licensing information */
 
@@ -344,7 +344,7 @@ main(int argc, char **argv)
   char *result_hostname = NULL;
   log_severity_list_t *s = tor_malloc_zero(sizeof(log_severity_list_t));
 
-  init_logging();
+  init_logging(1);
   sandbox_disable_getaddrinfo_cache();
 
   arg = &argv[1];

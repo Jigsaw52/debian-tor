@@ -1,4 +1,4 @@
-/* Copyright (c) 2013, The Tor Project, Inc. */
+/* Copyright (c) 2013-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #define TOR_CHANNEL_INTERNAL_
@@ -79,9 +79,13 @@ test_clist_maps(void *arg)
   memset(&cam, 0, sizeof(cam));
   memset(&cdm, 0, sizeof(cdm));
 
-  ch1->cmux = (void*)0x1001;
-  ch2->cmux = (void*)0x1002;
-  ch3->cmux = (void*)0x1003;
+  tt_assert(ch1);
+  tt_assert(ch2);
+  tt_assert(ch3);
+
+  ch1->cmux = tor_malloc(1);
+  ch2->cmux = tor_malloc(1);
+  ch3->cmux = tor_malloc(1);
 
   or_c1 = or_circuit_new(100, ch2);
   tt_assert(or_c1);
@@ -156,6 +160,12 @@ test_clist_maps(void *arg)
     circuit_free(TO_CIRCUIT(or_c1));
   if (or_c2)
     circuit_free(TO_CIRCUIT(or_c2));
+  if (ch1)
+    tor_free(ch1->cmux);
+  if (ch2)
+    tor_free(ch2->cmux);
+  if (ch3)
+    tor_free(ch3->cmux);
   tor_free(ch1);
   tor_free(ch2);
   tor_free(ch3);
@@ -241,7 +251,7 @@ test_rend_token_maps(void *arg)
 
   tt_ptr_op(c3->rendinfo, ==, NULL);
   tt_ptr_op(c4->rendinfo, !=, NULL);
-  test_mem_op(c4->rendinfo, ==, tok3, REND_TOKEN_LEN);
+  tt_mem_op(c4->rendinfo, ==, tok3, REND_TOKEN_LEN);
 
   /* Now clear c4's cookie. */
   circuit_set_intro_point_digest(c4, NULL);

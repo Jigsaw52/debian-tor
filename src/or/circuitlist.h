@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -14,9 +14,7 @@
 
 #include "testsupport.h"
 
-TOR_LIST_HEAD(global_circuitlist_s, circuit_t);
-
-MOCK_DECL(struct global_circuitlist_s*, circuit_get_global_list, (void));
+MOCK_DECL(smartlist_t *, circuit_get_global_list, (void));
 const char *circuit_state_to_string(int state);
 const char *circuit_purpose_to_controller_string(uint8_t purpose);
 const char *circuit_purpose_to_controller_hs_state_string(uint8_t purpose);

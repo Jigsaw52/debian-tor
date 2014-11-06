@@ -1,5 +1,5 @@
 /* Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -155,7 +155,7 @@ rend_compute_v2_desc_id(char *desc_id_out, const char *service_id,
   }
   /* Calculate current time-period. */
   time_period = get_time_period(now, 0, service_id_binary);
-  /* Calculate secret-id-part = h(time-period + replica). */
+  /* Calculate secret-id-part = h(time-period | replica). */
   get_secret_id_part_bytes(secret_id_part, time_period, descriptor_cookie,
                            replica);
   /* Calculate descriptor ID. */
@@ -528,7 +528,7 @@ rend_encode_v2_descriptors(smartlist_t *descs_out,
         return -1;
     }
     /* Base64-encode introduction points. */
-    ipos_base64 = tor_malloc_zero(ipos_len * 2);
+    ipos_base64 = tor_calloc(ipos_len, 2);
     if (base64_encode(ipos_base64, ipos_len * 2, ipos, ipos_len)<0) {
       log_warn(LD_REND, "Could not encode introduction point string to "
                "base64. length=%d", (int)ipos_len);
@@ -556,7 +556,7 @@ rend_encode_v2_descriptors(smartlist_t *descs_out,
     char desc_digest[DIGEST_LEN];
     rend_encoded_v2_service_descriptor_t *enc =
       tor_malloc_zero(sizeof(rend_encoded_v2_service_descriptor_t));
-    /* Calculate secret-id-part = h(time-period + cookie + replica). */
+    /* Calculate secret-id-part = h(time-period | cookie | replica). */
     get_secret_id_part_bytes(secret_id_part, time_period, descriptor_cookie,
                              k);
     base32_encode(secret_id_part_base32, sizeof(secret_id_part_base32),

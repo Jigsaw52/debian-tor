@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -99,8 +99,6 @@ static config_abbrev_t option_abbrevs_[] = {
   { "PreferTunnelledDirConns", "PreferTunneledDirConns", 0, 0},
   { "BridgeAuthoritativeDirectory", "BridgeAuthoritativeDir", 0, 0},
   { "HashedControlPassword", "__HashedControlSessionPassword", 1, 0},
-  { "StrictEntryNodes", "StrictNodes", 0, 1},
-  { "StrictExitNodes", "StrictNodes", 0, 1},
   { "VirtualAddrNetwork", "VirtualAddrNetworkIPv4", 0, 0},
   { "_UseFilteringSSLBufferevents", "UseFilteringSSLBufferevents", 0, 1},
   { NULL, NULL, 0, 0},
@@ -127,8 +125,8 @@ static config_abbrev_t option_abbrevs_[] = {
  * be chosen first.
  */
 static config_var_t option_vars_[] = {
-  OBSOLETE("AccountingMaxKB"),
   V(AccountingMax,               MEMUNIT,  "0 bytes"),
+  VAR("AccountingRule",          STRING,   AccountingRule_option,  "max"),
   V(AccountingStart,             STRING,   NULL),
   V(Address,                     STRING,   NULL),
   V(AllowDotExit,                BOOL,     "0"),
@@ -140,8 +138,8 @@ static config_var_t option_vars_[] = {
   V(AlternateDirAuthority,       LINELIST, NULL),
   OBSOLETE("AlternateHSAuthority"),
   V(AssumeReachable,             BOOL,     "0"),
-  V(AuthDirBadDir,               LINELIST, NULL),
-  V(AuthDirBadDirCCs,            CSV,      ""),
+  OBSOLETE("AuthDirBadDir"),
+  OBSOLETE("AuthDirBadDirCCs"),
   V(AuthDirBadExit,              LINELIST, NULL),
   V(AuthDirBadExitCCs,           CSV,      ""),
   V(AuthDirInvalid,              LINELIST, NULL),
@@ -150,8 +148,8 @@ static config_var_t option_vars_[] = {
   V(AuthDirGuardBWGuarantee,     MEMUNIT,  "2 MB"),
   V(AuthDirReject,               LINELIST, NULL),
   V(AuthDirRejectCCs,            CSV,      ""),
-  V(AuthDirRejectUnlisted,       BOOL,     "0"),
-  V(AuthDirListBadDirs,          BOOL,     "0"),
+  OBSOLETE("AuthDirRejectUnlisted"),
+  OBSOLETE("AuthDirListBadDirs"),
   V(AuthDirListBadExits,         BOOL,     "0"),
   V(AuthDirMaxServersPerAddr,    UINT,     "2"),
   V(AuthDirMaxServersPerAuthAddr,UINT,     "5"),
@@ -196,21 +194,14 @@ static config_var_t option_vars_[] = {
   V(CookieAuthFile,              STRING,   NULL),
   V(CountPrivateBandwidth,       BOOL,     "0"),
   V(DataDirectory,               FILENAME, NULL),
-  OBSOLETE("DebugLogFile"),
   V(DisableNetwork,              BOOL,     "0"),
   V(DirAllowPrivateAddresses,    BOOL,     "0"),
   V(TestingAuthDirTimeToLearnReachability, INTERVAL, "30 minutes"),
   V(DirListenAddress,            LINELIST, NULL),
-  OBSOLETE("DirFetchPeriod"),
   V(DirPolicy,                   LINELIST, NULL),
   VPORT(DirPort,                     LINELIST, NULL),
   V(DirPortFrontPage,            FILENAME, NULL),
-  OBSOLETE("DirPostPeriod"),
-  OBSOLETE("DirRecordUsageByCountry"),
-  OBSOLETE("DirRecordUsageGranularity"),
-  OBSOLETE("DirRecordUsageRetainIPs"),
-  OBSOLETE("DirRecordUsageSaveInterval"),
-  V(DirReqStatistics,            BOOL,     "1"),
+  VAR("DirReqStatistics",        BOOL,     DirReqStatistics_option, "1"),
   VAR("DirAuthority",            LINELIST, DirAuthorities, NULL),
   V(DirAuthorityFallbackRate,    DOUBLE,   "1.0"),
   V(DisableAllSwap,              BOOL,     "0"),
@@ -262,7 +253,6 @@ static config_var_t option_vars_[] = {
   V(GeoIPv6File,                 FILENAME,
     SHARE_DATADIR PATH_SEPARATOR "tor" PATH_SEPARATOR "geoip6"),
 #endif
-  OBSOLETE("GiveGuardFlagTo_CVE_2011_2768_VulnerableRelays"),
   OBSOLETE("Group"),
   V(GuardLifetime,               INTERVAL, "0 minutes"),
   V(HardwareAccel,               BOOL,     "0"),
@@ -272,15 +262,11 @@ static config_var_t option_vars_[] = {
   V(HashedControlPassword,       LINELIST, NULL),
   V(HidServDirectoryV2,          BOOL,     "1"),
   VAR("HiddenServiceDir",    LINELIST_S, RendConfigLines,    NULL),
-  OBSOLETE("HiddenServiceExcludeNodes"),
-  OBSOLETE("HiddenServiceNodes"),
   VAR("HiddenServiceOptions",LINELIST_V, RendConfigLines,    NULL),
   VAR("HiddenServicePort",   LINELIST_S, RendConfigLines,    NULL),
   VAR("HiddenServiceVersion",LINELIST_S, RendConfigLines,    NULL),
   VAR("HiddenServiceAuthorizeClient",LINELIST_S,RendConfigLines, NULL),
   V(HidServAuth,                 LINELIST, NULL),
-  OBSOLETE("HSAuthoritativeDir"),
-  OBSOLETE("HSAuthorityRecordStats"),
   V(CloseHSClientCircuitsImmediatelyOnTimeout, BOOL, "0"),
   V(CloseHSServiceRendCircuitsImmediatelyOnTimeout, BOOL, "0"),
   V(HTTPProxy,                   STRING,   NULL),
@@ -295,14 +281,11 @@ static config_var_t option_vars_[] = {
   V(Socks5Proxy,                 STRING,   NULL),
   V(Socks5ProxyUsername,         STRING,   NULL),
   V(Socks5ProxyPassword,         STRING,   NULL),
-  OBSOLETE("IgnoreVersion"),
   V(KeepalivePeriod,             INTERVAL, "5 minutes"),
   VAR("Log",                     LINELIST, Logs,             NULL),
   V(LogMessageDomains,           BOOL,     "0"),
-  OBSOLETE("LinkPadding"),
-  OBSOLETE("LogLevel"),
-  OBSOLETE("LogFile"),
   V(LogTimeGranularity,          MSEC_INTERVAL, "1 second"),
+  V(TruncateLogFile,             BOOL,     "0"),
   V(LongLivedPorts,              CSV,
         "21,22,706,1863,5050,5190,5222,5223,6523,6667,6697,8300"),
   VAR("MapAddress",              LINELIST, AddressMap,           NULL),
@@ -313,16 +296,14 @@ static config_var_t option_vars_[] = {
   OBSOLETE("MaxOnionsPending"),
   V(MaxOnionQueueDelay,          MSEC_INTERVAL, "1750 msec"),
   V(MinMeasuredBWsForAuthToIgnoreAdvertised, INT, "500"),
-  OBSOLETE("MonthlyAccountingStart"),
   V(MyFamily,                    STRING,   NULL),
   V(NewCircuitPeriod,            INTERVAL, "30 seconds"),
-  VAR("NamingAuthoritativeDirectory",BOOL, NamingAuthoritativeDir, "0"),
+  OBSOLETE("NamingAuthoritativeDirectory"),
   V(NATDListenAddress,           LINELIST, NULL),
   VPORT(NATDPort,                    LINELIST, NULL),
   V(Nickname,                    STRING,   NULL),
   V(PredictedPortsRelevanceTime,  INTERVAL, "1 hour"),
   V(WarnUnsafeSocks,              BOOL,     "1"),
-  OBSOLETE("NoPublish"),
   VAR("NodeFamily",              LINELIST, NodeFamilies,         NULL),
   V(NumCPUs,                     UINT,     "0"),
   V(NumDirectoryGuards,          UINT,     "0"),
@@ -348,7 +329,6 @@ static config_var_t option_vars_[] = {
   V(PathBiasScaleUseThreshold,      INT,      "-1"),
 
   V(PathsNeededToBuildCircuits,  DOUBLE,   "-1"),
-  OBSOLETE("PathlenCoinWeight"),
   V(PerConnBWBurst,              MEMUNIT,  "0"),
   V(PerConnBWRate,               MEMUNIT,  "0"),
   V(PidFile,                     STRING,   NULL),
@@ -368,18 +348,13 @@ static config_var_t option_vars_[] = {
   V(RecommendedVersions,         LINELIST, NULL),
   V(RecommendedClientVersions,   LINELIST, NULL),
   V(RecommendedServerVersions,   LINELIST, NULL),
-  OBSOLETE("RedirectExit"),
   V(RefuseUnknownExits,          AUTOBOOL, "auto"),
   V(RejectPlaintextPorts,        CSV,      ""),
   V(RelayBandwidthBurst,         MEMUNIT,  "0"),
   V(RelayBandwidthRate,          MEMUNIT,  "0"),
-  OBSOLETE("RendExcludeNodes"),
-  OBSOLETE("RendNodes"),
   V(RendPostPeriod,              INTERVAL, "1 hour"),
   V(RephistTrackTime,            INTERVAL, "24 hours"),
-  OBSOLETE("RouterFile"),
   V(RunAsDaemon,                 BOOL,     "0"),
-//  V(RunTesting,                  BOOL,     "0"),
   OBSOLETE("RunTesting"), // currently unused
   V(Sandbox,                     BOOL,     "0"),
   V(SafeLogging,                 STRING,   "1"),
@@ -398,18 +373,16 @@ static config_var_t option_vars_[] = {
   VPORT(SocksPort,                   LINELIST, NULL),
   V(SocksTimeout,                INTERVAL, "2 minutes"),
   V(SSLKeyLifetime,              INTERVAL, "0"),
-  OBSOLETE("StatusFetchPeriod"),
+  OBSOLETE("StrictEntryNodes"),
+  OBSOLETE("StrictExitNodes"),
   V(StrictNodes,                 BOOL,     "0"),
   V(Support022HiddenServices,    AUTOBOOL, "auto"),
-  OBSOLETE("SysLog"),
   V(TestSocks,                   BOOL,     "0"),
-  OBSOLETE("TestVia"),
   V(TokenBucketRefillInterval,   MSEC_INTERVAL, "100 msec"),
   V(Tor2webMode,                 BOOL,     "0"),
   V(TLSECGroup,                  STRING,   NULL),
   V(TrackHostExits,              CSV,      NULL),
   V(TrackHostExitsExpire,        INTERVAL, "30 minutes"),
-  OBSOLETE("TrafficShaping"),
   V(TransListenAddress,          LINELIST, NULL),
   VPORT(TransPort,                   LINELIST, NULL),
   V(TransProxyType,              STRING,   "default"),
@@ -466,6 +439,7 @@ static config_var_t option_vars_[] = {
   V(TestingDescriptorMaxDownloadTries, UINT, "8"),
   V(TestingMicrodescMaxDownloadTries, UINT, "8"),
   V(TestingCertMaxDownloadTries, UINT, "8"),
+  V(TestingDirAuthVoteExit, ROUTERSET, NULL),
   V(TestingDirAuthVoteGuard, ROUTERSET, NULL),
   VAR("___UsingTestNetworkDefaults", BOOL, UsingTestNetworkDefaults_, "0"),
 
@@ -558,7 +532,8 @@ static int check_server_ports(const smartlist_t *ports,
 static int validate_data_directory(or_options_t *options);
 static int write_configuration_file(const char *fname,
                                     const or_options_t *options);
-static int options_init_logs(or_options_t *options, int validate_only);
+static int options_init_logs(const or_options_t *old_options,
+                             or_options_t *options, int validate_only);
 
 static void init_libevent(const or_options_t *options);
 static int opt_streq(const char *s1, const char *s2);
@@ -843,7 +818,9 @@ escaped_safe_str(const char *address)
 }
 
 /** Add the default directory authorities directly into the trusted dir list,
- * but only add them insofar as they share bits with <b>type</b>. */
+ * but only add them insofar as they share bits with <b>type</b>.
+ * Each authority's bits are restricted to the bits shared with <b>type</b>.
+ * If <b>type</b> is ALL_DIRINFO or NO_DIRINFO (zero), add all authorities. */
 static void
 add_default_trusted_dir_authorities(dirinfo_type_t type)
 {
@@ -985,7 +962,10 @@ consider_adding_dir_servers(const or_options_t *options,
       type |= BRIDGE_DIRINFO;
     if (!options->AlternateDirAuthority)
       type |= V3_DIRINFO | EXTRAINFO_DIRINFO | MICRODESC_DIRINFO;
-    add_default_trusted_dir_authorities(type);
+    /* if type == NO_DIRINFO, we don't want to add any of the
+     * default authorities, because we've replaced them all */
+    if (type != NO_DIRINFO)
+      add_default_trusted_dir_authorities(type);
   }
   if (!options->FallbackDir)
     add_default_fallback_dir_servers();
@@ -1021,7 +1001,7 @@ options_act_reversible(const or_options_t *old_options, char **msg)
   int running_tor = options->command == CMD_RUN_TOR;
   int set_conn_limit = 0;
   int r = -1;
-  int logs_marked = 0;
+  int logs_marked = 0, logs_initialized = 0;
   int old_min_log_level = get_min_log_level();
 
   /* Daemonize _first_, since we only want to open most of this stuff in
@@ -1146,10 +1126,12 @@ options_act_reversible(const or_options_t *old_options, char **msg)
 
   mark_logs_temp(); /* Close current logs once new logs are open. */
   logs_marked = 1;
-  if (options_init_logs(options, 0)<0) { /* Configure the tor_log(s) */
+  /* Configure the tor_log(s) */
+  if (options_init_logs(old_options, options, 0)<0) {
     *msg = tor_strdup("Failed to init Log options. See logs for details.");
     goto rollback;
   }
+  logs_initialized = 1;
 
  commit:
   r = 0;
@@ -1161,6 +1143,9 @@ options_act_reversible(const or_options_t *old_options, char **msg)
     control_adjust_event_log_severity();
     tor_free(severity);
     tor_log_update_sigsafe_err_fds();
+  }
+  if (logs_initialized) {
+    flush_log_messages_from_startup();
   }
 
   {
@@ -1425,24 +1410,26 @@ options_act(const or_options_t *old_options)
 
   mark_transport_list();
   pt_prepare_proxy_list_for_config_read();
-  if (options->ClientTransportPlugin) {
-    for (cl = options->ClientTransportPlugin; cl; cl = cl->next) {
-      if (parse_client_transport_line(options, cl->value, 0)<0) {
-        log_warn(LD_BUG,
-                 "Previously validated ClientTransportPlugin line "
-                 "could not be added!");
-        return -1;
+  if (!options->DisableNetwork) {
+    if (options->ClientTransportPlugin) {
+      for (cl = options->ClientTransportPlugin; cl; cl = cl->next) {
+        if (parse_client_transport_line(options, cl->value, 0)<0) {
+          log_warn(LD_BUG,
+                   "Previously validated ClientTransportPlugin line "
+                   "could not be added!");
+          return -1;
+        }
       }
     }
-  }
 
-  if (options->ServerTransportPlugin && server_mode(options)) {
-    for (cl = options->ServerTransportPlugin; cl; cl = cl->next) {
-      if (parse_server_transport_line(options, cl->value, 0)<0) {
-        log_warn(LD_BUG,
-                 "Previously validated ServerTransportPlugin line "
-                 "could not be added!");
-        return -1;
+    if (options->ServerTransportPlugin && server_mode(options)) {
+      for (cl = options->ServerTransportPlugin; cl; cl = cl->next) {
+        if (parse_server_transport_line(options, cl->value, 0)<0) {
+          log_warn(LD_BUG,
+                   "Previously validated ServerTransportPlugin line "
+                   "could not be added!");
+          return -1;
+        }
       }
     }
   }
@@ -1593,6 +1580,20 @@ options_act(const or_options_t *old_options)
     return -1;
   }
 
+  config_maybe_load_geoip_files_(options, old_options);
+
+  if (geoip_is_loaded(AF_INET) && options->GeoIPExcludeUnknown) {
+    /* ExcludeUnknown is true or "auto" */
+    const int is_auto = options->GeoIPExcludeUnknown == -1;
+    int changed;
+
+    changed  = routerset_add_unknown_ccs(&options->ExcludeNodes, is_auto);
+    changed += routerset_add_unknown_ccs(&options->ExcludeExitNodes, is_auto);
+
+    if (changed)
+      routerset_add_unknown_ccs(&options->ExcludeExitNodesUnion_, is_auto);
+  }
+
   /* Check for transitions that need action. */
   if (old_options) {
     int revise_trackexithosts = 0;
@@ -1688,19 +1689,9 @@ options_act(const or_options_t *old_options)
       connection_or_update_token_buckets(get_connection_array(), options);
   }
 
-  config_maybe_load_geoip_files_(options, old_options);
-
-  if (geoip_is_loaded(AF_INET) && options->GeoIPExcludeUnknown) {
-    /* ExcludeUnknown is true or "auto" */
-    const int is_auto = options->GeoIPExcludeUnknown == -1;
-    int changed;
-
-    changed  = routerset_add_unknown_ccs(&options->ExcludeNodes, is_auto);
-    changed += routerset_add_unknown_ccs(&options->ExcludeExitNodes, is_auto);
-
-    if (changed)
-      routerset_add_unknown_ccs(&options->ExcludeExitNodesUnion_, is_auto);
-  }
+  /* Only collect directory-request statistics on relays and bridges. */
+  options->DirReqStatistics = options->DirReqStatistics_option &&
+    server_mode(options);
 
   if (options->CellStatistics || options->DirReqStatistics ||
       options->EntryStatistics || options->ExitPortStatistics ||
@@ -1708,11 +1699,6 @@ options_act(const or_options_t *old_options)
       options->BridgeAuthoritativeDir) {
     time_t now = time(NULL);
     int print_notice = 0;
-
-    /* Only collect directory-request statistics on relays and bridges. */
-    if (!server_mode(options)) {
-      options->DirReqStatistics = 0;
-    }
 
     /* Only collect other relay-only statistics on relays. */
     if (!public_server_mode(options)) {
@@ -1732,8 +1718,8 @@ options_act(const or_options_t *old_options)
         geoip_dirreq_stats_init(now);
         print_notice = 1;
       } else {
+        /* disable statistics collection since we have no geoip file */
         options->DirReqStatistics = 0;
-        /* Don't warn Tor clients, they don't use statistics */
         if (options->ORPort_set)
           log_notice(LD_CONFIG, "Configured to measure directory request "
                                 "statistics, but no GeoIP database found. "
@@ -2029,7 +2015,7 @@ print_usage(void)
   printf(
 "Copyright (c) 2001-2004, Roger Dingledine\n"
 "Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson\n"
-"Copyright (c) 2007-2013, The Tor Project, Inc.\n\n"
+"Copyright (c) 2007-2014, The Tor Project, Inc.\n\n"
 "tor -f <torrc> [args]\n"
 "See man page for options, or https://www.torproject.org/ for "
 "documentation.\n");
@@ -2059,6 +2045,13 @@ uint32_t
 get_last_resolved_addr(void)
 {
   return last_resolved_addr;
+}
+
+/** Reset last_resolved_addr from outside this file. */
+void
+reset_last_resolved_addr(void)
+{
+  last_resolved_addr = 0;
 }
 
 /**
@@ -2549,7 +2542,8 @@ options_validate(or_options_t *old_options, or_options_t *options,
         config_line_append(&options->Logs, "Log", "warn stdout");
   }
 
-  if (options_init_logs(options, 1)<0) /* Validate the tor_log(s) */
+  /* Validate the tor_log(s) */
+  if (options_init_logs(old_options, options, 1)<0)
     REJECT("Failed to validate Log options. See logs for details.");
 
   if (authdir_mode(options)) {
@@ -3135,6 +3129,16 @@ options_validate(or_options_t *old_options, or_options_t *options,
     }
   }
 
+  options->AccountingRule = ACCT_MAX;
+  if (options->AccountingRule_option) {
+    if (!strcmp(options->AccountingRule_option, "sum"))
+      options->AccountingRule = ACCT_SUM;
+    else if (!strcmp(options->AccountingRule_option, "max"))
+      options->AccountingRule = ACCT_MAX;
+    else
+      REJECT("AccountingRule must be 'sum' or 'max'");
+  }
+
   if (options->HTTPProxy) { /* parse it now */
     if (tor_addr_port_lookup(options->HTTPProxy,
                         &options->HTTPProxyAddr, &options->HTTPProxyPort) < 0)
@@ -3183,11 +3187,11 @@ options_validate(or_options_t *old_options, or_options_t *options,
     }
   }
 
-  /* Check if more than one proxy type has been enabled. */
+  /* Check if more than one exclusive proxy type has been enabled. */
   if (!!options->Socks4Proxy + !!options->Socks5Proxy +
-      !!options->HTTPSProxy + !!options->ClientTransportPlugin > 1)
+      !!options->HTTPSProxy > 1)
     REJECT("You have configured more than one proxy type. "
-           "(Socks4Proxy|Socks5Proxy|HTTPSProxy|ClientTransportPlugin)");
+           "(Socks4Proxy|Socks5Proxy|HTTPSProxy)");
 
   /* Check if the proxies will give surprising behavior. */
   if (options->HTTPProxy && !(options->Socks4Proxy ||
@@ -4455,7 +4459,8 @@ addressmap_register_auto(const char *from, const char *to,
  * Initialize the logs based on the configuration file.
  */
 static int
-options_init_logs(or_options_t *options, int validate_only)
+options_init_logs(const or_options_t *old_options, or_options_t *options,
+                  int validate_only)
 {
   config_line_t *opt;
   int ok;
@@ -4548,7 +4553,21 @@ options_init_logs(or_options_t *options, int validate_only)
         !strcasecmp(smartlist_get(elts,0), "file")) {
       if (!validate_only) {
         char *fname = expand_filename(smartlist_get(elts, 1));
-        if (add_file_log(severity, fname) < 0) {
+        /* Truncate if TruncateLogFile is set and we haven't seen this option
+           line before. */
+        int truncate = 0;
+        if (options->TruncateLogFile) {
+          truncate = 1;
+          if (old_options) {
+            config_line_t *opt2;
+            for (opt2 = old_options->Logs; opt2; opt2 = opt2->next)
+              if (!strcmp(opt->value, opt2->value)) {
+                truncate = 0;
+                break;
+              }
+          }
+        }
+        if (add_file_log(severity, fname, truncate) < 0) {
           log_warn(LD_CONFIG, "Couldn't open file for 'Log %s': %s",
                    opt->value, strerror(errno));
           ok = 0;
@@ -4837,7 +4856,7 @@ parse_client_transport_line(const or_options_t *options,
     if (!validate_only && !is_useless_proxy) {
       proxy_argc = line_length-2;
       tor_assert(proxy_argc > 0);
-      proxy_argv = tor_malloc_zero(sizeof(char*)*(proxy_argc+1));
+      proxy_argv = tor_calloc(sizeof(char *), (proxy_argc + 1));
       tmp = proxy_argv;
       for (i=0;i<proxy_argc;i++) { /* store arguments */
         *tmp++ = smartlist_get(items, 2);
@@ -4849,6 +4868,13 @@ parse_client_transport_line(const or_options_t *options,
       pt_kickstart_client_proxy(transport_list, proxy_argv);
     }
   } else { /* external */
+    /* ClientTransportPlugins connecting through a proxy is managed only. */
+    if (options->Socks4Proxy || options->Socks5Proxy || options->HTTPSProxy) {
+      log_warn(LD_CONFIG, "You have configured an external proxy with another "
+                          "proxy type. (Socks4Proxy|Socks5Proxy|HTTPSProxy)");
+      goto err;
+    }
+
     if (smartlist_len(transport_list) != 1) {
       log_warn(LD_CONFIG, "You can't have an external proxy with "
                "more than one transports.");
@@ -5117,7 +5143,7 @@ parse_server_transport_line(const or_options_t *options,
     if (!validate_only) {
       proxy_argc = line_length-2;
       tor_assert(proxy_argc > 0);
-      proxy_argv = tor_malloc_zero(sizeof(char*)*(proxy_argc+1));
+      proxy_argv = tor_calloc(sizeof(char *), (proxy_argc + 1));
       tmp = proxy_argv;
 
       for (i=0;i<proxy_argc;i++) { /* store arguments */
@@ -5175,8 +5201,9 @@ parse_server_transport_line(const or_options_t *options,
 /** Read the contents of a DirAuthority line from <b>line</b>. If
  * <b>validate_only</b> is 0, and the line is well-formed, and it
  * shares any bits with <b>required_type</b> or <b>required_type</b>
- * is 0, then add the dirserver described in the line (minus whatever
- * bits it's missing) as a valid authority. Return 0 on success,
+ * is NO_DIRINFO (zero), then add the dirserver described in the line
+ * (minus whatever bits it's missing) as a valid authority.
+ * Return 0 on success or filtering out by type,
  * or -1 if the line isn't well-formed or if we can't add it. */
 static int
 parse_dir_authority_line(const char *line, dirinfo_type_t required_type,

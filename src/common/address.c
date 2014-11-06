@@ -1,6 +1,6 @@
 /* Copyright (c) 2003-2004, Roger Dingledine
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -323,17 +323,23 @@ tor_addr_is_internal_(const tor_addr_t *addr, int for_listening,
 {
   uint32_t iph4 = 0;
   uint32_t iph6[4];
-  sa_family_t v_family;
 
   tor_assert(addr);
-  v_family = tor_addr_family(addr);
+  sa_family_t v_family = tor_addr_family(addr);
 
   if (v_family == AF_INET) {
     iph4 = tor_addr_to_ipv4h(addr);
   } else if (v_family == AF_INET6) {
     if (tor_addr_is_v4(addr)) { /* v4-mapped */
+      uint32_t *addr32 = NULL;
       v_family = AF_INET;
-      iph4 = ntohl(tor_addr_to_in6_addr32(addr)[3]);
+      // Work around an incorrect NULL pointer dereference warning in
+      // "clang --analyze" due to limited analysis depth
+      addr32 = tor_addr_to_in6_addr32(addr);
+      // To improve performance, wrap this assertion in:
+      // #if !defined(__clang_analyzer__) || PARANOIA
+      tor_assert(addr32);
+      iph4 = ntohl(addr32[3]);
     }
   }
 
@@ -465,7 +471,6 @@ tor_addr_parse_PTR_name(tor_addr_t *result, const char *address,
 
   if (!strcasecmpend(address, ".ip6.arpa")) {
     const char *cp;
-    int i;
     int n0, n1;
     struct in6_addr in6;
 
@@ -473,7 +478,7 @@ tor_addr_parse_PTR_name(tor_addr_t *result, const char *address,
       return -1;
 
     cp = address;
-    for (i = 0; i < 16; ++i) {
+    for (int i = 0; i < 16; ++i) {
       n0 = hex_decode_digit(*cp++); /* The low-order nybble appears first. */
       if (*cp++ != '.') return -1;  /* Then a dot. */
       n1 = hex_decode_digit(*cp++); /* The high-order nybble appears first. */
@@ -598,7 +603,7 @@ tor_addr_parse_mask_ports(const char *s,
   int any_flag=0, v4map=0;
   sa_family_t family;
   struct in6_addr in6_tmp;
-  struct in_addr in_tmp;
+  struct in_addr in_tmp = { .s_addr = 0 };
 
   tor_assert(s);
   tor_assert(addr_out);
@@ -659,7 +664,7 @@ tor_addr_parse_mask_ports(const char *s,
     tor_addr_from_ipv4h(addr_out, 0);
     any_flag = 1;
   } else if (!strcmp(address, "*6") && (flags & TAPMP_EXTENDED_STAR)) {
-    static char nil_bytes[16] = { 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0 };
+    static char nil_bytes[16] = { [0]=0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0 };
     family = AF_INET6;
     tor_addr_from_ipv6_bytes(addr_out, nil_bytes);
     any_flag = 1;
@@ -878,7 +883,7 @@ tor_addr_copy(tor_addr_t *dest, const tor_addr_t *src)
   memcpy(dest, src, sizeof(tor_addr_t));
 }
 
-/** Copy a tor_addr_t from <b>src</b> to <b>dest</b>, taking extra case to
+/** Copy a tor_addr_t from <b>src</b> to <b>dest</b>, taking extra care to
  * copy only the well-defined portions. Used for computing hashes of
  * addresses.
  */

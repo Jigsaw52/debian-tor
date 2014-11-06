@@ -1,6 +1,6 @@
 /* Copyright (c) 2003-2004, Roger Dingledine
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #ifndef TOR_CONTAINER_H
@@ -27,8 +27,8 @@ typedef struct smartlist_t {
   /** @} */
 } smartlist_t;
 
-smartlist_t *smartlist_new(void);
-void smartlist_free(smartlist_t *sl);
+MOCK_DECL(smartlist_t *, smartlist_new, (void));
+MOCK_DECL(void, smartlist_free, (smartlist_t *sl));
 void smartlist_clear(smartlist_t *sl);
 void smartlist_add(smartlist_t *sl, void *element);
 void smartlist_add_all(smartlist_t *sl, const smartlist_t *s2);
@@ -328,11 +328,11 @@ char *smartlist_join_strings2(smartlist_t *sl, const char *join,
 #define DECLARE_MAP_FNS(maptype, keytype, prefix)                       \
   typedef struct maptype maptype;                                       \
   typedef struct prefix##entry_t *prefix##iter_t;                       \
-  maptype* prefix##new(void);                                           \
+  MOCK_DECL(maptype*, prefix##new, (void));                             \
   void* prefix##set(maptype *map, keytype key, void *val);              \
   void* prefix##get(const maptype *map, keytype key);                   \
   void* prefix##remove(maptype *map, keytype key);                      \
-  void prefix##free(maptype *map, void (*free_val)(void*));             \
+  MOCK_DECL(void, prefix##free, (maptype *map, void (*free_val)(void*))); \
   int prefix##isempty(const maptype *map);                              \
   int prefix##size(const maptype *map);                                 \
   prefix##iter_t *prefix##iter_init(maptype *map);                      \
@@ -473,7 +473,7 @@ void* strmap_remove_lc(strmap_t *map, const char *key);
 
 #define DECLARE_TYPED_DIGESTMAP_FNS(prefix, maptype, valtype)           \
   typedef struct maptype maptype;                                       \
-  typedef struct prefix##iter_t prefix##iter_t;                         \
+  typedef struct prefix##iter_t *prefix##iter_t;                        \
   ATTR_UNUSED static INLINE maptype*                                    \
   prefix##new(void)                                                     \
   {                                                                     \
@@ -563,7 +563,7 @@ bitarray_init_zero(unsigned int n_bits)
 {
   /* round up to the next int. */
   size_t sz = (n_bits+BITARRAY_MASK) >> BITARRAY_SHIFT;
-  return tor_malloc_zero(sz*sizeof(unsigned int));
+  return tor_calloc(sz, sizeof(unsigned int));
 }
 /** Expand <b>ba</b> from holding <b>n_bits_old</b> to <b>n_bits_new</b>,
  * clearing all new bits.  Returns a possibly changed pointer to the
@@ -577,7 +577,7 @@ bitarray_expand(bitarray_t *ba,
   char *ptr;
   if (sz_new <= sz_old)
     return ba;
-  ptr = tor_realloc(ba, sz_new*sizeof(unsigned int));
+  ptr = tor_reallocarray(ba, sz_new, sizeof(unsigned int));
   /* This memset does nothing to the older excess bytes.  But they were
    * already set to 0 by bitarry_init_zero. */
   memset(ptr+sz_old*sizeof(unsigned int), 0,
@@ -687,6 +687,12 @@ static INLINE int32_t
 median_int32(int32_t *array, int n_elements)
 {
   return find_nth_int32(array, n_elements, (n_elements-1)/2);
+}
+
+static INLINE uint32_t
+third_quartile_uint32(uint32_t *array, int n_elements)
+{
+  return find_nth_uint32(array, n_elements, (n_elements*3)/4);
 }
 
 #endif

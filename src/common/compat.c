@@ -1,6 +1,6 @@
 /* Copyright (c) 2003-2004, Roger Dingledine
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -77,6 +77,7 @@
 
 /* Includes for the process attaching prevention */
 #if defined(HAVE_SYS_PRCTL_H) && defined(__linux__)
+/* Only use the linux prctl;  the IRIX prctl is totally different */
 #include <sys/prctl.h>
 #elif defined(__APPLE__)
 #include <sys/types.h>
@@ -109,10 +110,6 @@
 #endif
 #ifdef HAVE_SYS_FILE_H
 #include <sys/file.h>
-#endif
-#if defined(HAVE_SYS_PRCTL_H) && defined(__linux__)
-/* Only use the linux prctl;  the IRIX prctl is totally different */
-#include <sys/prctl.h>
 #endif
 #ifdef TOR_UNIT_TESTS
 #if !defined(HAVE_USLEEP) && defined(HAVE_SYS_SELECT_H)
@@ -981,14 +978,23 @@ tor_fd_getpos(int fd)
 #endif
 }
 
-/** Move <b>fd</b> to the end of the file. Return -1 on error, 0 on success. */
+/** Move <b>fd</b> to the end of the file. Return -1 on error, 0 on success.
+ * If the file is a pipe, do nothing and succeed.
+ **/
 int
 tor_fd_seekend(int fd)
 {
 #ifdef _WIN32
   return _lseek(fd, 0, SEEK_END) < 0 ? -1 : 0;
 #else
-  return lseek(fd, 0, SEEK_END) < 0 ? -1 : 0;
+  off_t rc = lseek(fd, 0, SEEK_END) < 0 ? -1 : 0;
+#ifdef ESPIPE
+  /* If we get an error and ESPIPE, then it's a pipe or a socket of a fifo:
+   * no need to worry. */
+  if (rc < 0 && errno == ESPIPE)
+    rc = 0;
+#endif
+  return (rc < 0) ? -1 : 0;
 #endif
 }
 
@@ -1001,6 +1007,23 @@ tor_fd_setpos(int fd, off_t pos)
   return _lseek(fd, pos, SEEK_SET) < 0 ? -1 : 0;
 #else
   return lseek(fd, pos, SEEK_SET) < 0 ? -1 : 0;
+#endif
+}
+
+/** Replacement for ftruncate(fd, 0): move to the front of the file and remove
+ * all the rest of the file. Return -1 on error, 0 on success. */
+int
+tor_ftruncate(int fd)
+{
+  /* Rumor has it that some versions of ftruncate do not move the file pointer.
+   */
+  if (tor_fd_setpos(fd, 0) < 0)
+    return -1;
+
+#ifdef _WIN32
+  return _chsize(fd, 0);
+#else
+  return ftruncate(fd, 0);
 #endif
 }
 
@@ -1409,6 +1432,9 @@ tor_ersatz_socketpair(int family, int type, int protocol, tor_socket_t fd[2])
     socklen_t size;
     int saved_errno = -1;
 
+    memset(&connect_addr, 0, sizeof(connect_addr));
+    memset(&listen_addr, 0, sizeof(listen_addr));
+
     if (protocol
 #ifdef AF_UNIX
         || family != AF_UNIX
@@ -1670,12 +1696,12 @@ log_credential_status(void)
 
   /* log supplementary groups */
   sup_gids_size = 64;
-  sup_gids = tor_malloc(sizeof(gid_t) * 64);
+  sup_gids = tor_calloc(sizeof(gid_t), 64);
   while ((ngids = getgroups(sup_gids_size, sup_gids)) < 0 &&
          errno == EINVAL &&
          sup_gids_size < NGROUPS_MAX) {
     sup_gids_size *= 2;
-    sup_gids = tor_realloc(sup_gids, sizeof(gid_t) * sup_gids_size);
+    sup_gids = tor_reallocarray(sup_gids, sizeof(gid_t), sup_gids_size);
   }
 
   if (ngids < 0) {
@@ -2485,13 +2511,11 @@ get_uname(void)
                          "Unrecognized version of Windows [major=%d,minor=%d]",
                          (int)info.dwMajorVersion,(int)info.dwMinorVersion);
         }
-#if !defined (WINCE)
 #ifdef VER_NT_SERVER
       if (info.wProductType == VER_NT_SERVER ||
           info.wProductType == VER_NT_DOMAIN_CONTROLLER) {
         strlcat(uname_result, " [server]", sizeof(uname_result));
       }
-#endif
 #endif
 #else
         strlcpy(uname_result, "Unknown platform", sizeof(uname_result));
@@ -2697,15 +2721,8 @@ tor_gettimeofday(struct timeval *timeval)
     uint64_t ft_64;
     FILETIME ft_ft;
   } ft;
-#if defined (WINCE)
-  /* wince do not have GetSystemTimeAsFileTime */
-  SYSTEMTIME stime;
-  GetSystemTime(&stime);
-  SystemTimeToFileTime(&stime,&ft.ft_ft);
-#else
   /* number of 100-nsec units since Jan 1, 1601 */
   GetSystemTimeAsFileTime(&ft.ft_ft);
-#endif
   if (ft.ft_64 < EPOCH_BIAS) {
     log_err(LD_GENERAL,"System time is before 1970; failing.");
     exit(1);
@@ -2731,7 +2748,7 @@ tor_gettimeofday(struct timeval *timeval)
   return;
 }
 
-#if defined(TOR_IS_MULTITHREADED) && !defined(_WIN32)
+#if !defined(_WIN32)
 /** Defined iff we need to add locks when defining fake versions of reentrant
  * versions of time-related functions. */
 #define TIME_FNS_NEED_LOCKS
@@ -2750,14 +2767,24 @@ correct_tm(int islocal, const time_t *timep, struct tm *resultbuf,
   const char *outcome;
 
   if (PREDICT_LIKELY(r)) {
-    if (r->tm_year > 8099) { /* We can't strftime dates after 9999 CE. */
+    /* We can't strftime dates after 9999 CE, and we want to avoid dates
+     * before 1 CE (avoiding the year 0 issue and negative years). */
+    if (r->tm_year > 8099) {
       r->tm_year = 8099;
       r->tm_mon = 11;
       r->tm_mday = 31;
-      r->tm_yday = 365;
+      r->tm_yday = 364;
       r->tm_hour = 23;
       r->tm_min = 59;
       r->tm_sec = 59;
+    } else if (r->tm_year < (1-1900)) {
+      r->tm_year = (1-1900);
+      r->tm_mon = 0;
+      r->tm_mday = 1;
+      r->tm_yday = 0;
+      r->tm_hour = 0;
+      r->tm_min = 0;
+      r->tm_sec = 0;
     }
     return r;
   }
@@ -2771,7 +2798,7 @@ correct_tm(int islocal, const time_t *timep, struct tm *resultbuf,
       r->tm_year = 70; /* 1970 CE */
       r->tm_mon = 0;
       r->tm_mday = 1;
-      r->tm_yday = 1;
+      r->tm_yday = 0;
       r->tm_hour = 0;
       r->tm_min = 0 ;
       r->tm_sec = 0;
@@ -2784,7 +2811,7 @@ correct_tm(int islocal, const time_t *timep, struct tm *resultbuf,
       r->tm_year = 137; /* 2037 CE */
       r->tm_mon = 11;
       r->tm_mday = 31;
-      r->tm_yday = 365;
+      r->tm_yday = 364;
       r->tm_hour = 23;
       r->tm_min = 59;
       r->tm_sec = 59;
@@ -2853,7 +2880,7 @@ tor_localtime_r(const time_t *timep, struct tm *result)
 /** @} */
 
 /** @{ */
-/** As gmtimee_r, but defined for platforms that don't have it:
+/** As gmtime_r, but defined for platforms that don't have it:
  *
  * Convert *<b>timep</b> to a struct tm in UTC, and store the value in
  * *<b>result</b>.  Return the result on success, or NULL on failure.
@@ -2991,7 +3018,6 @@ tor_get_thread_id(void)
 }
 #endif
 
-#ifdef TOR_IS_MULTITHREADED
 /** Return a newly allocated, ready-for-use mutex. */
 tor_mutex_t *
 tor_mutex_new(void)
@@ -3009,7 +3035,6 @@ tor_mutex_free(tor_mutex_t *m)
   tor_mutex_uninit(m);
   tor_free(m);
 }
-#endif
 
 /* Conditions. */
 #ifdef USE_PTHREADS
@@ -3548,12 +3573,12 @@ get_total_system_memory(size_t *mem_out)
     return 0;
   }
 
-#if SIZE_T_MAX != UINT64_MAX
-  if (m > SIZE_T_MAX) {
+#if SIZE_MAX != UINT64_MAX
+  if (m > SIZE_MAX) {
     /* I think this could happen if we're a 32-bit Tor running on a 64-bit
      * system: we could have more system memory than would fit in a
      * size_t. */
-    m = SIZE_T_MAX;
+    m = SIZE_MAX;
   }
 #endif
 

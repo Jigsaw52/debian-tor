@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -894,9 +894,9 @@ create_unix_sockaddr(const char *listenaddress, char **readable_address,
 }
 #endif /* HAVE_SYS_UN_H */
 
-/** Warn that an accept or a connect has failed because we're running up
- * against our ulimit.  Rate-limit these warnings so that we don't spam
- * the log. */
+/** Warn that an accept or a connect has failed because we're running out of
+ * TCP sockets we can use on current system.  Rate-limit these warnings so
+ * that we don't spam the log. */
 static void
 warn_too_many_conns(void)
 {
@@ -906,7 +906,7 @@ warn_too_many_conns(void)
   if ((m = rate_limit_log(&last_warned, approx_time()))) {
     int n_conns = get_n_open_sockets();
     log_warn(LD_NET,"Failing because we have %d connections already. Please "
-             "raise your ulimit -n.%s", n_conns, m);
+             "read doc/TUNING for guidance.%s", n_conns, m);
     tor_free(m);
     control_event_general_status(LOG_WARN, "TOO_MANY_CONNECTIONS CURRENT=%d",
                                  n_conns);
@@ -1688,14 +1688,14 @@ get_proxy_type(void)
 {
   const or_options_t *options = get_options();
 
-  if (options->HTTPSProxy)
+  if (options->ClientTransportPlugin)
+    return PROXY_PLUGGABLE;
+  else if (options->HTTPSProxy)
     return PROXY_CONNECT;
   else if (options->Socks4Proxy)
     return PROXY_SOCKS4;
   else if (options->Socks5Proxy)
     return PROXY_SOCKS5;
-  else if (options->ClientTransportPlugin)
-    return PROXY_PLUGGABLE;
   else
     return PROXY_NONE;
 }
@@ -3716,9 +3716,15 @@ connection_handle_write_impl(connection_t *conn, int force)
   if (connection_state_is_connecting(conn)) {
     if (getsockopt(conn->s, SOL_SOCKET, SO_ERROR, (void*)&e, &len) < 0) {
       log_warn(LD_BUG, "getsockopt() syscall failed");
-      if (CONN_IS_EDGE(conn))
-        connection_edge_end_errno(TO_EDGE_CONN(conn));
-      connection_mark_for_close(conn);
+      if (conn->type == CONN_TYPE_OR) {
+        or_connection_t *orconn = TO_OR_CONN(conn);
+        connection_or_close_for_error(orconn, 0);
+      } else {
+        if (CONN_IS_EDGE(conn)) {
+          connection_edge_end_errno(TO_EDGE_CONN(conn));
+        }
+        connection_mark_for_close(conn);
+      }
       return -1;
     }
     if (e) {
@@ -4380,6 +4386,8 @@ client_check_address_changed(tor_socket_t sock)
     SMARTLIST_FOREACH(outgoing_addrs, tor_addr_t*, a_ptr, tor_free(a_ptr));
     smartlist_clear(outgoing_addrs);
     smartlist_add(outgoing_addrs, tor_memdup(&out_addr, sizeof(tor_addr_t)));
+    /* We'll need to resolve ourselves again. */
+    reset_last_resolved_addr();
     /* Okay, now change our keys. */
     ip_address_changed(1);
   }
@@ -4781,6 +4789,27 @@ get_proxy_addrport(tor_addr_t *addr, uint16_t *port, int *proxy_type,
 {
   const or_options_t *options = get_options();
 
+  /* Client Transport Plugins can use another proxy, but that should be hidden
+   * from the rest of tor (as the plugin is responsible for dealing with the
+   * proxy), check it first, then check the rest of the proxy types to allow
+   * the config to have unused ClientTransportPlugin entries.
+   */
+  if (options->ClientTransportPlugin) {
+    const transport_t *transport = NULL;
+    int r;
+    r = get_transport_by_bridge_addrport(&conn->addr, conn->port, &transport);
+    if (r<0)
+      return -1;
+    if (transport) { /* transport found */
+      tor_addr_copy(addr, &transport->addr);
+      *port = transport->port;
+      *proxy_type = transport->socks_version;
+      return 0;
+    }
+
+    /* Unused ClientTransportPlugin. */
+  }
+
   if (options->HTTPSProxy) {
     tor_addr_copy(addr, &options->HTTPSProxyAddr);
     *port = options->HTTPSProxyPort;
@@ -4796,19 +4825,6 @@ get_proxy_addrport(tor_addr_t *addr, uint16_t *port, int *proxy_type,
     *port = options->Socks5ProxyPort;
     *proxy_type = PROXY_SOCKS5;
     return 0;
-  } else if (options->ClientTransportPlugin ||
-             options->Bridges) {
-    const transport_t *transport = NULL;
-    int r;
-    r = get_transport_by_bridge_addrport(&conn->addr, conn->port, &transport);
-    if (r<0)
-      return -1;
-    if (transport) { /* transport found */
-      tor_addr_copy(addr, &transport->addr);
-      *port = transport->port;
-      *proxy_type = transport->socks_version;
-      return 0;
-    }
   }
 
   tor_addr_make_unspec(addr);
@@ -4832,7 +4848,7 @@ log_failed_proxy_connection(connection_t *conn)
   log_warn(LD_NET,
            "The connection to the %s proxy server at %s just failed. "
            "Make sure that the proxy server is up and running.",
-           proxy_type_to_string(get_proxy_type()),
+           proxy_type_to_string(proxy_type),
            fmt_addrport(&proxy_addr, proxy_port));
 }
 

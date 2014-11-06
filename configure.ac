@@ -1,9 +1,9 @@
 dnl Copyright (c) 2001-2004, Roger Dingledine
 dnl Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson
-dnl Copyright (c) 2007-2013, The Tor Project, Inc.
+dnl Copyright (c) 2007-2014, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
-AC_INIT([tor],[0.2.5.10])
+AC_INIT([tor],[0.2.6.1-alpha])
 AC_CONFIG_SRCDIR([src/or/main.c])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE
@@ -39,8 +39,6 @@ AC_ARG_ENABLE(static-zlib,
    AS_HELP_STRING(--enable-static-zlib, Link against a static zlib library. Requires --with-zlib-dir))
 AC_ARG_ENABLE(static-tor,
    AS_HELP_STRING(--enable-static-tor, Create an entirely static Tor binary. Requires --with-openssl-dir and --with-libevent-dir and --with-zlib-dir))
-AC_ARG_ENABLE(curve25519,
-   AS_HELP_STRING(--disable-curve25519, Build Tor with no curve25519 elliptic-curve crypto support))
 AC_ARG_ENABLE(unittests,
    AS_HELP_STRING(--disable-unittests, [Don't build unit tests for Tor. Risky!]))
 AC_ARG_ENABLE(coverage,
@@ -107,26 +105,6 @@ AC_ARG_ENABLE(upnp,
         * ) AC_MSG_ERROR(bad value for --enable-upnp) ;;
       esac], [upnp=false])
 
-
-AC_ARG_ENABLE(threads,
-     AS_HELP_STRING(--disable-threads, disable multi-threading support))
-
-if test x$enable_threads = x; then
-   case $host in
-    *-*-solaris* )
-     # Don't try multithreading on solaris -- cpuworkers seem to lock.
-     AC_MSG_NOTICE([You are running Solaris; Sometimes threading makes
-cpu workers lock up here, so I will disable threads.])
-     enable_threads="no";;
-    *)
-     enable_threads="yes";;
-   esac
-fi
-
-if test "$enable_threads" = "yes"; then
-  AC_DEFINE(ENABLE_THREADS, 1, [Defined if we will try to use multithreading])
-fi
-
 case $host in
    *-*-solaris* )
      AC_DEFINE(_REENTRANT, 1, [Define on some platforms to activate x_r() functions in time.h])
@@ -173,6 +151,9 @@ AC_ARG_ENABLE(tool-name-check,
 AC_ARG_ENABLE(seccomp,
      AS_HELP_STRING(--disable-seccomp, do not attempt to use libseccomp))
 
+AC_ARG_ENABLE(libscrypt,
+     AS_HELP_STRING(--disable-libscrypt, do not attempt to use libscrypt))
+
 dnl check for the correct "ar" when cross-compiling
 AN_MAKEVAR([AR], [AC_PROG_AR])
 AN_PROGRAM([ar], [AC_PROG_AR])
@@ -211,6 +192,7 @@ AM_CONDITIONAL(USE_FW_HELPER, test x$natpmp = xtrue || test x$upnp = xtrue)
 AM_CONDITIONAL(NAT_PMP, test x$natpmp = xtrue)
 AM_CONDITIONAL(MINIUPNPC, test x$upnp = xtrue)
 AM_PROG_CC_C_O
+AC_PROG_CC_C99
 
 AC_ARG_VAR(PYTHON)
 AC_CHECK_PROGS(PYTHON, [python python2 python2.7 python3 python3.3])
@@ -240,6 +222,28 @@ AC_C_FLEXIBLE_ARRAY_MEMBER
    AC_DEFINE([FLEXIBLE_ARRAY_MEMBER], [1], [Define to nothing if C supports flexible array members, and to 1 if it does not.])
  fi
 ])
+
+AC_CACHE_CHECK([for working C99 mid-block declaration syntax],
+      tor_cv_c_c99_decl,
+      [AC_COMPILE_IFELSE(
+         [AC_LANG_PROGRAM([], [int x; x = 3; int y; y = 4 + x;])],
+	 [tor_cv_c_c99_decl=yes],
+	 [tor_cv_c_c99_decl=no] )])
+if test "$tor_cv_c_c99_decl" != "yes"; then
+  AC_MSG_ERROR([Your compiler doesn't support c99 mid-block declarations. This is required as of Tor 0.2.6.x])
+fi
+
+AC_CACHE_CHECK([for working C99 designated initializers],
+      tor_cv_c_c99_designated_init,
+      [AC_COMPILE_IFELSE(
+         [AC_LANG_PROGRAM([struct s { int a; int b; };],
+  	       [[ struct s ss = { .b = 5, .a = 6 }; ]])],
+	 [tor_cv_c_c99_designated_init=yes],
+	 [tor_cv_c_c99_designated_init=no] )])
+
+if test "$tor_cv_c_c99_designated_init" != "yes"; then
+  AC_MSG_ERROR([Your compiler doesn't support c99 designated initializers. This is required as of Tor 0.2.6.x])
+fi
 
 AC_PATH_PROG([SHA1SUM], [sha1sum], none)
 AC_PATH_PROG([OPENSSL], [openssl], none)
@@ -326,10 +330,8 @@ if test "$LIBS" != "$saved_LIBS"; then
    have_rt=yes
 fi
 
-if test "$enable_threads" = "yes"; then
-  AC_SEARCH_LIBS(pthread_create, [pthread])
-  AC_SEARCH_LIBS(pthread_detach, [pthread])
-fi
+AC_SEARCH_LIBS(pthread_create, [pthread])
+AC_SEARCH_LIBS(pthread_detach, [pthread])
 
 dnl -------------------------------------------------------------------
 dnl Check for functions before libevent, since libevent-1.2 apparently
@@ -361,6 +363,7 @@ AC_CHECK_FUNCS(
         socketpair \
         strlcat \
         strlcpy \
+	strnlen \
         strptime \
         strtok_r \
         strtoull \
@@ -372,7 +375,7 @@ AC_CHECK_FUNCS(
 	_vscprintf
 )
 
-if test "$enable_threads" = "yes"; then
+if test "$bwin32" != true; then
   AC_CHECK_HEADERS(pthread.h)
   AC_CHECK_FUNCS(pthread_create)
 fi
@@ -630,11 +633,12 @@ if test x$enable_gcc_hardening != xno; then
     TOR_CHECK_CFLAGS(-fstack-protector-all, also_link)
     AS_VAR_PUSHDEF([can_compile], [tor_cv_cflags_-fstack-protector-all])
     AS_VAR_PUSHDEF([can_link], [tor_can_link_-fstack-protector-all])
+m4_ifdef([AS_VAR_IF],[
     AS_VAR_IF(can_compile, [yes],
         AS_VAR_IF(can_link, [yes],
                   [],
                   AC_MSG_ERROR([We tried to build with stack protection; it looks like your compiler supports it but your libc does not provide it. Are you missing libssp? (You can --disable-gcc-hardening to ignore this error.)]))
-        )
+        )])
     AS_VAR_POPDEF([can_link])
     AS_VAR_POPDEF([can_compile])
     TOR_CHECK_CFLAGS(-Wstack-protector)
@@ -748,104 +752,103 @@ if test "x$enable_seccomp" != "xno"; then
 fi
 
 dnl ============================================================
+dnl Check for libscrypt
+
+if test "x$enable_libscrypt" != "xno"; then
+  AC_CHECK_HEADERS([libscrypt.h])
+  AC_SEARCH_LIBS(libscrypt_scrypt, [scrypt])
+fi
+
+dnl ============================================================
 dnl We need an implementation of curve25519.
 
 dnl set these defaults.
-have_a_curve25519=no
 build_curve25519_donna=no
 build_curve25519_donna_c64=no
 use_curve25519_donna=no
 use_curve25519_nacl=no
 CURVE25519_LIBS=
 
-if test x$enable_curve25519 != xno; then
+dnl The best choice is using curve25519-donna-c64, but that requires
+dnl that we
+AC_CACHE_CHECK([whether we can use curve25519-donna-c64],
+  tor_cv_can_use_curve25519_donna_c64,
+  [AC_RUN_IFELSE(
+    [AC_LANG_PROGRAM([dnl
+      #include <stdint.h>
+      typedef unsigned uint128_t __attribute__((mode(TI)));
+  int func(uint64_t a, uint64_t b) {
+           uint128_t c = ((uint128_t)a) * b;
+           int ok = ((uint64_t)(c>>96)) == 522859 &&
+             (((uint64_t)(c>>64))&0xffffffffL) == 3604448702L &&
+                 (((uint64_t)(c>>32))&0xffffffffL) == 2351960064L &&
+                 (((uint64_t)(c))&0xffffffffL) == 0;
+           return ok;
+      }
+  ], [dnl
+    int ok = func( ((uint64_t)2000000000) * 1000000000,
+                   ((uint64_t)1234567890) << 24);
+        return !ok;
+      ])],
+  [tor_cv_can_use_curve25519_donna_c64=yes],
+      [tor_cv_can_use_curve25519_donna_c64=no],
+  [AC_LINK_IFELSE(
+        [AC_LANG_PROGRAM([dnl
+      #include <stdint.h>
+      typedef unsigned uint128_t __attribute__((mode(TI)));
+  int func(uint64_t a, uint64_t b) {
+           uint128_t c = ((uint128_t)a) * b;
+           int ok = ((uint64_t)(c>>96)) == 522859 &&
+             (((uint64_t)(c>>64))&0xffffffffL) == 3604448702L &&
+                 (((uint64_t)(c>>32))&0xffffffffL) == 2351960064L &&
+                 (((uint64_t)(c))&0xffffffffL) == 0;
+           return ok;
+      }
+  ], [dnl
+    int ok = func( ((uint64_t)2000000000) * 1000000000,
+    	         ((uint64_t)1234567890) << 24);
+        return !ok;
+      ])],
+          [tor_cv_can_use_curve25519_donna_c64=cross],
+      [tor_cv_can_use_curve25519_donna_c64=no])])])
 
-  dnl The best choice is using curve25519-donna-c64, but that requires
-  dnl that we
-  AC_CACHE_CHECK([whether we can use curve25519-donna-c64],
-    tor_cv_can_use_curve25519_donna_c64,
-    [AC_RUN_IFELSE(
-      [AC_LANG_PROGRAM([dnl
-        #include <stdint.h>
-        typedef unsigned uint128_t __attribute__((mode(TI)));
-	int func(uint64_t a, uint64_t b) {
-  	     uint128_t c = ((uint128_t)a) * b;
-             int ok = ((uint64_t)(c>>96)) == 522859 &&
-	           (((uint64_t)(c>>64))&0xffffffffL) == 3604448702L &&
-                   (((uint64_t)(c>>32))&0xffffffffL) == 2351960064L &&
-                   (((uint64_t)(c))&0xffffffffL) == 0;
-             return ok;
-        }
-	], [dnl
-	  int ok = func( ((uint64_t)2000000000) * 1000000000,
-	  	         ((uint64_t)1234567890) << 24);
-          return !ok;
-        ])],
-	[tor_cv_can_use_curve25519_donna_c64=yes],
-        [tor_cv_can_use_curve25519_donna_c64=no],
-	[AC_LINK_IFELSE(
-          [AC_LANG_PROGRAM([dnl
-        #include <stdint.h>
-        typedef unsigned uint128_t __attribute__((mode(TI)));
-	int func(uint64_t a, uint64_t b) {
-  	     uint128_t c = ((uint128_t)a) * b;
-             int ok = ((uint64_t)(c>>96)) == 522859 &&
-	           (((uint64_t)(c>>64))&0xffffffffL) == 3604448702L &&
-                   (((uint64_t)(c>>32))&0xffffffffL) == 2351960064L &&
-                   (((uint64_t)(c))&0xffffffffL) == 0;
-             return ok;
-        }
-	], [dnl
-	  int ok = func( ((uint64_t)2000000000) * 1000000000,
-	  	         ((uint64_t)1234567890) << 24);
-          return !ok;
-        ])],
-            [tor_cv_can_use_curve25519_donna_c64=cross],
-	    [tor_cv_can_use_curve25519_donna_c64=no])])])
+AC_CHECK_HEADERS([crypto_scalarmult_curve25519.h \
+                  nacl/crypto_scalarmult_curve25519.h])
 
-  AC_CHECK_HEADERS([crypto_scalarmult_curve25519.h \
-                    nacl/crypto_scalarmult_curve25519.h])
+AC_CACHE_CHECK([for nacl compiled with a fast curve25519 implementation],
+  tor_cv_can_use_curve25519_nacl,
+  [tor_saved_LIBS="$LIBS"
+   LIBS="$LIBS -lnacl"
+   AC_LINK_IFELSE(
+     [AC_LANG_PROGRAM([dnl
+       #ifdef HAVE_CRYPTO_SCALARMULT_CURVE25519_H
+       #include <crypto_scalarmult_curve25519.h>
+   #elif defined(HAVE_NACL_CRYPTO_SCALARMULT_CURVE25519_H)
+   #include <nacl/crypto_scalarmult_curve25519.h>
+   #endif
+       #ifdef crypto_scalarmult_curve25519_ref_BYTES
+   #error Hey, this is the reference implementation! That's not fast.
+   #endif
+     ], [
+   unsigned char *a, *b, *c; crypto_scalarmult_curve25519(a,b,c);
+     ])], [tor_cv_can_use_curve25519_nacl=yes],
+     [tor_cv_can_use_curve25519_nacl=no])
+   LIBS="$tor_saved_LIBS" ])
 
-  AC_CACHE_CHECK([for nacl compiled with a fast curve25519 implementation],
-    tor_cv_can_use_curve25519_nacl,
-    [tor_saved_LIBS="$LIBS"
-     LIBS="$LIBS -lnacl"
-     AC_LINK_IFELSE(
-       [AC_LANG_PROGRAM([dnl
-         #ifdef HAVE_CRYPTO_SCALARMULT_CURVE25519_H
-         #include <crypto_scalarmult_curve25519.h>
-	 #elif defined(HAVE_NACL_CRYPTO_SCALARMULT_CURVE25519_H)
-	 #include <nacl/crypto_scalarmult_curve25519.h>
-	 #endif
-         #ifdef crypto_scalarmult_curve25519_ref_BYTES
-	 #error Hey, this is the reference implementation! That's not fast.
-	 #endif
-       ], [
-	 unsigned char *a, *b, *c; crypto_scalarmult_curve25519(a,b,c);
-       ])], [tor_cv_can_use_curve25519_nacl=yes],
-       [tor_cv_can_use_curve25519_nacl=no])
-     LIBS="$tor_saved_LIBS" ])
+ dnl Okay, now we need to figure out which one to actually use. Fall back
+ dnl to curve25519-donna.c
 
-   dnl Okay, now we need to figure out which one to actually use. Fall back
-   dnl to curve25519-donna.c
+ if test x$tor_cv_can_use_curve25519_donna_c64 != xno; then
+   build_curve25519_donna_c64=yes
+   use_curve25519_donna=yes
+ elif test x$tor_cv_can_use_curve25519_nacl = xyes; then
+   use_curve25519_nacl=yes
+   CURVE25519_LIBS=-lnacl
+ else
+   build_curve25519_donna=yes
+   use_curve25519_donna=yes
+ fi
 
-   if test x$tor_cv_can_use_curve25519_donna_c64 != xno; then
-     build_curve25519_donna_c64=yes
-     use_curve25519_donna=yes
-   elif test x$tor_cv_can_use_curve25519_nacl = xyes; then
-     use_curve25519_nacl=yes
-     CURVE25519_LIBS=-lnacl
-   else
-     build_curve25519_donna=yes
-     use_curve25519_donna=yes
-   fi
-   have_a_curve25519=yes
-fi
-
-if test x$have_a_curve25519 = xyes; then
-  AC_DEFINE(CURVE25519_ENABLED, 1,
-            [Defined if we have a curve25519 implementation])
-fi
 if test x$use_curve25519_donna = xyes; then
   AC_DEFINE(USE_CURVE25519_DONNA, 1,
             [Defined if we should use an internal curve25519_donna{,_c64} implementation])
@@ -856,7 +859,6 @@ if test x$use_curve25519_nacl = xyes; then
 fi
 AM_CONDITIONAL(BUILD_CURVE25519_DONNA, test x$build_curve25519_donna = xyes)
 AM_CONDITIONAL(BUILD_CURVE25519_DONNA_C64, test x$build_curve25519_donna_c64 = xyes)
-AM_CONDITIONAL(CURVE25519_ENABLED, test x$have_a_curve25519 = xyes)
 AC_SUBST(CURVE25519_LIBS)
 
 dnl Make sure to enable support for large off_t if available.
@@ -1525,7 +1527,7 @@ if test x$enable_gcc_warnings = xyes || test x$enable_gcc_warnings_advisory = xy
 
   if test x$have_gcc4 = xyes ; then
     # These warnings break gcc 3.3.5 and work on gcc 4.0.2
-    CFLAGS="$CFLAGS -Winit-self -Wmissing-field-initializers -Wdeclaration-after-statement -Wold-style-definition"
+    CFLAGS="$CFLAGS -Winit-self -Wmissing-field-initializers -Wold-style-definition"
   fi
 
   if test x$have_gcc42 = xyes ; then
@@ -1581,6 +1583,7 @@ AC_CONFIG_FILES([
         contrib/dist/torctl
         contrib/dist/tor.service
         src/config/torrc.sample
+        src/config/torrc.minimal
 ])
 
 if test x$asciidoc = xtrue && test "$ASCIIDOC" = "none" ; then
@@ -1589,7 +1592,9 @@ if test x$asciidoc = xtrue && test "$ASCIIDOC" = "none" ; then
     if ! [[ -f "$srcdir/$file.1.in" ]] || ! [[ -f "$srcdir/$file.html.in" ]] ; then
       echo "==================================";
       echo;
-      echo "You need asciidoc installed to be able to build the manpage.";
+      echo "Building Tor has failed since manpages cannot be built.";
+      echo;
+      echo "You need asciidoc installed to be able to build the manpages.";
       echo "To build without manpages, use the --disable-asciidoc argument";
       echo "when calling configure.";
       echo;

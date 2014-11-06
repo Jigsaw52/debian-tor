@@ -1,6 +1,6 @@
 /* Copyright (c) 2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -45,6 +45,12 @@
 #endif
 
 #include <zlib.h>
+
+static size_t tor_zlib_state_size_precalc(int inflate,
+                                          int windowbits, int memlevel);
+
+/** Total number of bytes allocated for zlib state */
+static size_t total_zlib_allocation = 0;
 
 /** Set to 1 if zlib is a version that supports gzip; set to 0 if it doesn't;
  * set to -1 if we haven't checked yet. */
@@ -411,6 +417,9 @@ struct tor_zlib_state_t {
   size_t input_so_far;
   /** Number of bytes written so far.  Used to detect zlib bombs. */
   size_t output_so_far;
+
+  /** Approximate number of bytes allocated for this object. */
+  size_t allocation;
 };
 
 /** Construct and return a tor_zlib_state_t object using <b>method</b>.  If
@@ -420,6 +429,7 @@ tor_zlib_state_t *
 tor_zlib_new(int compress, compress_method_t method)
 {
   tor_zlib_state_t *out;
+  int bits;
 
   if (method == GZIP_METHOD && !is_gzip_supported()) {
     /* Old zlib version don't support gzip in inflateInit2 */
@@ -432,14 +442,19 @@ tor_zlib_new(int compress, compress_method_t method)
  out->stream.zfree = Z_NULL;
  out->stream.opaque = NULL;
  out->compress = compress;
+ bits = method_bits(method);
  if (compress) {
    if (deflateInit2(&out->stream, Z_BEST_COMPRESSION, Z_DEFLATED,
-                    method_bits(method), 8, Z_DEFAULT_STRATEGY) != Z_OK)
+                    bits, 8, Z_DEFAULT_STRATEGY) != Z_OK)
      goto err;
  } else {
-   if (inflateInit2(&out->stream, method_bits(method)) != Z_OK)
+   if (inflateInit2(&out->stream, bits) != Z_OK)
      goto err;
  }
+ out->allocation = tor_zlib_state_size_precalc(!compress, bits, 8);
+
+ total_zlib_allocation += out->allocation;
+
  return out;
 
  err:
@@ -472,7 +487,7 @@ tor_zlib_process(tor_zlib_state_t *state,
   state->stream.avail_out = (unsigned int)*out_len;
 
   if (state->compress) {
-    err = deflate(&state->stream, finish ? Z_FINISH : Z_SYNC_FLUSH);
+    err = deflate(&state->stream, finish ? Z_FINISH : Z_NO_FLUSH);
   } else {
     err = inflate(&state->stream, finish ? Z_FINISH : Z_SYNC_FLUSH);
   }
@@ -496,7 +511,7 @@ tor_zlib_process(tor_zlib_state_t *state,
     case Z_STREAM_END:
       return TOR_ZLIB_DONE;
     case Z_BUF_ERROR:
-      if (state->stream.avail_in == 0)
+      if (state->stream.avail_in == 0 && !finish)
         return TOR_ZLIB_OK;
       return TOR_ZLIB_BUF_FULL;
     case Z_OK:
@@ -517,11 +532,58 @@ tor_zlib_free(tor_zlib_state_t *state)
   if (!state)
     return;
 
+ total_zlib_allocation -= state->allocation;
+
   if (state->compress)
     deflateEnd(&state->stream);
   else
     inflateEnd(&state->stream);
 
   tor_free(state);
+}
+
+/** Return an approximate number of bytes used in RAM to hold a state with
+ * window bits <b>windowBits</b> and compression level 'memlevel' */
+static size_t
+tor_zlib_state_size_precalc(int inflate, int windowbits, int memlevel)
+{
+  windowbits &= 15;
+
+#define A_FEW_KILOBYTES 2048
+
+  if (inflate) {
+    /* From zconf.h:
+
+       "The memory requirements for inflate are (in bytes) 1 << windowBits
+       that is, 32K for windowBits=15 (default value) plus a few kilobytes
+       for small objects."
+    */
+    return sizeof(tor_zlib_state_t) + sizeof(struct z_stream_s) +
+      (1 << 15) + A_FEW_KILOBYTES;
+  } else {
+    /* Also from zconf.h:
+
+       "The memory requirements for deflate are (in bytes):
+            (1 << (windowBits+2)) +  (1 << (memLevel+9))
+        ... plus a few kilobytes for small objects."
+    */
+    return sizeof(tor_zlib_state_t) + sizeof(struct z_stream_s) +
+      (1 << (windowbits + 2)) + (1 << (memlevel + 9)) + A_FEW_KILOBYTES;
+  }
+#undef A_FEW_KILOBYTES
+}
+
+/** Return the approximate number of bytes allocated for <b>state</b>. */
+size_t
+tor_zlib_state_size(const tor_zlib_state_t *state)
+{
+  return state->allocation;
+}
+
+/** Return the approximate number of bytes allocated for all zlib states. */
+size_t
+tor_zlib_get_total_allocation(void)
+{
+  return total_zlib_allocation;
 }
 

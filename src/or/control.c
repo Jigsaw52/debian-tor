@@ -1,5 +1,5 @@
 /* Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -47,6 +47,7 @@
 #include <sys/resource.h>
 #endif
 
+#include "crypto_s2k.h"
 #include "procmon.h"
 
 /** Yield true iff <b>s</b> is the state of a control_connection_t that has
@@ -194,14 +195,14 @@ log_severity_to_event(int severity)
 static void
 clear_circ_bw_fields(void)
 {
-  circuit_t *circ;
   origin_circuit_t *ocirc;
-  TOR_LIST_FOREACH(circ, circuit_get_global_list(), head) {
+  SMARTLIST_FOREACH_BEGIN(circuit_get_global_list(), circuit_t *, circ) {
     if (!CIRCUIT_IS_ORIGIN(circ))
       continue;
     ocirc = TO_ORIGIN_CIRCUIT(circ);
     ocirc->n_written_circ_bw = ocirc->n_read_circ_bw = 0;
   }
+  SMARTLIST_FOREACH_END(circ);
 }
 
 /** Set <b>global_event_mask*</b> to the bitwise OR of each live control
@@ -949,7 +950,7 @@ static int
 handle_control_setevents(control_connection_t *conn, uint32_t len,
                          const char *body)
 {
-  int event_code = -1;
+  int event_code;
   event_mask_t event_mask = 0;
   smartlist_t *events = smartlist_new();
 
@@ -963,6 +964,8 @@ handle_control_setevents(control_connection_t *conn, uint32_t len,
         continue;
       } else {
         int i;
+        event_code = -1;
+
         for (i = 0; control_event_table[i].event_name != NULL; ++i) {
           if (!strcasecmp(ev, control_event_table[i].event_name)) {
             event_code = control_event_table[i].event_code;
@@ -993,7 +996,8 @@ handle_control_setevents(control_connection_t *conn, uint32_t len,
 
 /** Decode the hashed, base64'd passwords stored in <b>passwords</b>.
  * Return a smartlist of acceptable passwords (unterminated strings of
- * length S2K_SPECIFIER_LEN+DIGEST_LEN) on success, or NULL on failure.
+ * length S2K_RFC2440_SPECIFIER_LEN+DIGEST_LEN) on success, or NULL on
+ * failure.
  */
 smartlist_t *
 decode_hashed_passwords(config_line_t *passwords)
@@ -1009,16 +1013,17 @@ decode_hashed_passwords(config_line_t *passwords)
 
     if (!strcmpstart(hashed, "16:")) {
       if (base16_decode(decoded, sizeof(decoded), hashed+3, strlen(hashed+3))<0
-          || strlen(hashed+3) != (S2K_SPECIFIER_LEN+DIGEST_LEN)*2) {
+          || strlen(hashed+3) != (S2K_RFC2440_SPECIFIER_LEN+DIGEST_LEN)*2) {
         goto err;
       }
     } else {
         if (base64_decode(decoded, sizeof(decoded), hashed, strlen(hashed))
-            != S2K_SPECIFIER_LEN+DIGEST_LEN) {
+            != S2K_RFC2440_SPECIFIER_LEN+DIGEST_LEN) {
           goto err;
         }
     }
-    smartlist_add(sl, tor_memdup(decoded, S2K_SPECIFIER_LEN+DIGEST_LEN));
+    smartlist_add(sl,
+                  tor_memdup(decoded, S2K_RFC2440_SPECIFIER_LEN+DIGEST_LEN));
   }
 
   return sl;
@@ -1039,7 +1044,7 @@ handle_control_authenticate(control_connection_t *conn, uint32_t len,
 {
   int used_quoted_string = 0;
   const or_options_t *options = get_options();
-  const char *errstr = NULL;
+  const char *errstr = "Unknown error";
   char *password;
   size_t password_len;
   const char *cp;
@@ -1160,22 +1165,27 @@ handle_control_authenticate(control_connection_t *conn, uint32_t len,
     }
     if (bad) {
       if (!also_cookie) {
-        log_warn(LD_CONTROL,
+        log_warn(LD_BUG,
                  "Couldn't decode HashedControlPassword: invalid base16");
         errstr="Couldn't decode HashedControlPassword value in configuration.";
+        goto err;
       }
       bad_password = 1;
       SMARTLIST_FOREACH(sl, char *, cp, tor_free(cp));
       smartlist_free(sl);
+      sl = NULL;
     } else {
       SMARTLIST_FOREACH(sl, char *, expected,
       {
-        secret_to_key(received,DIGEST_LEN,password,password_len,expected);
-        if (tor_memeq(expected+S2K_SPECIFIER_LEN, received, DIGEST_LEN))
+        secret_to_key_rfc2440(received,DIGEST_LEN,
+                              password,password_len,expected);
+        if (tor_memeq(expected + S2K_RFC2440_SPECIFIER_LEN,
+                      received, DIGEST_LEN))
           goto ok;
       });
       SMARTLIST_FOREACH(sl, char *, cp, tor_free(cp));
       smartlist_free(sl);
+      sl = NULL;
 
       if (used_quoted_string)
         errstr = "Password did not match HashedControlPassword value from "
@@ -1198,9 +1208,12 @@ handle_control_authenticate(control_connection_t *conn, uint32_t len,
 
  err:
   tor_free(password);
-  connection_printf_to_buf(conn, "515 Authentication failed: %s\r\n",
-                           errstr ? errstr : "Unknown reason.");
+  connection_printf_to_buf(conn, "515 Authentication failed: %s\r\n", errstr);
   connection_mark_for_close(TO_CONN(conn));
+  if (sl) { /* clean up */
+    SMARTLIST_FOREACH(sl, char *, cp, tor_free(cp));
+    smartlist_free(sl);
+  }
   return 0;
  ok:
   log_info(LD_CONTROL, "Authenticated control connection ("TOR_SOCKET_T_FORMAT
@@ -1879,9 +1892,8 @@ getinfo_helper_events(control_connection_t *control_conn,
 {
   (void) control_conn;
   if (!strcmp(question, "circuit-status")) {
-    circuit_t *circ_;
     smartlist_t *status = smartlist_new();
-    TOR_LIST_FOREACH(circ_, circuit_get_global_list(), head) {
+    SMARTLIST_FOREACH_BEGIN(circuit_get_global_list(), circuit_t *, circ_) {
       origin_circuit_t *circ;
       char *circdesc;
       const char *state;
@@ -1903,6 +1915,7 @@ getinfo_helper_events(control_connection_t *control_conn,
                    state, *circdesc ? " " : "", circdesc);
       tor_free(circdesc);
     }
+    SMARTLIST_FOREACH_END(circ_);
     *answer = smartlist_join_strings(status, "\r\n", 0, NULL);
     SMARTLIST_FOREACH(status, char *, cp, tor_free(cp));
     smartlist_free(status);
@@ -3909,12 +3922,11 @@ control_event_stream_bandwidth_used(void)
 int
 control_event_circ_bandwidth_used(void)
 {
-  circuit_t *circ;
   origin_circuit_t *ocirc;
   if (!EVENT_IS_INTERESTING(EVENT_CIRC_BANDWIDTH_USED))
     return 0;
 
-  TOR_LIST_FOREACH(circ, circuit_get_global_list(), head) {
+  SMARTLIST_FOREACH_BEGIN(circuit_get_global_list(), circuit_t *, circ) {
     if (!CIRCUIT_IS_ORIGIN(circ))
       continue;
     ocirc = TO_ORIGIN_CIRCUIT(circ);
@@ -3927,6 +3939,7 @@ control_event_circ_bandwidth_used(void)
                        (unsigned long)ocirc->n_written_circ_bw);
     ocirc->n_written_circ_bw = ocirc->n_read_circ_bw = 0;
   }
+  SMARTLIST_FOREACH_END(circ);
 
   return 0;
 }
@@ -4091,14 +4104,13 @@ format_cell_stats(char **event_string, circuit_t *circ,
 int
 control_event_circuit_cell_stats(void)
 {
-  circuit_t *circ;
   cell_stats_t *cell_stats;
   char *event_string;
   if (!get_options()->TestingEnableCellStatsEvent ||
       !EVENT_IS_INTERESTING(EVENT_CELL_STATS))
     return 0;
   cell_stats = tor_malloc(sizeof(cell_stats_t));;
-  TOR_LIST_FOREACH(circ, circuit_get_global_list(), head) {
+  SMARTLIST_FOREACH_BEGIN(circuit_get_global_list(), circuit_t *, circ) {
     if (!circ->testing_cell_stats)
       continue;
     sum_up_cell_stats_by_command(circ, cell_stats);
@@ -4107,6 +4119,7 @@ control_event_circuit_cell_stats(void)
                        "650 CELL_STATS %s\r\n", event_string);
     tor_free(event_string);
   }
+  SMARTLIST_FOREACH_END(circ);
   tor_free(cell_stats);
   return 0;
 }

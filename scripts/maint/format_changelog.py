@@ -12,6 +12,7 @@
 import os
 import re
 import sys
+import optparse
 
 # ==============================
 # Oh, look!  It's a cruddy approximation to Knuth's elegant text wrapping
@@ -33,6 +34,9 @@ import sys
 
 NO_HYPHENATE=set("""
 pf-divert
+tor-resolve
+tor-gencert
+tor-fw-helper
 """.split())
 
 LASTLINE_UNDERFLOW_EXPONENT = 1
@@ -115,7 +119,10 @@ def wrap_graf(words, prefix_len1=0, prefix_len2=0, width=72):
 
     return lines
 
-def hyphenateable(word):
+def hyphenatable(word):
+    if "--" in word:
+        return False
+
     if re.match(r'^[^\d\-]\D*-', word):
         stripped = re.sub(r'^\W+','',word)
         stripped = re.sub(r'\W+$','',word)
@@ -128,7 +135,7 @@ def split_paragraph(s):
 
     r = []
     for word in s.split():
-        if hyphenateable(word):
+        if hyphenatable(word):
             while "-" in word:
                 a,word = word.split("-",1)
                 r.append(a+"\xff")
@@ -156,10 +163,13 @@ TP_SECHEAD = 3
 TP_ITEMFIRST = 4
 TP_ITEMBODY = 5
 TP_END = 6
+TP_PREHEAD = 7
 
 def head_parser(line):
-    if re.match(r'^[A-Z]', line):
+    if re.match(r'^Changes in', line):
         return TP_MAINHEAD
+    elif re.match(r'^[A-Za-z]', line):
+        return TP_PREHEAD
     elif re.match(r'^  o ', line):
         return TP_SECHEAD
     elif re.match(r'^\s*$', line):
@@ -178,17 +188,66 @@ def body_parser(line):
         return TP_BLANK
     elif re.match(r'^Changes in', line):
         return TP_END
+    elif re.match(r'^\s+\S', line):
+        return TP_HEADTEXT
     else:
         print "Weird line %r"%line
 
+def clean_head(head):
+    return head
+
+def head_score(s):
+    m = re.match(r'^ +o (.*)', s)
+    if not m:
+        print >>sys.stderr, "Can't score %r"%s
+        return 99999
+    lw = m.group(1).lower()
+    if lw.startswith("security") and "feature" not in lw:
+        score = -300
+    elif lw.startswith("deprecated version"):
+        score = -200
+    elif (('new' in lw and 'requirement' in lw) or
+          ('new' in lw and 'dependenc' in lw) or
+          ('build' in lw and 'requirement' in lw) or
+          ('removed' in lw and 'platform' in lw)):
+        score = -100
+    elif lw.startswith("major feature"):
+        score = 00
+    elif lw.startswith("major bug"):
+        score = 50
+    elif lw.startswith("major"):
+        score = 70
+    elif lw.startswith("minor feature"):
+        score = 200
+    elif lw.startswith("minor bug"):
+        score = 250
+    elif lw.startswith("minor"):
+        score = 270
+    else:
+        score = 1000
+
+    if 'secur' in lw:
+        score -= 2
+
+    if "(other)" in lw:
+        score += 2
+
+    if '(' not in lw:
+        score -= 1
+
+    return score
+
 class ChangeLog(object):
-    def __init__(self):
+    def __init__(self, wrapText=True, blogOrder=True):
+        self.prehead = []
         self.mainhead = None
         self.headtext = []
         self.curgraf = None
         self.sections = []
         self.cursection = None
         self.lineno = 0
+        self.wrapText = wrapText
+        self.blogOrder = blogOrder
 
     def addLine(self, tp, line):
         self.lineno += 1
@@ -196,6 +255,9 @@ class ChangeLog(object):
         if tp == TP_MAINHEAD:
             assert not self.mainhead
             self.mainhead = line
+
+        elif tp == TP_PREHEAD:
+            self.prehead.append(line)
 
         elif tp == TP_HEADTEXT:
             if self.curgraf is None:
@@ -240,6 +302,11 @@ class ChangeLog(object):
                 self.lint_item(item_line, grafs, head_type)
 
     def dumpGraf(self,par,indent1,indent2=-1):
+        if not self.wrapText:
+            for line in par:
+                print line
+            return
+
         if indent2 == -1:
             indent2 = indent1
         text = " ".join(re.sub(r'\s+', ' ', line.strip()) for line in par)
@@ -249,37 +316,174 @@ class ChangeLog(object):
                               initial_indent=" "*indent1,
                               subsequent_indent=" "*indent2))
 
-    def dump(self):
-        print self.mainhead
-        for par in self.headtext:
-            self.dumpGraf(par, 2)
+    def dumpPreheader(self, graf):
+        self.dumpGraf(graf, 0)
+        print
+
+    def dumpMainhead(self, head):
+        print head
+
+    def dumpHeadGraf(self, graf):
+        self.dumpGraf(graf, 2)
+        print
+
+    def dumpSectionHeader(self, header):
+        print header
+
+    def dumpStartOfSections(self):
+        pass
+
+    def dumpEndOfSections(self):
+        pass
+
+    def dumpEndOfSection(self):
+        print
+
+    def dumpEndOfChangelog(self):
+        print
+
+    def dumpItem(self, grafs):
+        self.dumpGraf(grafs[0],4,6)
+        for par in grafs[1:]:
             print
+            self.dumpGraf(par,6,6)
+
+    def collateAndSortSections(self):
+        heads = []
+        sectionsByHead = { }
+        for _, head, items in self.sections:
+            head = clean_head(head)
+            try:
+                s = sectionsByHead[head]
+            except KeyError:
+                s = sectionsByHead[head] = []
+                heads.append( (head_score(head), head.lower(), head, s) )
+
+            s.extend(items)
+
+        heads.sort()
+        self.sections = [ (0, head, items) for _1,_2,head,items in heads ]
+
+    def dump(self):
+        if self.prehead:
+            self.dumpPreheader(self.prehead)
+
+        if not self.blogOrder:
+            self.dumpMainhead(self.mainhead)
+
+        for par in self.headtext:
+            self.dumpHeadGraf(par)
+
+        if self.blogOrder:
+            self.dumpMainhead(self.mainhead)
+
+        self.dumpStartOfSections()
         for _,head,items in self.sections:
             if not head.endswith(':'):
                 print >>sys.stderr, "adding : to %r"%head
                 head = head + ":"
-            print head
+            self.dumpSectionHeader(head)
             for _,grafs in items:
-                self.dumpGraf(grafs[0],4,6)
-                for par in grafs[1:]:
-                    print
-                    self.dumpGraf(par,6,6)
-            print
+                self.dumpItem(grafs)
+            self.dumpEndOfSection()
+        self.dumpEndOfSections()
+        self.dumpEndOfChangelog()
+
+class HTMLChangeLog(ChangeLog):
+    def __init__(self, *args, **kwargs):
+        ChangeLog.__init__(self, *args, **kwargs)
+
+    def htmlText(self, graf):
+        for line in graf:
+            line = line.rstrip().replace("&","&amp;")
+            line = line.rstrip().replace("<","&lt;").replace(">","&gt;")
+            sys.stdout.write(line.strip())
+            sys.stdout.write(" ")
+
+    def htmlPar(self, graf):
+        sys.stdout.write("<p>")
+        self.htmlText(graf)
+        sys.stdout.write("</p>\n")
+
+    def dumpPreheader(self, graf):
+        self.htmlPar(graf)
+
+    def dumpMainhead(self, head):
+        sys.stdout.write("<h2>%s</h2>"%head)
+
+    def dumpHeadGraf(self, graf):
+        self.htmlPar(graf)
+
+    def dumpSectionHeader(self, header):
+        header = header.replace(" o ", "", 1).lstrip()
+        sys.stdout.write("  <li>%s\n"%header)
+        sys.stdout.write("  <ul>\n")
+
+    def dumpEndOfSection(self):
+        sys.stdout.write("  </ul>\n\n")
+
+    def dumpEndOfChangelog(self):
+        pass
+
+    def dumpStartOfSections(self):
+        print "<ul>\n"
+
+    def dumpEndOfSections(self):
+        print "</ul>\n"
+
+    def dumpItem(self, grafs):
+        grafs[0][0] = grafs[0][0].replace(" - ", "", 1).lstrip()
+        sys.stdout.write("  <li>")
+        if len(grafs) > 1:
+            for par in grafs:
+                self.htmlPar(par)
+        else:
+            self.htmlText(grafs[0])
         print
 
-CL = ChangeLog()
-parser = head_parser
+op = optparse.OptionParser(usage="usage: %prog [options] [filename]")
+op.add_option('-W', '--no-wrap', action='store_false',
+              dest='wrapText', default=True,
+              help='Do not re-wrap paragraphs')
+op.add_option('-S', '--no-sort', action='store_false',
+              dest='sort', default=True,
+              help='Do not sort or collate sections')
+op.add_option('-o', '--output', dest='output',
+              default=None, metavar='FILE', help="write output to FILE")
+op.add_option('-H', '--html', action='store_true',
+              dest='html', default=False,
+              help="generate an HTML fragment")
+op.add_option('-1', '--first', action='store_true',
+              dest='firstOnly', default=False,
+              help="write only the first section")
+op.add_option('-b', '--blog-format', action='store_true',
+              dest='blogOrder', default=False,
+              help="Write the header in blog order")
 
-if len(sys.argv) == 1:
+options,args = op.parse_args()
+
+if len(args) > 1:
+    op.error("Too many arguments")
+elif len(args) == 0:
     fname = 'ChangeLog'
 else:
-    fname = sys.argv[1]
+    fname = args[0]
 
-fname_new = fname+".new"
+if options.output == None:
+    options.output = fname
 
-sys.stdin = open(fname, 'r')
+if fname != '-':
+    sys.stdin = open(fname, 'r')
 
 nextline = None
+
+if options.html:
+    ChangeLogClass = HTMLChangeLog
+else:
+    ChangeLogClass = ChangeLog
+
+CL = ChangeLogClass(wrapText=options.wrapText, blogOrder=options.blogOrder)
+parser = head_parser
 
 for line in sys.stdin:
     line = line.rstrip()
@@ -295,9 +499,20 @@ for line in sys.stdin:
 
 CL.lint()
 
-sys.stdout = open(fname_new, 'w')
+if options.output != '-':
+    fname_new = options.output+".new"
+    fname_out = options.output
+    sys.stdout = open(fname_new, 'w')
+else:
+    fname_new = fname_out = None
+
+if options.sort:
+    CL.collateAndSortSections()
 
 CL.dump()
+
+if options.firstOnly:
+    sys.exit(0)
 
 if nextline is not None:
     print nextline
@@ -305,4 +520,5 @@ if nextline is not None:
 for line in sys.stdin:
     sys.stdout.write(line)
 
-os.rename(fname_new, fname)
+if fname_new is not None:
+    os.rename(fname_new, fname_out)

@@ -1,6 +1,6 @@
 /* Copyright (c) 2003-2004, Roger Dingledine
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -28,21 +28,21 @@
 
 /** Allocate and return an empty smartlist.
  */
-smartlist_t *
-smartlist_new(void)
+MOCK_IMPL(smartlist_t *,
+smartlist_new,(void))
 {
   smartlist_t *sl = tor_malloc(sizeof(smartlist_t));
   sl->num_used = 0;
   sl->capacity = SMARTLIST_DEFAULT_CAPACITY;
-  sl->list = tor_malloc(sizeof(void *) * sl->capacity);
+  sl->list = tor_calloc(sizeof(void *), sl->capacity);
   return sl;
 }
 
 /** Deallocate a smartlist.  Does not release storage associated with the
  * list's elements.
  */
-void
-smartlist_free(smartlist_t *sl)
+MOCK_IMPL(void,
+smartlist_free,(smartlist_t *sl))
 {
   if (!sl)
     return;
@@ -66,19 +66,28 @@ smartlist_ensure_capacity(smartlist_t *sl, int size)
 #define MAX_CAPACITY (INT_MAX)
 #else
 #define MAX_CAPACITY (int)((SIZE_MAX / (sizeof(void*))))
+#define ASSERT_CAPACITY
 #endif
   if (size > sl->capacity) {
     int higher = sl->capacity;
     if (PREDICT_UNLIKELY(size > MAX_CAPACITY/2)) {
+#ifdef ASSERT_CAPACITY
+      /* We don't include this assertion when MAX_CAPACITY == INT_MAX,
+       * since int size; (size <= INT_MAX) makes analysis tools think we're
+       * doing something stupid. */
       tor_assert(size <= MAX_CAPACITY);
+#endif
       higher = MAX_CAPACITY;
     } else {
       while (size > higher)
         higher *= 2;
     }
     sl->capacity = higher;
-    sl->list = tor_realloc(sl->list, sizeof(void*)*((size_t)sl->capacity));
+    sl->list = tor_reallocarray(sl->list, sizeof(void *),
+                                ((size_t)sl->capacity));
   }
+#undef ASSERT_CAPACITY
+#undef MAX_CAPACITY
 }
 
 /** Append element to the end of the list. */
@@ -1043,18 +1052,18 @@ digestmap_entry_hash(const digestmap_entry_t *a)
 
 HT_PROTOTYPE(strmap_impl, strmap_entry_t, node, strmap_entry_hash,
              strmap_entries_eq)
-HT_GENERATE(strmap_impl, strmap_entry_t, node, strmap_entry_hash,
-            strmap_entries_eq, 0.6, malloc, realloc, free)
+HT_GENERATE2(strmap_impl, strmap_entry_t, node, strmap_entry_hash,
+             strmap_entries_eq, 0.6, tor_reallocarray_, tor_free_)
 
 HT_PROTOTYPE(digestmap_impl, digestmap_entry_t, node, digestmap_entry_hash,
              digestmap_entries_eq)
-HT_GENERATE(digestmap_impl, digestmap_entry_t, node, digestmap_entry_hash,
-            digestmap_entries_eq, 0.6, malloc, realloc, free)
+HT_GENERATE2(digestmap_impl, digestmap_entry_t, node, digestmap_entry_hash,
+             digestmap_entries_eq, 0.6, tor_reallocarray_, tor_free_)
 
 /** Constructor to create a new empty map from strings to void*'s.
  */
-strmap_t *
-strmap_new(void)
+MOCK_IMPL(strmap_t *,
+strmap_new,(void))
 {
   strmap_t *result;
   result = tor_malloc(sizeof(strmap_t));
@@ -1064,8 +1073,8 @@ strmap_new(void)
 
 /** Constructor to create a new empty map from digests to void*'s.
  */
-digestmap_t *
-digestmap_new(void)
+MOCK_IMPL(digestmap_t *,
+digestmap_new,(void))
 {
   digestmap_t *result;
   result = tor_malloc(sizeof(digestmap_t));
@@ -1418,8 +1427,8 @@ digestmap_iter_done(digestmap_iter_t *iter)
  * entries.  If free_val is provided, it is invoked on every value in
  * <b>map</b>.
  */
-void
-strmap_free(strmap_t *map, void (*free_val)(void*))
+MOCK_IMPL(void,
+strmap_free,(strmap_t *map, void (*free_val)(void*)))
 {
   strmap_entry_t **ent, **next, *this;
   if (!map)
@@ -1442,8 +1451,8 @@ strmap_free(strmap_t *map, void (*free_val)(void*))
  * entries.  If free_val is provided, it is invoked on every value in
  * <b>map</b>.
  */
-void
-digestmap_free(digestmap_t *map, void (*free_val)(void*))
+MOCK_IMPL(void,
+digestmap_free, (digestmap_t *map, void (*free_val)(void*)))
 {
   digestmap_entry_t **ent, **next, *this;
   if (!map)

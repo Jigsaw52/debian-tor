@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2013, The Tor Project, Inc. */
+ * Copyright (c) 2007-2014, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -54,6 +54,9 @@
  * The major free Unix kernels have handled buffers like this since, like,
  * forever.
  */
+
+static void socks_request_set_socks5_error(socks_request_t *req,
+                              socks5_reply_status_t reason);
 
 static int parse_socks(const char *data, size_t datalen, socks_request_t *req,
                        int log_sockstype, int safe_socks, ssize_t *drain_out,
@@ -1831,6 +1834,21 @@ fetch_ext_or_command_from_evbuffer(struct evbuffer *buf, ext_or_cmd_t **out)
 }
 #endif
 
+/** Create a SOCKS5 reply message with <b>reason</b> in its REP field and
+ * have Tor send it as error response to <b>req</b>.
+ */
+static void
+socks_request_set_socks5_error(socks_request_t *req,
+                  socks5_reply_status_t reason)
+{
+   req->replylen = 10;
+   memset(req->reply,0,10);
+
+   req->reply[0] = 0x05;   // VER field.
+   req->reply[1] = reason; // REP field.
+   req->reply[3] = 0x01;   // ATYP field.
+}
+
 /** Implementation helper to implement fetch_from_*_socks.  Instead of looking
  * at a buffer's contents, we look at the <b>datalen</b> bytes of data in
  * <b>data</b>. Instead of removing data from the buffer, we set
@@ -1894,7 +1912,7 @@ parse_socks(const char *data, size_t datalen, socks_request_t *req,
       }
       *drain_out = 2u + usernamelen + 1u + passlen;
       req->got_auth = 1;
-      *want_length_out = 7; /* Minimal socks5 sommand. */
+      *want_length_out = 7; /* Minimal socks5 command. */
       return 0;
     } else if (req->auth_type == SOCKS_USER_PASS) {
       /* unknown version byte */
@@ -1966,6 +1984,8 @@ parse_socks(const char *data, size_t datalen, socks_request_t *req,
           req->command != SOCKS_COMMAND_RESOLVE &&
           req->command != SOCKS_COMMAND_RESOLVE_PTR) {
         /* not a connect or resolve or a resolve_ptr? we don't support it. */
+        socks_request_set_socks5_error(req,SOCKS5_COMMAND_NOT_SUPPORTED);
+
         log_warn(LD_APP,"socks5: command %d not recognized. Rejecting.",
                  req->command);
         return -1;
@@ -1989,6 +2009,7 @@ parse_socks(const char *data, size_t datalen, socks_request_t *req,
           tor_addr_to_str(tmpbuf, &destaddr, sizeof(tmpbuf), 1);
 
           if (strlen(tmpbuf)+1 > MAX_SOCKS_ADDR_LEN) {
+            socks_request_set_socks5_error(req, SOCKS5_GENERAL_ERROR);
             log_warn(LD_APP,
                      "socks5 IP takes %d bytes, which doesn't fit in %d. "
                      "Rejecting.",
@@ -2001,14 +2022,18 @@ parse_socks(const char *data, size_t datalen, socks_request_t *req,
           if (req->command != SOCKS_COMMAND_RESOLVE_PTR &&
               !addressmap_have_mapping(req->address,0)) {
             log_unsafe_socks_warning(5, req->address, req->port, safe_socks);
-            if (safe_socks)
+            if (safe_socks) {
+              socks_request_set_socks5_error(req, SOCKS5_NOT_ALLOWED);
               return -1;
+            }
           }
           return 1;
         }
         case 3: /* fqdn */
           log_debug(LD_APP,"socks5: fqdn address type");
           if (req->command == SOCKS_COMMAND_RESOLVE_PTR) {
+            socks_request_set_socks5_error(req,
+                                           SOCKS5_ADDRESS_TYPE_NOT_SUPPORTED);
             log_warn(LD_APP, "socks5 received RESOLVE_PTR command with "
                      "hostname type. Rejecting.");
             return -1;
@@ -2019,6 +2044,7 @@ parse_socks(const char *data, size_t datalen, socks_request_t *req,
             return 0; /* not yet */
           }
           if (len+1 > MAX_SOCKS_ADDR_LEN) {
+            socks_request_set_socks5_error(req, SOCKS5_GENERAL_ERROR);
             log_warn(LD_APP,
                      "socks5 hostname is %d bytes, which doesn't fit in "
                      "%d. Rejecting.", len+1,MAX_SOCKS_ADDR_LEN);
@@ -2029,6 +2055,7 @@ parse_socks(const char *data, size_t datalen, socks_request_t *req,
           req->port = ntohs(get_uint16(data+5+len));
           *drain_out = 5+len+2;
           if (!tor_strisprint(req->address) || strchr(req->address,'\"')) {
+            socks_request_set_socks5_error(req, SOCKS5_GENERAL_ERROR);
             log_warn(LD_PROTOCOL,
                      "Your application (using socks5 to port %d) gave Tor "
                      "a malformed hostname: %s. Rejecting the connection.",
@@ -2042,6 +2069,8 @@ parse_socks(const char *data, size_t datalen, socks_request_t *req,
                   "necessary. This is good.", req->port);
           return 1;
         default: /* unsupported */
+          socks_request_set_socks5_error(req,
+                                         SOCKS5_ADDRESS_TYPE_NOT_SUPPORTED);
           log_warn(LD_APP,"socks5: unsupported address type %d. Rejecting.",
                    (int) *(data+3));
           return -1;
