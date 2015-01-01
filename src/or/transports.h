@@ -32,14 +32,16 @@ typedef struct transport_t {
 
 void mark_transport_list(void);
 void sweep_transport_list(void);
-int transport_add_from_config(const tor_addr_t *addr, uint16_t port,
-                               const char *name, int socks_ver);
+MOCK_DECL(int, transport_add_from_config,
+          (const tor_addr_t *addr, uint16_t port,
+           const char *name, int socks_ver));
 void transport_free(transport_t *transport);
 
 transport_t *transport_get_by_name(const char *name);
 
-void pt_kickstart_proxy(const smartlist_t *transport_list, char **proxy_argv,
-                        int is_server);
+MOCK_DECL(void, pt_kickstart_proxy,
+          (const smartlist_t *transport_list, char **proxy_argv,
+           int is_server));
 
 #define pt_kickstart_client_proxy(tl, pa)  \
   pt_kickstart_proxy(tl, pa, 0)
@@ -128,6 +130,8 @@ STATIC managed_proxy_t *managed_proxy_create(const smartlist_t *transport_list,
 STATIC int configure_proxy(managed_proxy_t *mp);
 
 STATIC char* get_pt_proxy_uri(void);
+
+STATIC void free_execve_args(char **arg);
 
 #endif
 

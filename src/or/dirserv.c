@@ -512,7 +512,7 @@ dirserv_add_multiple_descriptors(const char *desc, uint8_t purpose,
     if (!n_parsed) {
       *msg = "No descriptors found in your POST.";
       if (WRA_WAS_ADDED(r))
-        r = ROUTER_WAS_NOT_NEW;
+        r = ROUTER_IS_ALREADY_KNOWN;
     } else {
       *msg = "(no message)";
     }
@@ -574,7 +574,7 @@ dirserv_add_descriptor(routerinfo_t *ri, const char **msg, const char *source)
                          ri->cache_info.signed_descriptor_body,
                          ri->cache_info.signed_descriptor_len, *msg);
     routerinfo_free(ri);
-    return ROUTER_WAS_NOT_NEW;
+    return ROUTER_IS_ALREADY_KNOWN;
   }
 
   /* Make a copy of desc, since router_add_to_routerlist might free
@@ -646,7 +646,7 @@ dirserv_add_extrainfo(extrainfo_t *ei, const char **msg)
 
   if ((r = routerinfo_incompatible_with_extrainfo(ri, ei, NULL, msg))) {
     extrainfo_free(ei);
-    return r < 0 ? ROUTER_WAS_NOT_NEW : ROUTER_BAD_EI;
+    return r < 0 ? ROUTER_IS_ALREADY_KNOWN : ROUTER_BAD_EI;
   }
   router_add_extrainfo_to_routerlist(ei, msg, 0, 0);
   return ROUTER_ADDED_SUCCESSFULLY;
@@ -733,7 +733,7 @@ running_long_enough_to_decide_unreachable(void)
 }
 
 /** Each server needs to have passed a reachability test no more
- * than this number of seconds ago, or he is listed as down in
+ * than this number of seconds ago, or it is listed as down in
  * the directory. */
 #define REACHABLE_TIMEOUT (45*60)
 
@@ -887,12 +887,26 @@ static int
 router_is_active(const routerinfo_t *ri, const node_t *node, time_t now)
 {
   time_t cutoff = now - ROUTER_MAX_AGE_TO_PUBLISH;
-  if (ri->cache_info.published_on < cutoff)
+  if (ri->cache_info.published_on < cutoff) {
     return 0;
-  if (!node->is_running || !node->is_valid || ri->is_hibernating)
+  }
+  if (!node->is_running || !node->is_valid || ri->is_hibernating) {
     return 0;
-  if (!ri->bandwidthcapacity)
+  }
+  /* Only require bandwith capacity in non-test networks, or
+   * if TestingTorNetwork, and TestingMinExitFlagThreshold is non-zero */
+  if (!ri->bandwidthcapacity) {
+    if (get_options()->TestingTorNetwork) {
+      if (get_options()->TestingMinExitFlagThreshold > 0) {
+        /* If we're in a TestingTorNetwork, and TestingMinExitFlagThreshold is,
+         * then require bandwidthcapacity */
+        return 0;
+      }
+    } else {
+      /* If we're not in a TestingTorNetwork, then require bandwidthcapacity */
       return 0;
+    }
+  }
   return 1;
 }
 
@@ -1037,7 +1051,7 @@ directory_fetches_dir_info_later(const or_options_t *options)
 }
 
 /** Return true iff we want to fetch and keep certificates for authorities
- * that we don't acknowledge as aurthorities ourself.
+ * that we don't acknowledge as authorities ourself.
  */
 int
 directory_caches_unknown_auth_certs(const or_options_t *options)
@@ -1369,18 +1383,18 @@ dirserv_compute_performance_thresholds(routerlist_t *rl,
    * sort them and use that to compute thresholds. */
   n_active = n_active_nonexit = 0;
   /* Uptime for every active router. */
-  uptimes = tor_calloc(sizeof(uint32_t), smartlist_len(rl->routers));
+  uptimes = tor_calloc(smartlist_len(rl->routers), sizeof(uint32_t));
   /* Bandwidth for every active router. */
-  bandwidths_kb = tor_calloc(sizeof(uint32_t), smartlist_len(rl->routers));
+  bandwidths_kb = tor_calloc(smartlist_len(rl->routers), sizeof(uint32_t));
   /* Bandwidth for every active non-exit router. */
   bandwidths_excluding_exits_kb =
-    tor_calloc(sizeof(uint32_t), smartlist_len(rl->routers));
+    tor_calloc(smartlist_len(rl->routers), sizeof(uint32_t));
   /* Weighted mean time between failure for each active router. */
-  mtbfs = tor_calloc(sizeof(double), smartlist_len(rl->routers));
+  mtbfs = tor_calloc(smartlist_len(rl->routers), sizeof(double));
   /* Time-known for each active router. */
-  tks = tor_calloc(sizeof(long), smartlist_len(rl->routers));
+  tks = tor_calloc(smartlist_len(rl->routers), sizeof(long));
   /* Weighted fractional uptime for each active router. */
-  wfus = tor_calloc(sizeof(double), smartlist_len(rl->routers));
+  wfus = tor_calloc(smartlist_len(rl->routers), sizeof(double));
 
   nodelist_assert_ok();
 
@@ -1498,7 +1512,7 @@ dirserv_compute_performance_thresholds(routerlist_t *rl,
       (unsigned long)guard_tk,
       (unsigned long)guard_bandwidth_including_exits_kb,
       (unsigned long)guard_bandwidth_excluding_exits_kb,
-      enough_mtbf_info ? "" : " don't ");
+      enough_mtbf_info ? "" : " don't");
 
   tor_free(uptimes);
   tor_free(mtbfs);

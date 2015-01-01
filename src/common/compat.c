@@ -138,9 +138,10 @@ int
 tor_open_cloexec(const char *path, int flags, unsigned mode)
 {
   int fd;
+  const char *p = path;
 #ifdef O_CLOEXEC
-  path = sandbox_intern_string(path);
-  fd = open(path, flags|O_CLOEXEC, mode);
+  p = sandbox_intern_string(path);
+  fd = open(p, flags|O_CLOEXEC, mode);
   if (fd >= 0)
     return fd;
   /* If we got an error, see if it is EINVAL. EINVAL might indicate that,
@@ -150,8 +151,8 @@ tor_open_cloexec(const char *path, int flags, unsigned mode)
     return -1;
 #endif
 
-  log_debug(LD_FS, "Opening %s with flags %x", path, flags);
-  fd = open(path, flags, mode);
+  log_debug(LD_FS, "Opening %s with flags %x", p, flags);
+  fd = open(p, flags, mode);
 #ifdef FD_CLOEXEC
   if (fd >= 0) {
     if (fcntl(fd, F_SETFD, FD_CLOEXEC) == -1) {
@@ -1696,7 +1697,7 @@ log_credential_status(void)
 
   /* log supplementary groups */
   sup_gids_size = 64;
-  sup_gids = tor_calloc(sizeof(gid_t), 64);
+  sup_gids = tor_calloc(64, sizeof(gid_t));
   while ((ngids = getgroups(sup_gids_size, sup_gids)) < 0 &&
          errno == EINVAL &&
          sup_gids_size < NGROUPS_MAX) {
@@ -2196,9 +2197,20 @@ get_environment(void)
 #endif
 }
 
-/** Set *addr to the IP address (in dotted-quad notation) stored in c.
- * Return 1 on success, 0 if c is badly formatted.  (Like inet_aton(c,addr),
- * but works on Windows and Solaris.)
+/** Get name of current host and write it to <b>name</b> array, whose
+ * length is specified by <b>namelen</b> argument. Return 0 upon
+ * successfull completion; otherwise return return -1. (Currently,
+ * this function is merely a mockable wrapper for POSIX gethostname().)
+ */
+MOCK_IMPL(int,
+tor_gethostname,(char *name, size_t namelen))
+{
+   return gethostname(name,namelen);
+}
+
+/** Set *addr to the IP address (in dotted-quad notation) stored in *str.
+ * Return 1 on success, 0 if *str is badly formatted.
+ * (Like inet_aton(str,addr), but works on Windows and Solaris.)
  */
 int
 tor_inet_aton(const char *str, struct in_addr* addr)
@@ -2418,8 +2430,9 @@ tor_inet_pton(int af, const char *src, void *dst)
  * (This function exists because standard windows gethostbyname
  * doesn't treat raw IP addresses properly.)
  */
-int
-tor_lookup_hostname(const char *name, uint32_t *addr)
+
+MOCK_IMPL(int,
+tor_lookup_hostname,(const char *name, uint32_t *addr))
 {
   tor_addr_t myaddr;
   int ret;

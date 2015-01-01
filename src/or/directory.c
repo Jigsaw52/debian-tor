@@ -433,18 +433,33 @@ directory_get_from_dirserver(uint8_t dir_purpose, uint8_t router_purpose,
     if (resource)
       flav = networkstatus_parse_flavor_name(resource);
 
+    /* DEFAULT_IF_MODIFIED_SINCE_DELAY is 1/20 of the default consensus
+     * period of 1 hour.
+     */
+#define DEFAULT_IF_MODIFIED_SINCE_DELAY (180)
     if (flav != -1) {
       /* IF we have a parsed consensus of this type, we can do an
        * if-modified-time based on it. */
       v = networkstatus_get_latest_consensus_by_flavor(flav);
-      if (v)
-        if_modified_since = v->valid_after + 180;
+      if (v) {
+        /* In networks with particularly short V3AuthVotingIntervals,
+         * ask for the consensus if it's been modified since half the
+         * V3AuthVotingInterval of the most recent consensus. */
+        time_t ims_delay = DEFAULT_IF_MODIFIED_SINCE_DELAY;
+        if (v->fresh_until > v->valid_after
+            && ims_delay > (v->fresh_until - v->valid_after)/2) {
+          ims_delay = (v->fresh_until - v->valid_after)/2;
+        }
+        if_modified_since = v->valid_after + ims_delay;
+      }
     } else {
       /* Otherwise it might be a consensus we don't parse, but which we
        * do cache.  Look at the cached copy, perhaps. */
       cached_dir_t *cd = dirserv_get_consensus(resource);
+      /* We have no method of determining the voting interval from an
+       * unparsed consensus, so we use the default. */
       if (cd)
-        if_modified_since = cd->published + 180;
+        if_modified_since = cd->published + DEFAULT_IF_MODIFIED_SINCE_DELAY;
     }
   }
 
@@ -2073,23 +2088,25 @@ connection_dir_client_reached_eof(dir_connection_t *conn)
   }
 
   if (conn->base_.purpose == DIR_PURPOSE_FETCH_RENDDESC_V2) {
-    #define SEND_HS_DESC_FAILED_EVENT() ( \
+    #define SEND_HS_DESC_FAILED_EVENT(reason) ( \
       control_event_hs_descriptor_failed(conn->rend_data, \
-                                         conn->identity_digest) )
+                                         conn->identity_digest, \
+                                         reason) )
     tor_assert(conn->rend_data);
     log_info(LD_REND,"Received rendezvous descriptor (size %d, status %d "
              "(%s))",
              (int)body_len, status_code, escaped(reason));
     switch (status_code) {
       case 200:
-        switch (rend_cache_store_v2_desc_as_client(body, conn->rend_data)) {
+        switch (rend_cache_store_v2_desc_as_client(body,
+                                  conn->requested_resource, conn->rend_data)) {
           case RCS_BADDESC:
           case RCS_NOTDIR: /* Impossible */
             log_warn(LD_REND,"Fetching v2 rendezvous descriptor failed. "
                      "Retrying at another directory.");
             /* We'll retry when connection_about_to_close_connection()
              * cleans this dir conn up. */
-            SEND_HS_DESC_FAILED_EVENT();
+            SEND_HS_DESC_FAILED_EVENT("BAD_DESC");
             break;
           case RCS_OKAY:
           default:
@@ -2108,14 +2125,14 @@ connection_dir_client_reached_eof(dir_connection_t *conn)
          * connection_about_to_close_connection() cleans this conn up. */
         log_info(LD_REND,"Fetching v2 rendezvous descriptor failed: "
                          "Retrying at another directory.");
-        SEND_HS_DESC_FAILED_EVENT();
+        SEND_HS_DESC_FAILED_EVENT("NOT_FOUND");
         break;
       case 400:
         log_warn(LD_REND, "Fetching v2 rendezvous descriptor failed: "
                  "http status 400 (%s). Dirserver didn't like our "
                  "v2 rendezvous query? Retrying at another directory.",
                  escaped(reason));
-        SEND_HS_DESC_FAILED_EVENT();
+        SEND_HS_DESC_FAILED_EVENT("QUERY_REJECTED");
         break;
       default:
         log_warn(LD_REND, "Fetching v2 rendezvous descriptor failed: "
@@ -2124,7 +2141,7 @@ connection_dir_client_reached_eof(dir_connection_t *conn)
                  "Retrying at another directory.",
                  status_code, escaped(reason), conn->base_.address,
                  conn->base_.port);
-        SEND_HS_DESC_FAILED_EVENT();
+        SEND_HS_DESC_FAILED_EVENT("UNEXPECTED");
         break;
     }
   }
@@ -2208,8 +2225,10 @@ connection_dir_process_inbuf(dir_connection_t *conn)
   }
 
   if (connection_get_inbuf_len(TO_CONN(conn)) > MAX_DIRECTORY_OBJECT_SIZE) {
-    log_warn(LD_HTTP, "Too much data received from directory connection: "
-             "denial of service attempt, or you need to upgrade?");
+    log_warn(LD_HTTP,
+             "Too much data received from directory connection (%s): "
+             "denial of service attempt, or you need to upgrade?",
+             conn->base_.address);
     connection_mark_for_close(TO_CONN(conn));
     return -1;
   }
@@ -2254,6 +2273,7 @@ write_http_status_line(dir_connection_t *conn, int status,
     log_warn(LD_BUG,"status line too long.");
     return;
   }
+  log_debug(LD_DIRSERV,"Wrote status 'HTTP/1.0 %d %s'", status, reason_phrase);
   connection_write_to_buf(buf, strlen(buf), TO_CONN(conn));
 }
 
@@ -2550,8 +2570,11 @@ directory_handle_command_get(dir_connection_t *conn, const char *headers,
   if ((header = http_get_header(headers, "If-Modified-Since: "))) {
     struct tm tm;
     if (parse_http_time(header, &tm) == 0) {
-      if (tor_timegm(&tm, &if_modified_since)<0)
+      if (tor_timegm(&tm, &if_modified_since)<0) {
         if_modified_since = 0;
+      } else {
+        log_debug(LD_DIRSERV, "If-Modified-Since is '%s'.", escaped(header));
+      }
     }
     /* The correct behavior on a malformed If-Modified-Since header is to
      * act as if no If-Modified-Since header had been given. */
