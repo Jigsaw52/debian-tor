@@ -89,13 +89,14 @@ tor_addr_to_sockaddr(const tor_addr_t *a,
                      struct sockaddr *sa_out,
                      socklen_t len)
 {
+  memset(sa_out, 0, len);
+
   sa_family_t family = tor_addr_family(a);
   if (family == AF_INET) {
     struct sockaddr_in *sin;
     if (len < (int)sizeof(struct sockaddr_in))
       return 0;
     sin = (struct sockaddr_in *)sa_out;
-    memset(sin, 0, sizeof(struct sockaddr_in));
 #ifdef HAVE_STRUCT_SOCKADDR_IN_SIN_LEN
     sin->sin_len = sizeof(struct sockaddr_in);
 #endif
@@ -108,7 +109,6 @@ tor_addr_to_sockaddr(const tor_addr_t *a,
     if (len < (int)sizeof(struct sockaddr_in6))
       return 0;
     sin6 = (struct sockaddr_in6 *)sa_out;
-    memset(sin6, 0, sizeof(struct sockaddr_in6));
 #ifdef HAVE_STRUCT_SOCKADDR_IN6_SIN6_LEN
     sin6->sin6_len = sizeof(struct sockaddr_in6);
 #endif
@@ -129,6 +129,9 @@ tor_addr_from_sockaddr(tor_addr_t *a, const struct sockaddr *sa,
 {
   tor_assert(a);
   tor_assert(sa);
+
+  memset(a, 0, sizeof(*a));
+
   if (sa->sa_family == AF_INET) {
     struct sockaddr_in *sin = (struct sockaddr_in *) sa;
     tor_addr_from_ipv4n(a, sin->sin_addr.s_addr);
@@ -723,6 +726,11 @@ tor_addr_parse_mask_ports(const char *s,
         /* XXXX_IP6 is this really what we want? */
         bits = 96 + bits%32; /* map v4-mapped masks onto 96-128 bits */
       }
+      if (any_flag) {
+        log_warn(LD_GENERAL,
+                 "Found bit prefix with wildcard address; rejecting");
+        goto err;
+      }
     } else { /* pick an appropriate mask, as none was given */
       if (any_flag)
         bits = 0;  /* This is okay whether it's V6 or V4 (FIX V4-mapped V6!) */
@@ -1018,7 +1026,6 @@ tor_addr_compare_masked(const tor_addr_t *addr1, const tor_addr_t *addr2,
     } else {
       a2 = tor_addr_to_ipv4h(addr2);
     }
-    if (mbits <= 0) return 0;
     if (mbits > 32) mbits = 32;
     a1 >>= (32-mbits);
     a2 >>= (32-mbits);
@@ -1114,7 +1121,8 @@ fmt_addr32(uint32_t addr)
 int
 tor_addr_parse(tor_addr_t *addr, const char *src)
 {
-  char *tmp = NULL; /* Holds substring if we got a dotted quad. */
+  /* Holds substring of IPv6 address after removing square brackets */
+  char *tmp = NULL;
   int result;
   struct in_addr in_tmp;
   struct in6_addr in6_tmp;
@@ -1363,8 +1371,8 @@ tor_addr_is_multicast(const tor_addr_t *a)
  * connects to the Internet.  This address should only be used in checking
  * whether our address has changed.  Return 0 on success, -1 on failure.
  */
-int
-get_interface_address6(int severity, sa_family_t family, tor_addr_t *addr)
+MOCK_IMPL(int,
+get_interface_address6,(int severity, sa_family_t family, tor_addr_t *addr))
 {
   /* XXX really, this function should yield a smartlist of addresses. */
   smartlist_t *addrs;
@@ -1693,8 +1701,8 @@ tor_dup_ip(uint32_t addr)
  * checking whether our address has changed.  Return 0 on success, -1 on
  * failure.
  */
-int
-get_interface_address(int severity, uint32_t *addr)
+MOCK_IMPL(int,
+get_interface_address,(int severity, uint32_t *addr))
 {
   tor_addr_t local_addr;
   int r;

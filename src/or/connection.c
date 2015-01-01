@@ -544,8 +544,7 @@ connection_free_(connection_t *conn)
                or_conn, TLS_CHAN_TO_BASE(or_conn->chan),
                U64_PRINTF_ARG(
                  TLS_CHAN_TO_BASE(or_conn->chan)->global_identifier));
-      if (!(TLS_CHAN_TO_BASE(or_conn->chan)->state == CHANNEL_STATE_CLOSED ||
-            TLS_CHAN_TO_BASE(or_conn->chan)->state == CHANNEL_STATE_ERROR)) {
+      if (!CHANNEL_FINISHED(TLS_CHAN_TO_BASE(or_conn->chan))) {
         channel_close_for_error(TLS_CHAN_TO_BASE(or_conn->chan));
       }
 
@@ -3839,6 +3838,8 @@ connection_handle_write_impl(connection_t *conn, int force)
     tor_tls_get_n_raw_bytes(or_conn->tls, &n_read, &n_written);
     log_debug(LD_GENERAL, "After TLS write of %d: %ld read, %ld written",
               result, (long)n_read, (long)n_written);
+    or_conn->bytes_xmitted += result;
+    or_conn->bytes_xmitted_by_tls += n_written;
     /* So we notice bytes were written even on error */
     /* XXXX024 This cast is safe since we can never write INT_MAX bytes in a
      * single set of TLS operations. But it looks kinda ugly. If we refactor

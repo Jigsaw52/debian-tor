@@ -14,6 +14,7 @@
 #include "or.h"
 #include "channel.h"
 #include "circpathbias.h"
+#define CIRCUITBUILD_PRIVATE
 #include "circuitbuild.h"
 #include "circuitlist.h"
 #include "circuitstats.h"
@@ -671,7 +672,7 @@ circuit_deliver_create_cell(circuit_t *circ, const create_cell_t *create_cell,
   if (CIRCUIT_IS_ORIGIN(circ)) {
     /* Update began timestamp for circuits starting their first hop */
     if (TO_ORIGIN_CIRCUIT(circ)->cpath->state == CPATH_STATE_CLOSED) {
-      if (circ->n_chan->state != CHANNEL_STATE_OPEN) {
+      if (!CHANNEL_IS_OPEN(circ->n_chan)) {
         log_warn(LD_CIRC,
                  "Got first hop for a circuit without an opened channel. "
                  "State: %s.", channel_state_to_string(circ->n_chan->state));
@@ -943,9 +944,9 @@ circuit_send_next_onion_skin(origin_circuit_t *circ)
       circuit_rep_hist_note_result(circ);
       circuit_has_opened(circ); /* do other actions as necessary */
 
-      if (!can_complete_circuit && !circ->build_state->onehop_tunnel) {
+      if (!have_completed_a_circuit() && !circ->build_state->onehop_tunnel) {
         const or_options_t *options = get_options();
-        can_complete_circuit=1;
+        note_that_we_completed_a_circuit();
         /* FFFF Log a count of known routers here */
         log_notice(LD_GENERAL,
             "Tor has successfully opened a circuit. "
@@ -1033,7 +1034,8 @@ circuit_note_clock_jumped(int seconds_elapsed)
       seconds_elapsed >=0 ? "forward" : "backward");
   control_event_general_status(LOG_WARN, "CLOCK_JUMPED TIME=%d",
                                seconds_elapsed);
-  can_complete_circuit=0; /* so it'll log when it works again */
+  /* so we log when it works again */
+  note_that_we_maybe_cant_complete_circuits();
   control_event_client_status(severity, "CIRCUIT_NOT_ESTABLISHED REASON=%s",
                               "CLOCK_JUMPED");
   circuit_mark_all_unused_circs();
@@ -1376,8 +1378,10 @@ onionskin_answer(or_circuit_t *circ,
   log_debug(LD_CIRC,"Finished sending '%s' cell.",
             circ->is_first_hop ? "created_fast" : "created");
 
-  if (!channel_is_local(circ->p_chan) &&
-      !channel_is_outgoing(circ->p_chan)) {
+  /* Ignore the local bit when testing - many test networks run on local
+   * addresses */
+  if ((!channel_is_local(circ->p_chan) || get_options()->TestingTorNetwork)
+      && !channel_is_outgoing(circ->p_chan)) {
     /* record that we could process create cells from a non-local conn
      * that we didn't initiate; presumably this means that create cells
      * can reach us too. */
@@ -1548,7 +1552,7 @@ choose_good_exit_server_general(int need_uptime, int need_capacity)
    * -1 means "Don't use this router at all."
    */
   the_nodes = nodelist_get_list();
-  n_supported = tor_calloc(sizeof(int), smartlist_len(the_nodes));
+  n_supported = tor_calloc(smartlist_len(the_nodes), sizeof(int));
   SMARTLIST_FOREACH_BEGIN(the_nodes, const node_t *, node) {
     const int i = node_sl_idx;
     if (router_digest_is_me(node->identity)) {
@@ -1861,7 +1865,7 @@ onion_pick_cpath_exit(origin_circuit_t *circ, extend_info_t *exit)
       choose_good_exit_server(circ->base_.purpose, state->need_uptime,
                               state->need_capacity, state->is_internal);
     if (!node) {
-      log_warn(LD_CIRC,"failed to choose an exit server");
+      log_warn(LD_CIRC,"Failed to choose an exit server");
       return -1;
     }
     exit = extend_info_from_node(node, 0);
@@ -1988,7 +1992,8 @@ choose_good_middle_server(uint8_t purpose,
   tor_assert(CIRCUIT_PURPOSE_MIN_ <= purpose &&
              purpose <= CIRCUIT_PURPOSE_MAX_);
 
-  log_debug(LD_CIRC, "Contemplating intermediate hop: random choice.");
+  log_debug(LD_CIRC, "Contemplating intermediate hop %d: random choice.",
+            cur_len);
   excluded = smartlist_new();
   if ((r = build_state_get_exit_node(state))) {
     nodelist_add_node_and_family(excluded, r);
@@ -2050,9 +2055,18 @@ choose_good_entry_server(uint8_t purpose, cpath_build_state_t *state)
         smartlist_add(excluded, (void*)node);
     });
   }
-  /* and exclude current entry guards and their families, if applicable */
+  /* and exclude current entry guards and their families,
+   * unless we're in a test network, and excluding guards
+   * would exclude all nodes (i.e. we're in an incredibly small tor network,
+   * or we're using TestingAuthVoteGuard *).
+   * This is an incomplete fix, but is no worse than the previous behaviour,
+   * and only applies to minimal, testing tor networks
+   * (so it's no less secure) */
   /*XXXX025 use the using_as_guard flag to accomplish this.*/
-  if (options->UseEntryGuards) {
+  if (options->UseEntryGuards
+      && (!options->TestingTorNetwork ||
+          smartlist_len(nodelist_get_list()) > smartlist_len(get_entry_guards())
+     )) {
     SMARTLIST_FOREACH(get_entry_guards(), const entry_guard_t *, entry,
       {
         if ((node = node_get_by_id(entry->identity))) {

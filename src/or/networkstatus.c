@@ -832,6 +832,10 @@ update_consensus_networkstatus_fetch_time_impl(time_t now, int flav)
          a crazy-fast voting interval, though, 2 minutes may be too
          much. */
       min_sec_before_caching = interval/16;
+      /* make sure we always delay by at least a second before caching */
+      if (min_sec_before_caching == 0) {
+        min_sec_before_caching = 1;
+      }
     }
 
     if (directory_fetches_dir_info_early(options)) {
@@ -863,8 +867,16 @@ update_consensus_networkstatus_fetch_time_impl(time_t now, int flav)
         dl_interval = (c->valid_until - start) - min_sec_before_caching;
       }
     }
+    /* catch low dl_interval in crazy-fast networks */
     if (dl_interval < 1)
       dl_interval = 1;
+    /* catch late start in crazy-fast networks */
+    if (start+dl_interval >= c->valid_until)
+      start = c->valid_until - dl_interval - 1;
+    log_debug(LD_DIR,
+              "fresh_until: %ld start: %ld "
+              "dl_interval: %ld valid_until: %ld ",
+              c->fresh_until, start, dl_interval, c->valid_until);
     /* We must not try to replace c while it's still fresh: */
     tor_assert(c->fresh_until < start);
     /* We must download the next one before c is invalid: */
@@ -1123,7 +1135,7 @@ networkstatus_copy_old_consensus_info(networkstatus_t *new_c,
     rs_new->last_dir_503_at = rs_old->last_dir_503_at;
 
     if (tor_memeq(rs_old->descriptor_digest, rs_new->descriptor_digest,
-                  DIGEST_LEN)) { /* XXXX Change this to digest256_len */
+                  DIGEST256_LEN)) {
       /* And the same descriptor too! */
       memcpy(&rs_new->dl_status, &rs_old->dl_status,sizeof(download_status_t));
     }

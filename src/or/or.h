@@ -119,6 +119,7 @@
  * conflict with system-defined signals. */
 #define SIGNEWNYM 129
 #define SIGCLEARDNSCACHE 130
+#define SIGHEARTBEAT 131
 
 #if (SIZEOF_CELL_T != 0)
 /* On Irix, stdlib.h defines a cell_t type, so we need to make sure
@@ -241,7 +242,7 @@ typedef enum {
 #define PROXY_CONNECT 1
 #define PROXY_SOCKS4 2
 #define PROXY_SOCKS5 3
-/* !!!! If there is ever a PROXY_* type over 2, we must grow the proxy_type
+/* !!!! If there is ever a PROXY_* type over 3, we must grow the proxy_type
  * field in or_connection_t */
 
 /* Pluggable transport proxy type. Don't use this in or_connection_t,
@@ -676,6 +677,10 @@ typedef enum {
 
 /* Negative reasons are internal: we never send them in a DESTROY or TRUNCATE
  * call; they only go to the controller for tracking  */
+
+/* Closing introduction point that were opened in parallel. */
+#define END_CIRC_REASON_IP_NOW_REDUNDANT -4
+
 /** Our post-timeout circuit time measurement period expired.
  * We must give up now */
 #define END_CIRC_REASON_MEASUREMENT_EXPIRED -3
@@ -1426,6 +1431,18 @@ typedef struct or_handshake_state_t {
 
 /** Length of Extended ORPort connection identifier. */
 #define EXT_OR_CONN_ID_LEN DIGEST_LEN /* 20 */
+/*
+ * OR_CONN_HIGHWATER and OR_CONN_LOWWATER moved from connection_or.c so
+ * channeltls.c can see them too.
+ */
+
+/** When adding cells to an OR connection's outbuf, keep adding until the
+ * outbuf is at least this long, or we run out of cells. */
+#define OR_CONN_HIGHWATER (32*1024)
+
+/** Add cells to an OR connection's outbuf whenever the outbuf's data length
+ * drops below this size. */
+#define OR_CONN_LOWWATER (16*1024)
 
 /** Subtype of connection_t for an "OR connection" -- that is, one that speaks
  * cells over TLS. */
@@ -1517,6 +1534,12 @@ typedef struct or_connection_t {
   /** Last emptied write token bucket in msec since midnight; only used if
    * TB_EMPTY events are enabled. */
   uint32_t write_emptied_time;
+
+  /*
+   * Count the number of bytes flushed out on this orconn, and the number of
+   * bytes TLS actually sent - used for overhead estimation for scheduling.
+   */
+  uint64_t bytes_xmitted, bytes_xmitted_by_tls;
 } or_connection_t;
 
 /** Subtype of connection_t for an "edge connection" -- that is, an entry (ap)
@@ -3181,6 +3204,10 @@ typedef struct or_circuit_t {
   /** True iff this circuit was made with a CREATE_FAST cell. */
   unsigned int is_first_hop : 1;
 
+  /** If set, this circuit carries HS traffic. Consider it in any HS
+   *  statistics. */
+  unsigned int circuit_carries_hs_traffic_stats : 1;
+
   /** Number of cells that were removed from circuit queue; reset every
    * time when writing buffer stats to disk. */
   uint32_t processed_cells;
@@ -3938,6 +3965,10 @@ typedef struct {
   /** If true, the user wants us to collect statistics as entry node. */
   int EntryStatistics;
 
+  /** If true, the user wants us to collect statistics as hidden service
+   * directory, introduction point, or rendezvous point. */
+  int HiddenServiceStatistics;
+
   /** If true, include statistics file contents in extra-info documents. */
   int ExtraInfoStatistics;
 
@@ -4225,8 +4256,18 @@ typedef struct {
   /** How long (seconds) do we keep a guard before picking a new one? */
   int GuardLifetime;
 
-  /** Should we send the timestamps that pre-023 hidden services want? */
-  int Support022HiddenServices;
+  /** Low-water mark for global scheduler - start sending when estimated
+   * queued size falls below this threshold.
+   */
+  uint64_t SchedulerLowWaterMark__;
+  /** High-water mark for global scheduler - stop sending when estimated
+   * queued size exceeds this threshold.
+   */
+  uint64_t SchedulerHighWaterMark__;
+  /** Flush size for global scheduler - flush this many cells at a time
+   * when sending.
+   */
+  int SchedulerMaxFlushCells__;
 } or_options_t;
 
 /** Persistent state for an onion router, as saved to disk. */
@@ -4317,7 +4358,8 @@ static INLINE void or_state_mark_dirty(or_state_t *state, time_t when)
 /** Please turn this IP address into an FQDN, privately. */
 #define SOCKS_COMMAND_RESOLVE_PTR   0xF1
 
-#define SOCKS_COMMAND_IS_CONNECT(c) ((c)==SOCKS_COMMAND_CONNECT)
+/* || 0 is for -Wparentheses-equality (-Wall?) appeasement under clang */
+#define SOCKS_COMMAND_IS_CONNECT(c) (((c)==SOCKS_COMMAND_CONNECT) || 0)
 #define SOCKS_COMMAND_IS_RESOLVE(c) ((c)==SOCKS_COMMAND_RESOLVE || \
                                      (c)==SOCKS_COMMAND_RESOLVE_PTR)
 
@@ -4997,15 +5039,31 @@ typedef enum {
 
 /** Return value for router_add_to_routerlist() and dirserv_add_descriptor() */
 typedef enum was_router_added_t {
+  /* Router was added successfully. */
   ROUTER_ADDED_SUCCESSFULLY = 1,
+  /* Router descriptor was added with warnings to submitter. */
   ROUTER_ADDED_NOTIFY_GENERATOR = 0,
+  /* Extrainfo document was rejected because no corresponding router
+   * descriptor was found OR router descriptor was rejected because
+   * it was incompatible with its extrainfo document. */
   ROUTER_BAD_EI = -1,
-  ROUTER_WAS_NOT_NEW = -2,
+  /* Router descriptor was rejected because it is already known. */
+  ROUTER_IS_ALREADY_KNOWN = -2,
+  /* General purpose router was rejected, because it was not listed
+   * in consensus. */
   ROUTER_NOT_IN_CONSENSUS = -3,
+  /* Router was neither in directory consensus nor in any of
+   * networkstatus documents. Caching it to access later.
+   * (Applies to fetched descriptors only.) */
   ROUTER_NOT_IN_CONSENSUS_OR_NETWORKSTATUS = -4,
+  /* Router was rejected by directory authority. */
   ROUTER_AUTHDIR_REJECTS = -5,
+  /* Bridge descriptor was rejected because such bridge was not one
+   * of the bridges we have listed in our configuration. */
   ROUTER_WAS_NOT_WANTED = -6,
-  ROUTER_WAS_TOO_OLD = -7,
+  /* Router descriptor was rejected because it was older than
+   * OLD_ROUTER_DESC_MAX_AGE. */
+  ROUTER_WAS_TOO_OLD = -7, /* note contrast with 'NOT_NEW' */
 } was_router_added_t;
 
 /********************************* routerparse.c ************************/

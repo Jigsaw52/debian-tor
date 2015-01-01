@@ -46,6 +46,19 @@
 #ifdef HAVE_LINUX_NETFILTER_IPV4_H
 #include <linux/netfilter_ipv4.h>
 #define TRANS_NETFILTER
+#define TRANS_NETFILTER_IPV4
+#endif
+
+#ifdef HAVE_LINUX_IF_H
+#include <linux/if.h>
+#endif
+
+#ifdef HAVE_LINUX_NETFILTER_IPV6_IP6_TABLES_H
+#include <linux/netfilter_ipv6/ip6_tables.h>
+#if defined(IP6T_SO_ORIGINAL_DST)
+#define TRANS_NETFILTER
+#define TRANS_NETFILTER_IPV6
+#endif
 #endif
 
 #if defined(HAVE_NET_IF_H) && defined(HAVE_NET_PFVAR_H)
@@ -744,8 +757,9 @@ connection_ap_fail_onehop(const char *failed_digest,
       /* we don't know the digest; have to compare addr:port */
       tor_addr_t addr;
       if (!build_state || !build_state->chosen_exit ||
-          !entry_conn->socks_request || !entry_conn->socks_request->address)
+          !entry_conn->socks_request) {
         continue;
+      }
       if (tor_addr_parse(&addr, entry_conn->socks_request->address)<0 ||
           !tor_addr_eq(&build_state->chosen_exit->addr, &addr) ||
           build_state->chosen_exit->port != entry_conn->socks_request->port)
@@ -1400,10 +1414,29 @@ destination_from_socket(entry_connection_t *conn, socks_request_t *req)
   struct sockaddr_storage orig_dst;
   socklen_t orig_dst_len = sizeof(orig_dst);
   tor_addr_t addr;
+  int rv;
 
 #ifdef TRANS_NETFILTER
-  if (getsockopt(ENTRY_TO_CONN(conn)->s, SOL_IP, SO_ORIGINAL_DST,
-                 (struct sockaddr*)&orig_dst, &orig_dst_len) < 0) {
+  switch (ENTRY_TO_CONN(conn)->socket_family) {
+#ifdef TRANS_NETFILTER_IPV4
+    case AF_INET:
+      rv = getsockopt(ENTRY_TO_CONN(conn)->s, SOL_IP, SO_ORIGINAL_DST,
+                  (struct sockaddr*)&orig_dst, &orig_dst_len);
+      break;
+#endif
+#ifdef TRANS_NETFILTER_IPV6
+    case AF_INET6:
+      rv = getsockopt(ENTRY_TO_CONN(conn)->s, SOL_IPV6, IP6T_SO_ORIGINAL_DST,
+                  (struct sockaddr*)&orig_dst, &orig_dst_len);
+      break;
+#endif
+    default:
+      log_warn(LD_BUG,
+               "Received transparent data from an unsuported socket family %d",
+               ENTRY_TO_CONN(conn)->socket_family);
+      return -1;
+  }
+  if (rv < 0) {
     int e = tor_socket_errno(ENTRY_TO_CONN(conn)->s);
     log_warn(LD_NET, "getsockopt() failed: %s", tor_socket_strerror(e));
     return -1;
@@ -2461,7 +2494,7 @@ connection_exit_begin_conn(cell_t *cell, circuit_t *circ)
 
   relay_header_unpack(&rh, cell->payload);
   if (rh.length > RELAY_PAYLOAD_SIZE)
-    return -1;
+    return -END_CIRC_REASON_TORPROTOCOL;
 
   /* Note: we have to use relay_send_command_from_edge here, not
    * connection_edge_end or connection_edge_send_command, since those require
@@ -2479,7 +2512,7 @@ connection_exit_begin_conn(cell_t *cell, circuit_t *circ)
 
   r = begin_cell_parse(cell, &bcell, &end_reason);
   if (r < -1) {
-    return -1;
+    return -END_CIRC_REASON_TORPROTOCOL;
   } else if (r == -1) {
     tor_free(bcell.address);
     relay_send_end_cell_from_edge(rh.stream_id, circ, end_reason, NULL);
@@ -2580,12 +2613,23 @@ connection_exit_begin_conn(cell_t *cell, circuit_t *circ)
     if (rend_service_set_connection_addr_port(n_stream, origin_circ) < 0) {
       log_info(LD_REND,"Didn't find rendezvous service (port %d)",
                n_stream->base_.port);
+      /* Send back reason DONE because we want to make hidden service port
+       * scanning harder thus instead of returning that the exit policy
+       * didn't match, which makes it obvious that the port is closed,
+       * return DONE and kill the circuit. That way, a user (malicious or
+       * not) needs one circuit per bad port unless it matches the policy of
+       * the hidden service. */
       relay_send_end_cell_from_edge(rh.stream_id, circ,
-                                    END_STREAM_REASON_EXITPOLICY,
+                                    END_STREAM_REASON_DONE,
                                     origin_circ->cpath->prev);
       connection_free(TO_CONN(n_stream));
       tor_free(address);
-      return 0;
+
+      /* Drop the circuit here since it might be someone deliberately
+       * scanning the hidden service ports. Note that this mitigates port
+       * scanning by adding more work on the attacker side to successfully
+       * scan but does not fully solve it. */
+      return END_CIRC_AT_ORIGIN;
     }
     assert_circuit_ok(circ);
     log_debug(LD_REND,"Finished assigning addr/port");

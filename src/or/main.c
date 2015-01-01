@@ -53,6 +53,7 @@
 #include "router.h"
 #include "routerlist.h"
 #include "routerparse.h"
+#include "scheduler.h"
 #include "statefile.h"
 #include "status.h"
 #include "util_process.h"
@@ -72,6 +73,10 @@
 
 #ifdef USE_BUFFEREVENTS
 #include <event2/bufferevent.h>
+#endif
+
+#ifdef HAVE_SYSTEMD
+#include <systemd/sd-daemon.h>
 #endif
 
 void evdns_shutdown(int);
@@ -150,7 +155,7 @@ static int called_loop_once = 0;
  * any longer (a big time jump happened, when we notice our directory is
  * heinously out-of-date, etc.
  */
-int can_complete_circuit=0;
+static int can_complete_circuits = 0;
 
 /** How often do we check for router descriptors that we should download
  * when we have too little directory info? */
@@ -171,11 +176,11 @@ int quiet_level = 0;
 /********* END VARIABLES ************/
 
 /****************************************************************************
-*
-* This section contains accessors and other methods on the connection_array
-* variables (which are global within this file and unavailable outside it).
-*
-****************************************************************************/
+ *
+ * This section contains accessors and other methods on the connection_array
+ * variables (which are global within this file and unavailable outside it).
+ *
+ ****************************************************************************/
 
 #if 0 && defined(USE_BUFFEREVENTS)
 static void
@@ -222,6 +227,31 @@ set_buffer_lengths_to_zero(tor_socket_t s)
   return r;
 }
 #endif
+
+/** Return 1 if we have successfully built a circuit, and nothing has changed
+ * to make us think that maybe we can't.
+ */
+int
+have_completed_a_circuit(void)
+{
+  return can_complete_circuits;
+}
+
+/** Note that we have successfully built a circuit, so that reachability
+ * testing and introduction points and so on may be attempted. */
+void
+note_that_we_completed_a_circuit(void)
+{
+  can_complete_circuits = 1;
+}
+
+/** Note that something has happened (like a clock jump, or DisableNetwork) to
+ * make us think that maybe we can't complete circuits. */
+void
+note_that_we_maybe_cant_complete_circuits(void)
+{
+  can_complete_circuits = 0;
+}
 
 /** Add <b>conn</b> to the array of connections that we can poll on.  The
  * connection's socket must be set; the connection starts out
@@ -999,7 +1029,7 @@ directory_info_has_arrived(time_t now, int from_cache)
   }
 
   if (server_mode(options) && !net_is_disabled() && !from_cache &&
-      (can_complete_circuit || !any_predicted_circuits(now)))
+      (have_completed_a_circuit() || !any_predicted_circuits(now)))
     consider_testing_reachability(1, 1);
 }
 
@@ -1358,6 +1388,11 @@ run_scheduled_events(time_t now)
       if (next_write && next_write < next_time_to_write_stats_files)
         next_time_to_write_stats_files = next_write;
     }
+    if (options->HiddenServiceStatistics) {
+      time_t next_write = rep_hist_hs_stats_write(time_to_write_stats_files);
+      if (next_write && next_write < next_time_to_write_stats_files)
+        next_time_to_write_stats_files = next_write;
+    }
     if (options->ExitPortStatistics) {
       time_t next_write = rep_hist_exit_stats_write(time_to_write_stats_files);
       if (next_write && next_write < next_time_to_write_stats_files)
@@ -1436,7 +1471,7 @@ run_scheduled_events(time_t now)
     /* also, check religiously for reachability, if it's within the first
      * 20 minutes of our uptime. */
     if (is_server &&
-        (can_complete_circuit || !any_predicted_circuits(now)) &&
+        (have_completed_a_circuit() || !any_predicted_circuits(now)) &&
         !we_are_hibernating()) {
       if (stats_n_seconds_working < TIMEOUT_UNTIL_UNREACHABILITY_COMPLAINT) {
         consider_testing_reachability(1, dirport_reachability_count==0);
@@ -1549,7 +1584,7 @@ run_scheduled_events(time_t now)
   circuit_close_all_marked();
 
   /* 7. And upload service descriptors if necessary. */
-  if (can_complete_circuit && !net_is_disabled()) {
+  if (have_completed_a_circuit() && !net_is_disabled()) {
     rend_consider_services_upload(now);
     rend_consider_descriptor_republication();
   }
@@ -1680,7 +1715,7 @@ second_elapsed_callback(periodic_timer_t *timer, void *arg)
   if (server_mode(options) &&
       !net_is_disabled() &&
       seconds_elapsed > 0 &&
-      can_complete_circuit &&
+      have_completed_a_circuit() &&
       stats_n_seconds_working / TIMEOUT_UNTIL_UNREACHABILITY_COMPLAINT !=
       (stats_n_seconds_working+seconds_elapsed) /
         TIMEOUT_UNTIL_UNREACHABILITY_COMPLAINT) {
@@ -1727,6 +1762,17 @@ second_elapsed_callback(periodic_timer_t *timer, void *arg)
 
   current_second = now; /* remember which second it is, for next time */
 }
+
+#ifdef HAVE_SYSTEMD_209
+static periodic_timer_t *systemd_watchdog_timer = NULL;
+
+/** Libevent callback: invoked to reset systemd watchdog. */
+static void
+systemd_watchdog_callback(periodic_timer_t *timer, void *arg)
+{
+  sd_notify(1, "WATCHDOG=1");
+}
+#endif
 
 #ifndef USE_BUFFEREVENTS
 /** Timer: used to invoke refill_callback(). */
@@ -1996,6 +2042,28 @@ do_main_loop(void)
     tor_assert(second_timer);
   }
 
+#ifdef HAVE_SYSTEMD_209
+  uint64_t watchdog_delay;
+  /* set up systemd watchdog notification. */
+  if (sd_watchdog_enabled(1, &watchdog_delay) > 0) {
+    if (! systemd_watchdog_timer) {
+      struct timeval watchdog;
+      /* The manager will "act on" us if we don't send them a notification
+       * every 'watchdog_delay' microseconds.  So, send notifications twice
+       * that often.  */
+      watchdog_delay /= 2;
+      watchdog.tv_sec = watchdog_delay  / 1000000;
+      watchdog.tv_usec = watchdog_delay % 1000000;
+
+      systemd_watchdog_timer = periodic_timer_new(tor_libevent_get_base(),
+                                                  &watchdog,
+                                                  systemd_watchdog_callback,
+                                                  NULL);
+      tor_assert(systemd_watchdog_timer);
+    }
+  }
+#endif
+
 #ifndef USE_BUFFEREVENTS
   if (!refill_timer) {
     struct timeval refill_interval;
@@ -2010,6 +2078,11 @@ do_main_loop(void)
                                       NULL);
     tor_assert(refill_timer);
   }
+#endif
+
+#ifdef HAVE_SYSTEMD
+  log_notice(LD_GENERAL, "Signaling readyness to systemd");
+  sd_notify(0, "READY=1");
 #endif
 
   for (;;) {
@@ -2135,6 +2208,10 @@ process_signal(uintptr_t sig)
     }
     case SIGCLEARDNSCACHE:
       addressmap_clear_transient();
+      control_event_signal(sig);
+      break;
+    case SIGHEARTBEAT:
+      log_heartbeat(time(NULL));
       control_event_signal(sig);
       break;
   }
@@ -2553,6 +2630,7 @@ tor_free_all(int postfork)
   channel_tls_free_all();
   channel_free_all();
   connection_free_all();
+  scheduler_free_all();
   buf_shrink_freelists(1);
   memarea_clear_freelist();
   nodelist_free_all();

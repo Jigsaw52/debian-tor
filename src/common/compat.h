@@ -203,6 +203,15 @@ extern INLINE double U64_TO_DBL(uint64_t x) {
 #define STMT_END } while (0)
 #endif
 
+/* Some tools (like coccinelle) don't like to see operators as macro
+ * arguments. */
+#define OP_LT <
+#define OP_GT >
+#define OP_GE >=
+#define OP_LE <=
+#define OP_EQ ==
+#define OP_NE !=
+
 /* ===== String compatibility */
 #ifdef _WIN32
 /* Windows names string functions differently from most other platforms. */
@@ -523,10 +532,11 @@ struct sockaddr_in6 {
 };
 #endif
 
+MOCK_DECL(int,tor_gethostname,(char *name, size_t namelen));
 int tor_inet_aton(const char *cp, struct in_addr *addr) ATTR_NONNULL((1,2));
 const char *tor_inet_ntop(int af, const void *src, char *dst, size_t len);
 int tor_inet_pton(int af, const char *src, void *dst);
-int tor_lookup_hostname(const char *name, uint32_t *addr) ATTR_NONNULL((1,2));
+MOCK_DECL(int,tor_lookup_hostname,(const char *name, uint32_t *addr));
 int set_socket_nonblocking(tor_socket_t socket);
 int tor_socketpair(int family, int type, int protocol, tor_socket_t fd[2]);
 int network_init(void);
@@ -562,17 +572,18 @@ const char *tor_socket_strerror(int e);
 #else
 #define SOCK_ERRNO(e) e
 #if EAGAIN == EWOULDBLOCK
-#define ERRNO_IS_EAGAIN(e)           ((e) == EAGAIN)
+/* || 0 is for -Wparentheses-equality (-Wall?) appeasement under clang */
+#define ERRNO_IS_EAGAIN(e)           ((e) == EAGAIN || 0)
 #else
 #define ERRNO_IS_EAGAIN(e)           ((e) == EAGAIN || (e) == EWOULDBLOCK)
 #endif
-#define ERRNO_IS_EINPROGRESS(e)      ((e) == EINPROGRESS)
-#define ERRNO_IS_CONN_EINPROGRESS(e) ((e) == EINPROGRESS)
+#define ERRNO_IS_EINPROGRESS(e)      ((e) == EINPROGRESS || 0)
+#define ERRNO_IS_CONN_EINPROGRESS(e) ((e) == EINPROGRESS || 0)
 #define ERRNO_IS_ACCEPT_EAGAIN(e) \
   (ERRNO_IS_EAGAIN(e) || (e) == ECONNABORTED)
 #define ERRNO_IS_ACCEPT_RESOURCE_LIMIT(e) \
   ((e) == EMFILE || (e) == ENFILE || (e) == ENOBUFS || (e) == ENOMEM)
-#define ERRNO_IS_EADDRINUSE(e)       ((e) == EADDRINUSE)
+#define ERRNO_IS_EADDRINUSE(e)       (((e) == EADDRINUSE) || 0)
 #define tor_socket_errno(sock)       (errno)
 #define tor_socket_strerror(e)       strerror(e)
 #endif
