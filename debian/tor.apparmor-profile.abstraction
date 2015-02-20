@@ -24,3 +24,4 @@
   /usr/share/tor/** r,
 
   /usr/bin/obfsproxy PUx,
+  /usr/bin/obfs4proxy PUx,

@@ -1,8 +1,10 @@
 tor (0.2.6.3-alpha-1) experimental; urgency=medium
 
   * New upstream version.
+  * [intrigeri]
+    + apparmor policy: Allow execution of /usr/bin/obfs4proxy (closes: #777592).
 
- -- Peter Palfrader <weasel@debian.org>  Fri, 20 Feb 2015 11:04:24 +0100
+ -- Peter Palfrader <weasel@debian.org>  Fri, 20 Feb 2015 11:08:27 +0100
 
 tor (0.2.6.2-alpha-1) experimental; urgency=medium
 
