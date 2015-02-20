@@ -4,8 +4,13 @@ tor (0.2.6.3-alpha-1) experimental; urgency=medium
   * [intrigeri]
     + apparmor policy: Allow execution of /usr/bin/obfs4proxy (closes: #777592).
   * Run restorecon on /var/lib/tor /var/run/tor /var/log/tor in postinst (closes: #776352).
+  * Suggests cleanup:
+    + Stop suggesting xul-ext-torbutton, suggest torbrowser-launcher instead.
+    + Stop suggesting polipo (>= 1) | privoxy - those are no longer considered
+      good means to browser the web with Tor.
+    + Suggest obfs4proxy in addition to obfsproxy.
 
- -- Peter Palfrader <weasel@debian.org>  Fri, 20 Feb 2015 11:14:12 +0100
+ -- Peter Palfrader <weasel@debian.org>  Fri, 20 Feb 2015 11:34:40 +0100
 
 tor (0.2.6.2-alpha-1) experimental; urgency=medium
 
