@@ -39,18 +39,19 @@ for i in lib log; do
 	fi
 done
 
+which restorecon >/dev/null 2>&1 && restorecon /var/lib/tor
 chown debian-tor:debian-tor /var/lib/tor
 chmod 02700 /var/lib/tor
 
 if [ -e /var/run/tor ]; then
+	which restorecon >/dev/null 2>&1 && restorecon /var/run/tor
 	chown debian-tor:debian-tor /var/run/tor
 	chmod 02750 /var/run/tor
 fi
 
+which restorecon >/dev/null 2>&1 && restorecon /var/log/tor
 chown debian-tor:adm /var/log/tor
 chmod 02750 /var/log/tor
-
-which restorecon >/dev/null 2>&1 && restorecon /var/lib/tor /var/run/tor /var/log/tor
 
 
 move_away_keys=0
