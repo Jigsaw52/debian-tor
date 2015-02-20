@@ -1,4 +1,4 @@
-/* Copyright (c) 2007-2014, The Tor Project, Inc. */
+/* Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -1433,6 +1433,39 @@ format_bridge_stats_controller(time_t now)
                ipver_data ? ipver_data : "");
   tor_free(country_data);
   tor_free(ipver_data);
+  return out;
+}
+
+/** Return a newly allocated string holding our bridge usage stats by
+ * country in a format suitable for inclusion in our heartbeat
+ * message. Return NULL on failure.  */
+char *
+format_client_stats_heartbeat(time_t now)
+{
+  const int n_hours = 6;
+  char *out = NULL;
+  int n_clients = 0;
+  clientmap_entry_t **ent;
+  unsigned cutoff = (unsigned)( (now-n_hours*3600)/60 );
+
+  if (!start_of_bridge_stats_interval)
+    return NULL; /* Not initialized. */
+
+  /* count unique IPs */
+  HT_FOREACH(ent, clientmap, &client_history) {
+    /* only count directly connecting clients */
+    if ((*ent)->action != GEOIP_CLIENT_CONNECT)
+      continue;
+    if ((*ent)->last_seen_in_minutes < cutoff)
+      continue;
+    n_clients++;
+  }
+
+  tor_asprintf(&out, "Heartbeat: "
+               "In the last %d hours, I have seen %d unique clients.",
+               n_hours,
+               n_clients);
+
   return out;
 }
 

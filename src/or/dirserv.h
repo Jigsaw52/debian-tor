@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2014, The Tor Project, Inc. */
+ * Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -104,6 +104,8 @@ void dirserv_free_all(void);
 void cached_dir_decref(cached_dir_t *d);
 cached_dir_t *new_cached_dir(char *s, time_t published);
 
+int validate_recommended_package_line(const char *line);
+
 #ifdef DIRSERV_PRIVATE
 
 /* Put the MAX_MEASUREMENT_AGE #define here so unit tests can see it */
@@ -123,10 +125,17 @@ STATIC int dirserv_query_measured_bw_cache_kb(const char *node_id,
                                               long *bw_out,
                                               time_t *as_of_out);
 STATIC int dirserv_has_measured_bw(const char *node_id);
+
+STATIC int
+dirserv_read_guardfraction_file_from_str(const char *guardfraction_file_str,
+                                      smartlist_t *vote_routerstatuses);
 #endif
 
 int dirserv_read_measured_bandwidths(const char *from_file,
                                      smartlist_t *routerstatuses);
+
+int dirserv_read_guardfraction_file(const char *fname,
+                                 smartlist_t *vote_routerstatuses);
 
 #endif
 

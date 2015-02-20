@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2014, The Tor Project, Inc. */
+ * Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -213,8 +213,7 @@ typedef enum {
 #define CONN_TYPE_DIR_LISTENER 8
 /** Type for HTTP connections to the directory server. */
 #define CONN_TYPE_DIR 9
-/** Connection from the main process to a CPU worker process. */
-#define CONN_TYPE_CPUWORKER 10
+/* Type 10 is unused. */
 /** Type for listening for connections from user interface process. */
 #define CONN_TYPE_CONTROL_LISTENER 11
 /** Type for connections from user interface process. */
@@ -275,17 +274,6 @@ typedef enum {
 
 /** State for any listener connection. */
 #define LISTENER_STATE_READY 0
-
-#define CPUWORKER_STATE_MIN_ 1
-/** State for a connection to a cpuworker process that's idle. */
-#define CPUWORKER_STATE_IDLE 1
-/** State for a connection to a cpuworker process that's processing a
- * handshake. */
-#define CPUWORKER_STATE_BUSY_ONION 2
-#define CPUWORKER_STATE_MAX_ 2
-
-#define CPUWORKER_TASK_ONION CPUWORKER_STATE_BUSY_ONION
-#define CPUWORKER_TASK_SHUTDOWN 255
 
 #define OR_CONN_STATE_MIN_ 1
 /** State for a connection to an OR: waiting for connect() to finish. */
@@ -1143,6 +1131,51 @@ typedef struct socks_request_t socks_request_t;
 #define generic_buffer_t buf_t
 #endif
 
+typedef struct entry_port_cfg_t {
+  /* Client port types (socks, dns, trans, natd) only: */
+  uint8_t isolation_flags; /**< Zero or more isolation flags */
+  int session_group; /**< A session group, or -1 if this port is not in a
+                      * session group. */
+
+  /* Socks only: */
+  /** When both no-auth and user/pass are advertised by a SOCKS client, select
+   * no-auth. */
+  unsigned int socks_prefer_no_auth : 1;
+
+  /* Client port types only: */
+  unsigned int ipv4_traffic : 1;
+  unsigned int ipv6_traffic : 1;
+  unsigned int prefer_ipv6 : 1;
+
+  /** For a socks listener: should we cache IPv4/IPv6 DNS information that
+   * exit nodes tell us?
+   *
+   * @{ */
+  unsigned int cache_ipv4_answers : 1;
+  unsigned int cache_ipv6_answers : 1;
+  /** @} */
+  /** For a socks listeners: if we find an answer in our client-side DNS cache,
+   * should we use it?
+   *
+   * @{ */
+  unsigned int use_cached_ipv4_answers : 1;
+  unsigned int use_cached_ipv6_answers : 1;
+  /** @} */
+  /** For socks listeners: When we can automap an address to IPv4 or IPv6,
+   * do we prefer IPv6? */
+  unsigned int prefer_ipv6_virtaddr : 1;
+
+} entry_port_cfg_t;
+
+typedef struct server_port_cfg_t {
+  /* Server port types (or, dir) only: */
+  unsigned int no_advertise : 1;
+  unsigned int no_listen : 1;
+  unsigned int all_addrs : 1;
+  unsigned int bind_ipv4_only : 1;
+  unsigned int bind_ipv6_only : 1;
+} server_port_cfg_t;
+
 /* Values for connection_t.magic: used to make sure that downcasts (casts from
 * connection_t to foo_connection_t) are safe. */
 #define BASE_CONNECTION_MAGIC 0x7C3C304Eu
@@ -1278,52 +1311,7 @@ typedef struct listener_connection_t {
    * to the evdns_server_port it uses to listen to and answer connections. */
   struct evdns_server_port *dns_server_port;
 
-  /** @name Isolation parameters
-   *
-   * For an AP listener, these fields describe how to isolate streams that
-   * arrive on the listener.
-   *
-   * @{
-   */
-  /** The session group for this listener. */
-  int session_group;
-  /** One or more ISO_ flags to describe how to isolate streams. */
-  uint8_t isolation_flags;
-  /**@}*/
-  /** For SOCKS connections only: If this is set, we will choose "no
-   * authentication" instead of "username/password" authentication if both
-   * are offered. Used as input to parse_socks. */
-  unsigned int socks_prefer_no_auth : 1;
-
-  /** For a SOCKS listeners, these fields describe whether we should
-   * allow IPv4 and IPv6 addresses from our exit nodes, respectively.
-   *
-   * @{
-   */
-  unsigned int socks_ipv4_traffic : 1;
-  unsigned int socks_ipv6_traffic : 1;
-  /** @} */
-  /** For a socks listener: should we tell the exit that we prefer IPv6
-   * addresses? */
-  unsigned int socks_prefer_ipv6 : 1;
-
-  /** For a socks listener: should we cache IPv4/IPv6 DNS information that
-   * exit nodes tell us?
-   *
-   * @{ */
-  unsigned int cache_ipv4_answers : 1;
-  unsigned int cache_ipv6_answers : 1;
-  /** @} */
-  /** For a socks listeners: if we find an answer in our client-side DNS cache,
-   * should we use it?
-   *
-   * @{ */
-  unsigned int use_cached_ipv4_answers : 1;
-  unsigned int use_cached_ipv6_answers : 1;
-  /** @} */
-  /** For socks listeners: When we can automap an address to IPv4 or IPv6,
-   * do we prefer IPv6? */
-  unsigned int prefer_ipv6_virtaddr : 1;
+  entry_port_cfg_t entry_cfg;
 
 } listener_connection_t;
 
@@ -1611,12 +1599,10 @@ typedef struct entry_connection_t {
                                    * only.) */
 
   /* === Isolation related, AP only. === */
-  /** AP only: based on which factors do we isolate this stream? */
-  uint8_t isolation_flags;
-  /** AP only: what session group is this stream in? */
-  int session_group;
+  entry_port_cfg_t entry_cfg;
   /** AP only: The newnym epoch in which we created this connection. */
   unsigned nym_epoch;
+
   /** AP only: The original requested address before we rewrote it. */
   char *original_dest_address;
   /* Other fields to isolate on already exist.  The ClientAddr is addr.  The
@@ -1675,33 +1661,8 @@ typedef struct entry_connection_t {
    */
   unsigned int may_use_optimistic_data : 1;
 
-  /** Should we permit IPv4 and IPv6 traffic to use this connection?
-   *
-   * @{ */
-  unsigned int ipv4_traffic_ok : 1;
-  unsigned int ipv6_traffic_ok : 1;
-  /** @} */
-  /** Should we say we prefer IPv6 traffic? */
-  unsigned int prefer_ipv6_traffic : 1;
-
-  /** For a socks listener: should we cache IPv4/IPv6 DNS information that
-   * exit nodes tell us?
-   *
-   * @{ */
-  unsigned int cache_ipv4_answers : 1;
-  unsigned int cache_ipv6_answers : 1;
-  /** @} */
-  /** For a socks listeners: if we find an answer in our client-side DNS cache,
-   * should we use it?
-   *
-   * @{ */
-  unsigned int use_cached_ipv4_answers : 1;
-  unsigned int use_cached_ipv6_answers : 1;
-  /** @} */
-  /** For socks listeners: When we can automap an address to IPv4 or IPv6,
-   * do we prefer IPv6? */
-  unsigned int prefer_ipv6_virtaddr : 1;
-
+  /** Are we a socks SocksSocket listener? */
+  unsigned int is_socks_socket:1;
 } entry_connection_t;
 
 typedef enum {
@@ -2184,6 +2145,12 @@ typedef struct routerstatus_t {
 
   uint32_t bandwidth_kb; /**< Bandwidth (capacity) of the router as reported in
                        * the vote/consensus, in kilobytes/sec. */
+
+  /** The consensus has guardfraction information for this router. */
+  unsigned int has_guardfraction:1;
+  /** The guardfraction value of this router. */
+  uint32_t guardfraction_percentage;
+
   char *exitsummary; /**< exit policy summary -
                       * XXX weasel: this probably should not stay a string. */
 
@@ -2455,6 +2422,9 @@ typedef struct networkstatus_t {
   int consensus_method;
   /** Vote only: what methods is this voter willing to use? */
   smartlist_t *supported_methods;
+
+  /** List of 'package' lines describing hashes of downloadable packages */
+  smartlist_t *package_lines;
 
   /** How long does this vote/consensus claim that authorities take to
    * distribute their votes to one another? */
@@ -2734,8 +2704,14 @@ typedef struct {
   time_t expiry_time;
 } cpath_build_state_t;
 
+/** "magic" value for an origin_circuit_t */
 #define ORIGIN_CIRCUIT_MAGIC 0x35315243u
+/** "magic" value for an or_circuit_t */
 #define OR_CIRCUIT_MAGIC 0x98ABC04Fu
+/** "magic" value for a circuit that would have been freed by circuit_free,
+ * but which we're keeping around until a cpuworker reply arrives.  See
+ * circuit_free() for more documentation. */
+#define DEAD_CIRCUIT_MAGIC 0xdeadc14c
 
 struct create_cell_t;
 
@@ -3155,6 +3131,10 @@ typedef struct or_circuit_t {
   /** Pointer to an entry on the onion queue, if this circuit is waiting for a
    * chance to give an onionskin to a cpuworker. Used only in onion.c */
   struct onion_queue_t *onionqueue_entry;
+  /** Pointer to a workqueue entry, if this circuit has given an onionskin to
+   * a cpuworker and is waiting for a response. Used to decide whether it is
+   * safe to free a circuit or if it is still in use by a cpuworker. */
+  struct workqueue_entry_s *workqueue_entry;
 
   /** The circuit_id used in the previous (backward) hop of this circuit. */
   circid_t p_circ_id;
@@ -3342,44 +3322,9 @@ typedef struct port_cfg_t {
   uint8_t type; /**< One of CONN_TYPE_*_LISTENER */
   unsigned is_unix_addr : 1; /**< True iff this is an AF_UNIX address. */
 
-  /* Client port types (socks, dns, trans, natd) only: */
-  uint8_t isolation_flags; /**< Zero or more isolation flags */
-  int session_group; /**< A session group, or -1 if this port is not in a
-                      * session group. */
-  /* Socks only: */
-  /** When both no-auth and user/pass are advertised by a SOCKS client, select
-   * no-auth. */
-  unsigned int socks_prefer_no_auth : 1;
+  entry_port_cfg_t entry_cfg;
 
-  /* Server port types (or, dir) only: */
-  unsigned int no_advertise : 1;
-  unsigned int no_listen : 1;
-  unsigned int all_addrs : 1;
-  unsigned int bind_ipv4_only : 1;
-  unsigned int bind_ipv6_only : 1;
-
-  /* Client port types only: */
-  unsigned int ipv4_traffic : 1;
-  unsigned int ipv6_traffic : 1;
-  unsigned int prefer_ipv6 : 1;
-
-  /** For a socks listener: should we cache IPv4/IPv6 DNS information that
-   * exit nodes tell us?
-   *
-   * @{ */
-  unsigned int cache_ipv4_answers : 1;
-  unsigned int cache_ipv6_answers : 1;
-  /** @} */
-  /** For a socks listeners: if we find an answer in our client-side DNS cache,
-   * should we use it?
-   *
-   * @{ */
-  unsigned int use_cached_ipv4_answers : 1;
-  unsigned int use_cached_ipv6_answers : 1;
-  /** @} */
-  /** For socks listeners: When we can automap an address to IPv4 or IPv6,
-   * do we prefer IPv6? */
-  unsigned int prefer_ipv6_virtaddr : 1;
+  server_port_cfg_t server_cfg;
 
   /* Unix sockets only: */
   /** Path for an AF_UNIX address */
@@ -3498,6 +3443,7 @@ typedef struct {
   config_line_t *RecommendedVersions;
   config_line_t *RecommendedClientVersions;
   config_line_t *RecommendedServerVersions;
+  config_line_t *RecommendedPackages;
   /** Whether dirservers allow router descriptors with private IPs. */
   int DirAllowPrivateAddresses;
   /** Whether routers accept EXTEND cells to routers with private IPs. */
@@ -3528,6 +3474,7 @@ typedef struct {
                                  * for control connections. */
 
   int ControlSocketsGroupWritable; /**< Boolean: Are control sockets g+rw? */
+  int SocksSocketsGroupWritable; /**< Boolean: Are SOCKS sockets g+rw? */
   /** Ports to listen on for directory connections. */
   config_line_t *DirPort_lines;
   config_line_t *DNSPort_lines; /**< Ports to listen on for DNS requests. */
@@ -3537,6 +3484,8 @@ typedef struct {
   uint64_t MaxMemInQueues_raw;
   uint64_t MaxMemInQueues;/**< If we have more memory than this allocated
                             * for queues and buffers, run the OOM handler */
+  /** Above this value, consider ourselves low on RAM. */
+  uint64_t MaxMemInQueues_low_threshold;
 
   /** @name port booleans
    *
@@ -3624,6 +3573,9 @@ typedef struct {
    * circuits.) */
   int Tor2webMode;
 
+  /** A routerset that should be used when picking RPs for HS circuits. */
+  routerset_t *Tor2webRendezvousPoints;
+
   /** Close hidden service client circuits immediately when they reach
    * the normal circuit-build timeout, even if they have already sent
    * an INTRODUCE1 cell on its way to the service. */
@@ -3673,8 +3625,9 @@ typedef struct {
                               * hostname ending with one of the suffixes in
                               * <b>AutomapHostsSuffixes</b>, map it to a
                               * virtual address. */
-  smartlist_t *AutomapHostsSuffixes; /**< List of suffixes for
-                                      * <b>AutomapHostsOnResolve</b>. */
+  /** List of suffixes for <b>AutomapHostsOnResolve</b>.  The special value
+   * "." means "match everything." */
+  smartlist_t *AutomapHostsSuffixes;
   int RendPostPeriod; /**< How often do we post each rendezvous service
                        * descriptor? Remember to publish them independently. */
   int KeepalivePeriod; /**< How often do we send padding cells to keep
@@ -3869,6 +3822,12 @@ typedef struct {
   int NumEntryGuards; /**< How many entry guards do we try to establish? */
   int UseEntryGuardsAsDirGuards; /** Boolean: Do we try to get directory info
                                   * from a smallish number of fixed nodes? */
+
+  /** If 1, we use any guardfraction information we see in the
+   * consensus.  If 0, we don't.  If -1, let the consensus parameter
+   * decide. */
+  int UseGuardFraction;
+
   int NumDirectoryGuards; /**< How many dir guards do we try to establish?
                            * If 0, use value from NumEntryGuards. */
   int RephistTrackTime; /**< How many seconds do we keep rephist info? */
@@ -4004,6 +3963,9 @@ typedef struct {
   /** Location of bandwidth measurement file */
   char *V3BandwidthsFile;
 
+  /** Location of guardfraction file */
+  char *GuardfractionFile;
+
   /** Authority only: key=value pairs that we add to our networkstatus
    * consensus vote on the 'params' line. */
   char *ConsensusParams;
@@ -4101,6 +4063,11 @@ typedef struct {
   /** Relays in a testing network which should be voted Guard
    * regardless of uptime and bandwidth. */
   routerset_t *TestingDirAuthVoteGuard;
+
+  /** Relays in a testing network which should be voted HSDir
+   * regardless of uptime and ORPort connectivity.
+   * Respects VoteOnHidServDirectoriesV2. */
+  routerset_t *TestingDirAuthVoteHSDir;
 
   /** Enable CONN_BW events.  Only altered on testing networks. */
   int TestingEnableConnBwEvent;
@@ -4268,6 +4235,14 @@ typedef struct {
    * when sending.
    */
   int SchedulerMaxFlushCells__;
+
+  /** Is this an exit node?  This is a tristate, where "1" means "yes, and use
+   * the default exit policy if none is given" and "0" means "no; exit policy
+   * is 'reject *'" and "auto" (-1) means "same as 1, but warn the user."
+   *
+   * XXXX Eventually, the default will be 0. */
+  int ExitRelay;
+
 } or_options_t;
 
 /** Persistent state for an onion router, as saved to disk. */
@@ -4938,7 +4913,8 @@ typedef struct rend_service_descriptor_t {
 /** A cached rendezvous descriptor. */
 typedef struct rend_cache_entry_t {
   size_t len; /**< Length of <b>desc</b> */
-  time_t received; /**< When was the descriptor received? */
+  time_t last_served; /**< When did we last write this one to somebody?
+                       * (HSDir only) */
   char *desc; /**< Service descriptor */
   rend_service_descriptor_t *parsed; /**< Parsed value of 'desc' */
 } rend_cache_entry_t;
@@ -4980,7 +4956,8 @@ typedef struct dir_server_t {
                                **/
 } dir_server_t;
 
-#define ROUTER_REQUIRED_MIN_BANDWIDTH (20*1024)
+#define RELAY_REQUIRED_MIN_BANDWIDTH (75*1024)
+#define BRIDGE_REQUIRED_MIN_BANDWIDTH (50*1024)
 
 #define ROUTER_MAX_DECLARED_BANDWIDTH INT32_MAX
 
@@ -5004,14 +4981,13 @@ typedef struct dir_server_t {
  * or extrainfo documents.
  *
  * Passed to router_pick_directory_server (et al)
- *
- * [XXXX NOTE: This option is only implemented for pick_trusteddirserver,
- *  not pick_directory_server.  If we make it work on pick_directory_server
- *  too, we could conservatively make it only prevent multiple fetches to
- *  the same authority, or we could aggressively make it prevent multiple
- *  fetches to _any_ single directory server.]
  */
 #define PDS_NO_EXISTING_SERVERDESC_FETCH (1<<3)
+/** Flag to indicate that we should not use any directory authority to which
+ * we have an existing directory connection for downloading microdescs.
+ *
+ * Passed to router_pick_directory_server (et al)
+ */
 #define PDS_NO_EXISTING_MICRODESC_FETCH (1<<4)
 
 /** This node is to be chosen as a directory guard, so don't choose any

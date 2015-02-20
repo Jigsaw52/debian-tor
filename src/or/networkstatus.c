@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2014, The Tor Project, Inc. */
+ * Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -256,6 +256,10 @@ networkstatus_vote_free(networkstatus_t *ns)
   if (ns->supported_methods) {
     SMARTLIST_FOREACH(ns->supported_methods, char *, c, tor_free(c));
     smartlist_free(ns->supported_methods);
+  }
+  if (ns->package_lines) {
+    SMARTLIST_FOREACH(ns->package_lines, char *, c, tor_free(c));
+    smartlist_free(ns->package_lines);
   }
   if (ns->voters) {
     SMARTLIST_FOREACH_BEGIN(ns->voters, networkstatus_voter_info_t *, voter) {
@@ -876,7 +880,8 @@ update_consensus_networkstatus_fetch_time_impl(time_t now, int flav)
     log_debug(LD_DIR,
               "fresh_until: %ld start: %ld "
               "dl_interval: %ld valid_until: %ld ",
-              c->fresh_until, start, dl_interval, c->valid_until);
+              (long)c->fresh_until, (long)start, dl_interval,
+              (long)c->valid_until);
     /* We must not try to replace c while it's still fresh: */
     tor_assert(c->fresh_until < start);
     /* We must download the next one before c is invalid: */
@@ -1907,6 +1912,33 @@ getinfo_helper_networkstatus(control_connection_t *conn,
     status = router_get_consensus_status_by_nickname(question+8, 0);
   } else if (!strcmpstart(question, "ns/purpose/")) {
     *answer = networkstatus_getinfo_by_purpose(question+11, time(NULL));
+    return *answer ? 0 : -1;
+  } else if (!strcmp(question, "consensus/packages")) {
+    const networkstatus_t *ns = networkstatus_get_latest_consensus();
+    if (ns && ns->package_lines)
+      *answer = smartlist_join_strings(ns->package_lines, "\n", 0, NULL);
+    else
+      *errmsg = "No consensus available";
+    return *answer ? 0 : -1;
+  } else if (!strcmp(question, "consensus/valid-after") ||
+             !strcmp(question, "consensus/fresh-until") ||
+             !strcmp(question, "consensus/valid-until")) {
+    const networkstatus_t *ns = networkstatus_get_latest_consensus();
+    if (ns) {
+      time_t t;
+      if (!strcmp(question, "consensus/valid-after"))
+        t = ns->valid_after;
+      else if (!strcmp(question, "consensus/fresh-until"))
+        t = ns->fresh_until;
+      else
+        t = ns->valid_until;
+
+      char tbuf[ISO_TIME_LEN+1];
+      format_iso_time(tbuf, t);
+      *answer = tor_strdup(tbuf);
+    } else {
+      *errmsg = "No consensus available";
+    }
     return *answer ? 0 : -1;
   } else {
     return 0;

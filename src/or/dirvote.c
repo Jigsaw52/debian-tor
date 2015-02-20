@@ -1,6 +1,6 @@
 /* Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2014, The Tor Project, Inc. */
+ * Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #define DIRVOTE_PRIVATE
@@ -16,6 +16,7 @@
 #include "router.h"
 #include "routerlist.h"
 #include "routerparse.h"
+#include "entrynodes.h" /* needed for guardfraction methods */
 
 /**
  * \file dirvote.c
@@ -66,6 +67,7 @@ format_networkstatus_vote(crypto_pk_t *private_signing_key,
 {
   smartlist_t *chunks = smartlist_new();
   const char *client_versions = NULL, *server_versions = NULL;
+  char *packages = NULL;
   char fingerprint[FINGERPRINT_LEN+1];
   char digest[DIGEST_LEN];
   uint32_t addr;
@@ -96,6 +98,18 @@ format_networkstatus_vote(crypto_pk_t *private_signing_key,
                  server_versions);
   } else {
     server_versions_line = tor_strdup("");
+  }
+
+  if (v3_ns->package_lines) {
+    smartlist_t *tmp = smartlist_new();
+    SMARTLIST_FOREACH(v3_ns->package_lines, const char *, p,
+                      if (validate_recommended_package_line(p))
+                        smartlist_add_asprintf(tmp, "package %s\n", p));
+    packages = smartlist_join_strings(tmp, "", 0, NULL);
+    SMARTLIST_FOREACH(tmp, char *, cp, tor_free(cp));
+    smartlist_free(tmp);
+  } else {
+    packages = tor_strdup("");
   }
 
   {
@@ -132,6 +146,7 @@ format_networkstatus_vote(crypto_pk_t *private_signing_key,
                  "valid-until %s\n"
                  "voting-delay %d %d\n"
                  "%s%s" /* versions */
+                 "%s" /* packages */
                  "known-flags %s\n"
                  "flag-thresholds %s\n"
                  "params %s\n"
@@ -143,6 +158,7 @@ format_networkstatus_vote(crypto_pk_t *private_signing_key,
                  v3_ns->vote_seconds, v3_ns->dist_seconds,
                  client_versions_line,
                  server_versions_line,
+                 packages,
                  flags,
                  flag_thresholds,
                  params,
@@ -230,6 +246,7 @@ format_networkstatus_vote(crypto_pk_t *private_signing_key,
  done:
   tor_free(client_versions_line);
   tor_free(server_versions_line);
+  tor_free(packages);
 
   SMARTLIST_FOREACH(chunks, char *, cp, tor_free(cp));
   smartlist_free(chunks);
@@ -1007,6 +1024,88 @@ networkstatus_compute_bw_weights_v10(smartlist_t *chunks, int64_t G,
   return 1;
 }
 
+/** Update total bandwidth weights (G/M/E/D/T) with the bandwidth of
+ *  the router in <b>rs</b>. */
+static void
+update_total_bandwidth_weights(const routerstatus_t *rs,
+                               int is_exit, int is_guard,
+                               int64_t *G, int64_t *M, int64_t *E, int64_t *D,
+                               int64_t *T)
+{
+  int default_bandwidth = rs->bandwidth_kb;
+  int guardfraction_bandwidth = 0;
+
+  if (!rs->has_bandwidth) {
+    log_info(LD_BUG, "Missing consensus bandwidth for router %s",
+             rs->nickname);
+    return;
+  }
+
+  /* If this routerstatus represents a guard that we have
+   * guardfraction information on, use it to calculate its actual
+   * bandwidth. From proposal236:
+   *
+   *    Similarly, when calculating the bandwidth-weights line as in
+   *    section 3.8.3 of dir-spec.txt, directory authorities should treat N
+   *    as if fraction F of its bandwidth has the guard flag and (1-F) does
+   *    not.  So when computing the totals G,M,E,D, each relay N with guard
+   *    visibility fraction F and bandwidth B should be added as follows:
+   *
+   *    G' = G + F*B, if N does not have the exit flag
+   *    M' = M + (1-F)*B, if N does not have the exit flag
+   *
+   *    or
+   *
+   *    D' = D + F*B, if N has the exit flag
+   *    E' = E + (1-F)*B, if N has the exit flag
+   *
+   * In this block of code, we prepare the bandwidth values by setting
+   * the default_bandwidth to F*B and guardfraction_bandwidth to (1-F)*B.
+   */
+  if (rs->has_guardfraction) {
+    guardfraction_bandwidth_t guardfraction_bw;
+
+    tor_assert(is_guard);
+
+    guard_get_guardfraction_bandwidth(&guardfraction_bw,
+                                      rs->bandwidth_kb,
+                                      rs->guardfraction_percentage);
+
+    default_bandwidth = guardfraction_bw.guard_bw;
+    guardfraction_bandwidth = guardfraction_bw.non_guard_bw;
+  }
+
+  /* Now calculate the total bandwidth weights with or without
+   * guardfraction. Depending on the flags of the relay, add its
+   * bandwidth to the appropriate weight pool. If it's a guard and
+   * guardfraction is enabled, add its bandwidth to both pools as
+   * indicated by the previous comment.
+   */
+  *T += default_bandwidth;
+  if (is_exit && is_guard) {
+
+    *D += default_bandwidth;
+    if (rs->has_guardfraction) {
+      *E += guardfraction_bandwidth;
+    }
+
+  } else if (is_exit) {
+
+    *E += default_bandwidth;
+
+  } else if (is_guard) {
+
+    *G += default_bandwidth;
+    if (rs->has_guardfraction) {
+      *M += guardfraction_bandwidth;
+    }
+
+  } else {
+
+    *M += default_bandwidth;
+  }
+}
+
 /** Given a list of vote networkstatus_t in <b>votes</b>, our public
  * authority <b>identity_key</b>, our private authority <b>signing_key</b>,
  * and the number of <b>total_authorities</b> that we believe exist in our
@@ -1037,6 +1136,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
   const routerstatus_format_type_t rs_format =
     flavor == FLAV_NS ? NS_V3_CONSENSUS : NS_V3_CONSENSUS_MICRODESC;
   char *params = NULL;
+  char *packages = NULL;
   int added_weights = 0;
   tor_assert(flavor == FLAV_NS || flavor == FLAV_MICRODESC);
   tor_assert(total_authorities >= smartlist_len(votes));
@@ -1120,6 +1220,11 @@ networkstatus_compute_consensus(smartlist_t *votes,
                                                       n_versioning_servers);
     client_versions = compute_consensus_versions_list(combined_client_versions,
                                                       n_versioning_clients);
+    if (consensus_method >= MIN_METHOD_FOR_PACKAGE_LINES) {
+      packages = compute_consensus_package_lines(votes);
+    } else {
+      packages = tor_strdup("");
+    }
 
     SMARTLIST_FOREACH(combined_server_versions, char *, cp, tor_free(cp));
     SMARTLIST_FOREACH(combined_client_versions, char *, cp, tor_free(cp));
@@ -1162,10 +1267,13 @@ networkstatus_compute_consensus(smartlist_t *votes,
                  "voting-delay %d %d\n"
                  "client-versions %s\n"
                  "server-versions %s\n"
+                 "%s" /* packages */
                  "known-flags %s\n",
                  va_buf, fu_buf, vu_buf,
                  vote_seconds, dist_seconds,
-                 client_versions, server_versions, flaglist);
+                 client_versions, server_versions,
+                 packages,
+                 flaglist);
 
     tor_free(flaglist);
   }
@@ -1266,8 +1374,11 @@ networkstatus_compute_consensus(smartlist_t *votes,
                                          sizeof(uint32_t));
     uint32_t *measured_bws_kb = tor_calloc(smartlist_len(votes),
                                            sizeof(uint32_t));
+    uint32_t *measured_guardfraction = tor_calloc(smartlist_len(votes),
+                                                  sizeof(uint32_t));
     int num_bandwidths;
     int num_mbws;
+    int num_guardfraction_inputs;
 
     int *n_voter_flags; /* n_voter_flags[j] is the number of flags that
                          * votes[j] knows about. */
@@ -1376,7 +1487,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
 
     /* We need to know how many votes measure bandwidth. */
     n_authorities_measuring_bandwidth = 0;
-    SMARTLIST_FOREACH(votes, networkstatus_t *, v,
+    SMARTLIST_FOREACH(votes, const networkstatus_t *, v,
        if (v->has_measured_bws) {
          ++n_authorities_measuring_bandwidth;
        }
@@ -1418,6 +1529,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
       smartlist_clear(versions);
       num_bandwidths = 0;
       num_mbws = 0;
+      num_guardfraction_inputs = 0;
 
       /* Okay, go through all the entries for this digest. */
       SMARTLIST_FOREACH_BEGIN(votes, networkstatus_t *, v) {
@@ -1449,6 +1561,12 @@ networkstatus_compute_consensus(smartlist_t *votes,
             naming_conflict = 1;
           }
           chosen_name = rs->status.nickname;
+        }
+
+        /* Count guardfraction votes and note down the values. */
+        if (rs->status.has_guardfraction) {
+          measured_guardfraction[num_guardfraction_inputs++] =
+            rs->status.guardfraction_percentage;
         }
 
         /* count bandwidths */
@@ -1540,6 +1658,17 @@ networkstatus_compute_consensus(smartlist_t *votes,
         chosen_version = NULL;
       }
 
+      /* If it's a guard and we have enough guardfraction votes,
+         calculate its consensus guardfraction value. */
+      if (is_guard && num_guardfraction_inputs > 2 &&
+          consensus_method >= MIN_METHOD_FOR_GUARDFRACTION) {
+        rs_out.has_guardfraction = 1;
+        rs_out.guardfraction_percentage = median_uint32(measured_guardfraction,
+                                                     num_guardfraction_inputs);
+        /* final value should be an integer percentage! */
+        tor_assert(rs_out.guardfraction_percentage <= 100);
+      }
+
       /* Pick a bandwidth */
       if (num_mbws > 2) {
         rs_out.has_bandwidth = 1;
@@ -1561,21 +1690,11 @@ networkstatus_compute_consensus(smartlist_t *votes,
       /* Fix bug 2203: Do not count BadExit nodes as Exits for bw weights */
       is_exit = is_exit && !is_bad_exit;
 
+      /* Update total bandwidth weights with the bandwidths of this router. */
       {
-        if (rs_out.has_bandwidth) {
-          T += rs_out.bandwidth_kb;
-          if (is_exit && is_guard)
-            D += rs_out.bandwidth_kb;
-          else if (is_exit)
-            E += rs_out.bandwidth_kb;
-          else if (is_guard)
-            G += rs_out.bandwidth_kb;
-          else
-            M += rs_out.bandwidth_kb;
-        } else {
-          log_warn(LD_BUG, "Missing consensus bandwidth for router %s",
-              rs_out.nickname);
-        }
+        update_total_bandwidth_weights(&rs_out,
+                                       is_exit, is_guard,
+                                       &G, &M, &E, &D, &T);
       }
 
       /* Ok, we already picked a descriptor digest we want to list
@@ -1694,11 +1813,21 @@ networkstatus_compute_consensus(smartlist_t *votes,
       smartlist_add(chunks, tor_strdup("\n"));
       /*     Now the weight line. */
       if (rs_out.has_bandwidth) {
+        char *guardfraction_str = NULL;
         int unmeasured = rs_out.bw_is_unmeasured &&
           consensus_method >= MIN_METHOD_TO_CLIP_UNMEASURED_BW;
-        smartlist_add_asprintf(chunks, "w Bandwidth=%d%s\n",
+
+        /* If we have guardfraction info, include it in the 'w' line. */
+        if (rs_out.has_guardfraction) {
+          tor_asprintf(&guardfraction_str,
+                       " GuardFraction=%u", rs_out.guardfraction_percentage);
+        }
+        smartlist_add_asprintf(chunks, "w Bandwidth=%d%s%s\n",
                                rs_out.bandwidth_kb,
-                               unmeasured?" Unmeasured=1":"");
+                               unmeasured?" Unmeasured=1":"",
+                               guardfraction_str ? guardfraction_str : "");
+
+        tor_free(guardfraction_str);
       }
 
       /*     Now the exitpolicy summary line. */
@@ -1726,6 +1855,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
     smartlist_free(exitsummaries);
     tor_free(bandwidths_kb);
     tor_free(measured_bws_kb);
+    tor_free(measured_guardfraction);
   }
 
   /* Mark the directory footer region */
@@ -1852,10 +1982,83 @@ networkstatus_compute_consensus(smartlist_t *votes,
 
   tor_free(client_versions);
   tor_free(server_versions);
+  tor_free(packages);
   SMARTLIST_FOREACH(flags, char *, cp, tor_free(cp));
   smartlist_free(flags);
   SMARTLIST_FOREACH(chunks, char *, cp, tor_free(cp));
   smartlist_free(chunks);
+
+  return result;
+}
+
+/** Given a list of networkstatus_t for each vote, return a newly allocated
+ * string containing the "package" lines for the vote. */
+STATIC char *
+compute_consensus_package_lines(smartlist_t *votes)
+{
+  const int n_votes = smartlist_len(votes);
+
+  /* This will be a map from "packagename version" strings to arrays
+   * of const char *, with the i'th member of the array corresponding to the
+   * package line from the i'th vote.
+   */
+  strmap_t *package_status = strmap_new();
+
+  SMARTLIST_FOREACH_BEGIN(votes, networkstatus_t *, v) {
+    if (! v->package_lines)
+      continue;
+    SMARTLIST_FOREACH_BEGIN(v->package_lines, const char *, line) {
+      if (! validate_recommended_package_line(line))
+        continue;
+
+      /* Skip 'cp' to the second space in the line. */
+      const char *cp = strchr(line, ' ');
+      if (!cp) continue;
+      ++cp;
+      cp = strchr(cp, ' ');
+      if (!cp) continue;
+
+      char *key = tor_strndup(line, cp - line);
+
+      const char **status = strmap_get(package_status, key);
+      if (!status) {
+        status = tor_calloc(n_votes, sizeof(const char *));
+        strmap_set(package_status, key, status);
+      }
+      status[v_sl_idx] = line; /* overwrite old value */
+      tor_free(key);
+    } SMARTLIST_FOREACH_END(line);
+  } SMARTLIST_FOREACH_END(v);
+
+  smartlist_t *entries = smartlist_new(); /* temporary */
+  smartlist_t *result_list = smartlist_new(); /* output */
+  STRMAP_FOREACH(package_status, key, const char **, values) {
+    int i, count=-1;
+    for (i = 0; i < n_votes; ++i) {
+      if (values[i])
+        smartlist_add(entries, (void*) values[i]);
+    }
+    smartlist_sort_strings(entries);
+    int n_voting_for_entry = smartlist_len(entries);
+    const char *most_frequent =
+      smartlist_get_most_frequent_string_(entries, &count);
+
+    if (n_voting_for_entry >= 3 && count > n_voting_for_entry / 2) {
+      smartlist_add_asprintf(result_list, "package %s\n", most_frequent);
+    }
+
+    smartlist_clear(entries);
+
+  } STRMAP_FOREACH_END;
+
+  smartlist_sort_strings(result_list);
+
+  char *result = smartlist_join_strings(result_list, "", 0, NULL);
+
+  SMARTLIST_FOREACH(result_list, char *, cp, tor_free(cp));
+  smartlist_free(result_list);
+  smartlist_free(entries);
+  strmap_free(package_status, tor_free_);
 
   return result;
 }

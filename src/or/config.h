@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2014, The Tor Project, Inc. */
+ * Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -113,6 +113,7 @@ int addressmap_register_auto(const char *from, const char *to,
                              time_t expires,
                              addressmap_entry_source_t addrmap_source,
                              const char **msg);
+int config_parse_unix_port(const char *addrport, char **path_out);
 
 /** Represents the information stored in a torrc Bridge line. */
 typedef struct bridge_line_t {

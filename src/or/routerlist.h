@@ -1,6 +1,6 @@
 /* Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2014, The Tor Project, Inc. */
+ * Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -58,6 +58,10 @@ const routerstatus_t *router_pick_fallback_dirserver(dirinfo_type_t type,
 int router_get_my_share_of_directory_requests(double *v3_share_out);
 void router_reset_status_download_failures(void);
 int routers_have_same_or_addrs(const routerinfo_t *r1, const routerinfo_t *r2);
+void router_add_running_nodes_to_smartlist(smartlist_t *sl, int allow_invalid,
+                                           int need_uptime, int need_capacity,
+                                           int need_guard, int need_desc);
+
 const routerinfo_t *routerlist_find_my_routerinfo(void);
 uint32_t router_get_advertised_bandwidth(const routerinfo_t *router);
 uint32_t router_get_advertised_bandwidth_capped(const routerinfo_t *router);
@@ -227,7 +231,11 @@ STATIC void scale_array_elements_to_u64(u64_dbl_t *entries, int n_entries,
 MOCK_DECL(int, router_descriptor_is_older_than, (const routerinfo_t *router,
                                                  int seconds));
 MOCK_DECL(STATIC was_router_added_t, extrainfo_insert,
-          (routerlist_t *rl, extrainfo_t *ei));
+          (routerlist_t *rl, extrainfo_t *ei, int warn_if_incompatible));
+
+MOCK_DECL(STATIC void, initiate_descriptor_downloads,
+          (const routerstatus_t *source, int purpose, smartlist_t *digests,
+           int lo, int hi, int pds_flags));
 
 #endif
 

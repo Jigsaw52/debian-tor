@@ -1,13 +1,15 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2014, The Tor Project, Inc. */
+ * Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
  * \file routerparse.c
  * \brief Code to parse and validate router descriptors and directories.
  **/
+
+#define ROUTERPARSE_PRIVATE
 
 #include "or.h"
 #include "config.h"
@@ -23,6 +25,7 @@
 #include "networkstatus.h"
 #include "rephist.h"
 #include "routerparse.h"
+#include "entrynodes.h"
 #undef log
 #include <math.h>
 
@@ -131,6 +134,7 @@ typedef enum {
   K_CONSENSUS_METHOD,
   K_LEGACY_DIR_KEY,
   K_DIRECTORY_FOOTER,
+  K_PACKAGE,
 
   A_PURPOSE,
   A_LAST_LISTED,
@@ -420,6 +424,7 @@ static token_rule_t networkstatus_token_table[] = {
   T1("known-flags",            K_KNOWN_FLAGS,      ARGS,        NO_OBJ ),
   T01("params",                K_PARAMS,           ARGS,        NO_OBJ ),
   T( "fingerprint",            K_FINGERPRINT,      CONCAT_ARGS, NO_OBJ ),
+  T0N("package",               K_PACKAGE,          CONCAT_ARGS, NO_OBJ ),
 
   CERTIFICATE_MEMBERS
 
@@ -1792,6 +1797,63 @@ find_start_of_next_routerstatus(const char *s)
     return eos;
 }
 
+/** Parse the GuardFraction string from a consensus or vote.
+ *
+ *  If <b>vote</b> or <b>vote_rs</b> are set the document getting
+ *  parsed is a vote routerstatus. Otherwise it's a consensus. This is
+ *  the same semantic as in routerstatus_parse_entry_from_string(). */
+STATIC int
+routerstatus_parse_guardfraction(const char *guardfraction_str,
+                                 networkstatus_t *vote,
+                                 vote_routerstatus_t *vote_rs,
+                                 routerstatus_t *rs)
+{
+  int ok;
+  const char *end_of_header = NULL;
+  int is_consensus = !vote_rs;
+  uint32_t guardfraction;
+
+  tor_assert(bool_eq(vote, vote_rs));
+
+  /* If this info comes from a consensus, but we should't apply
+     guardfraction, just exit. */
+  if (is_consensus && !should_apply_guardfraction(NULL)) {
+    return 0;
+  }
+
+  end_of_header = strchr(guardfraction_str, '=');
+  if (!end_of_header) {
+    return -1;
+  }
+
+  guardfraction = (uint32_t)tor_parse_ulong(end_of_header+1,
+                                            10, 0, 100, &ok, NULL);
+  if (!ok) {
+    log_warn(LD_DIR, "Invalid GuardFraction %s", escaped(guardfraction_str));
+    return -1;
+  }
+
+  log_debug(LD_GENERAL, "[*] Parsed %s guardfraction '%s' for '%s'.",
+            is_consensus ? "consensus" : "vote",
+            guardfraction_str, rs->nickname);
+
+  if (!is_consensus) { /* We are parsing a vote */
+    vote_rs->status.guardfraction_percentage = guardfraction;
+    vote_rs->status.has_guardfraction = 1;
+  } else {
+    /* We are parsing a consensus. Only apply guardfraction to guards. */
+    if (rs->is_possible_guard) {
+      rs->guardfraction_percentage = guardfraction;
+      rs->has_guardfraction = 1;
+    } else {
+      log_warn(LD_BUG, "Got GuardFraction for non-guard %s. "
+               "This is not supposed to happen. Not applying. ", rs->nickname);
+    }
+  }
+
+  return 0;
+}
+
 /** Given a string at *<b>s</b>, containing a routerstatus object, and an
  * empty smartlist at <b>tokens</b>, parse and return the first router status
  * object in the string, and advance *<b>s</b> to just after the end of the
@@ -1994,6 +2056,11 @@ routerstatus_parse_entry_from_string(memarea_t *area,
         vote->has_measured_bws = 1;
       } else if (!strcmpstart(tok->args[i], "Unmeasured=1")) {
         rs->bw_is_unmeasured = 1;
+      } else if (!strcmpstart(tok->args[i], "GuardFraction=")) {
+        if (routerstatus_parse_guardfraction(tok->args[i],
+                                             vote, vote_rs, rs) < 0) {
+          goto err;
+        }
       }
     }
   }
@@ -2624,6 +2691,16 @@ networkstatus_parse_vote_from_string(const char *s, const char **eos_out,
   }
   if ((tok = find_opt_by_keyword(tokens, K_SERVER_VERSIONS))) {
     ns->server_versions = tor_strdup(tok->args[0]);
+  }
+
+  {
+    smartlist_t *package_lst = find_all_by_keyword(tokens, K_PACKAGE);
+    ns->package_lines = smartlist_new();
+    if (package_lst) {
+      SMARTLIST_FOREACH(package_lst, directory_token_t *, t,
+                    smartlist_add(ns->package_lines, tor_strdup(t->args[0])));
+    }
+    smartlist_free(package_lst);
   }
 
   tok = find_by_keyword(tokens, K_KNOWN_FLAGS);
@@ -4250,40 +4327,50 @@ tor_version_parse(const char *s, tor_version_t *out)
   char *eos=NULL;
   const char *cp=NULL;
   /* Format is:
-   *   "Tor " ? NUM dot NUM dot NUM [ ( pre | rc | dot ) NUM [ - tag ] ]
+   *   "Tor " ? NUM dot NUM [ dot NUM [ ( pre | rc | dot ) NUM ] ] [ - tag ]
    */
   tor_assert(s);
   tor_assert(out);
 
   memset(out, 0, sizeof(tor_version_t));
-
+  out->status = VER_RELEASE;
   if (!strcasecmpstart(s, "Tor "))
     s += 4;
 
-  /* Get major. */
-  out->major = (int)strtol(s,&eos,10);
-  if (!eos || eos==s || *eos != '.') return -1;
-  cp = eos+1;
+  cp = s;
 
-  /* Get minor */
-  out->minor = (int) strtol(cp,&eos,10);
-  if (!eos || eos==cp || *eos != '.') return -1;
-  cp = eos+1;
+#define NUMBER(m)                               \
+  do {                                          \
+    out->m = (int)strtol(cp, &eos, 10);         \
+    if (!eos || eos == cp)                      \
+      return -1;                                \
+    cp = eos;                                   \
+  } while (0)
 
-  /* Get micro */
-  out->micro = (int) strtol(cp,&eos,10);
-  if (!eos || eos==cp) return -1;
-  if (!*eos) {
-    out->status = VER_RELEASE;
-    out->patchlevel = 0;
+#define DOT()                                   \
+  do {                                          \
+    if (*cp != '.')                             \
+      return -1;                                \
+    ++cp;                                       \
+  } while (0)
+
+  NUMBER(major);
+  DOT();
+  NUMBER(minor);
+  if (*cp == 0)
     return 0;
-  }
-  cp = eos;
+  else if (*cp == '-')
+    goto status_tag;
+  DOT();
+  NUMBER(micro);
 
   /* Get status */
-  if (*cp == '.') {
-    out->status = VER_RELEASE;
+  if (*cp == 0) {
+    return 0;
+  } else if (*cp == '.') {
     ++cp;
+  } else if (*cp == '-') {
+    goto status_tag;
   } else if (0==strncmp(cp, "pre", 3)) {
     out->status = VER_PRE;
     cp += 3;
@@ -4294,11 +4381,9 @@ tor_version_parse(const char *s, tor_version_t *out)
     return -1;
   }
 
-  /* Get patchlevel */
-  out->patchlevel = (int) strtol(cp,&eos,10);
-  if (!eos || eos==cp) return -1;
-  cp = eos;
+  NUMBER(patchlevel);
 
+ status_tag:
   /* Get status tag. */
   if (*cp == '-' || *cp == '.')
     ++cp;
@@ -4334,6 +4419,8 @@ tor_version_parse(const char *s, tor_version_t *out)
   }
 
   return 0;
+#undef NUMBER
+#undef DOT
 }
 
 /** Compare two tor versions; Return <0 if a < b; 0 if a ==b, >0 if a >
@@ -4421,6 +4508,9 @@ sort_version_list(smartlist_t *versions, int remove_duplicates)
  * to *<b>encoded_size_out</b>, and a pointer to the possibly next
  * descriptor to *<b>next_out</b>; return 0 for success (including validation)
  * and -1 for failure.
+ *
+ * If <b>as_hsdir</b> is 1, we're parsing this as an HSDir, and we should
+ * be strict about time formats.
  */
 int
 rend_parse_v2_service_descriptor(rend_service_descriptor_t **parsed_out,
@@ -4428,7 +4518,8 @@ rend_parse_v2_service_descriptor(rend_service_descriptor_t **parsed_out,
                                  char **intro_points_encrypted_out,
                                  size_t *intro_points_encrypted_size_out,
                                  size_t *encoded_size_out,
-                                 const char **next_out, const char *desc)
+                                 const char **next_out, const char *desc,
+                                 int as_hsdir)
 {
   rend_service_descriptor_t *result =
                             tor_malloc_zero(sizeof(rend_service_descriptor_t));
@@ -4442,6 +4533,8 @@ rend_parse_v2_service_descriptor(rend_service_descriptor_t **parsed_out,
   char public_key_hash[DIGEST_LEN];
   char test_desc_id[DIGEST_LEN];
   memarea_t *area = NULL;
+  const int strict_time_fmt = as_hsdir;
+
   tor_assert(desc);
   /* Check if desc starts correctly. */
   if (strncmp(desc, "rendezvous-service-descriptor ",
@@ -4536,7 +4629,7 @@ rend_parse_v2_service_descriptor(rend_service_descriptor_t **parsed_out,
    * descriptor. */
   tok = find_by_keyword(tokens, R_PUBLICATION_TIME);
   tor_assert(tok->n_args == 1);
-  if (parse_iso_time(tok->args[0], &result->timestamp) < 0) {
+  if (parse_iso_time_(tok->args[0], &result->timestamp, strict_time_fmt) < 0) {
     log_warn(LD_REND, "Invalid publication time: '%s'", tok->args[0]);
     goto err;
   }
