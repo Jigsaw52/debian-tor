@@ -50,6 +50,7 @@ fi
 chown debian-tor:adm /var/log/tor
 chmod 02750 /var/log/tor
 
+which restorecon >/dev/null 2>&1 && restorecon /var/lib/tor /var/run/tor /var/log/tor
 
 
 move_away_keys=0

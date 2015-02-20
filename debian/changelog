@@ -3,8 +3,9 @@ tor (0.2.6.3-alpha-1) experimental; urgency=medium
   * New upstream version.
   * [intrigeri]
     + apparmor policy: Allow execution of /usr/bin/obfs4proxy (closes: #777592).
+  * Run restorecon on /var/lib/tor /var/run/tor /var/log/tor in postinst (closes: #776352).
 
- -- Peter Palfrader <weasel@debian.org>  Fri, 20 Feb 2015 11:08:27 +0100
+ -- Peter Palfrader <weasel@debian.org>  Fri, 20 Feb 2015 11:14:12 +0100
 
 tor (0.2.6.2-alpha-1) experimental; urgency=medium
 
