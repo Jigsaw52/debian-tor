@@ -1,6 +1,6 @@
 /* Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2014, The Tor Project, Inc. */
+ * Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #define BUFFERS_PRIVATE
@@ -193,7 +193,6 @@ test_buffers_basic(void *arg)
     buf_free(buf);
   if (buf2)
     buf_free(buf2);
-  buf_shrink_freelists(1);
 }
 
 static void
@@ -297,12 +296,9 @@ test_buffer_pullup(void *arg)
   buf_free(buf);
   buf = NULL;
 
-  buf_shrink_freelists(1);
-
   tt_int_op(buf_get_total_allocation(), OP_EQ, 0);
  done:
   buf_free(buf);
-  buf_shrink_freelists(1);
   tor_free(stuff);
   tor_free(tmp);
 }
@@ -370,7 +366,6 @@ test_buffer_copy(void *arg)
     generic_buffer_free(buf);
   if (buf2)
     generic_buffer_free(buf2);
-  buf_shrink_freelists(1);
 }
 
 static void
@@ -445,7 +440,6 @@ test_buffer_ext_or_cmd(void *arg)
   ext_or_cmd_free(cmd);
   generic_buffer_free(buf);
   tor_free(tmp);
-  buf_shrink_freelists(1);
 }
 
 static void
@@ -481,20 +475,13 @@ test_buffer_allocation_tracking(void *arg)
   fetch_from_buf(junk, 4096, buf1); /* drop a 1k chunk... */
   tt_int_op(buf_allocation(buf1), OP_EQ, 3*4096); /* now 3 4k chunks */
 
-#ifdef ENABLE_BUF_FREELISTS
-  tt_int_op(buf_get_total_allocation(), OP_EQ, 16384); /* that chunk went onto
-                                                       the freelist. */
-#else
   tt_int_op(buf_get_total_allocation(), OP_EQ, 12288); /* that chunk was really
                                                        freed. */
-#endif
 
   write_to_buf(junk, 4000, buf2);
   tt_int_op(buf_allocation(buf2), OP_EQ, 4096); /* another 4k chunk. */
   /*
-   * If we're using freelists, size stays at 16384 because we just pulled a
-   * chunk from the freelist.  If we aren't, we bounce back up to 16384 by
-   * allocating a new chunk.
+   * We bounce back up to 16384 by allocating a new chunk.
    */
   tt_int_op(buf_get_total_allocation(), OP_EQ, 16384);
   write_to_buf(junk, 4000, buf2);
@@ -512,17 +499,14 @@ test_buffer_allocation_tracking(void *arg)
   buf2 = NULL;
 
   tt_int_op(buf_get_total_allocation(), OP_LT, 4008000);
-  buf_shrink_freelists(1);
   tt_int_op(buf_get_total_allocation(), OP_EQ, buf_allocation(buf1));
   buf_free(buf1);
   buf1 = NULL;
-  buf_shrink_freelists(1);
   tt_int_op(buf_get_total_allocation(), OP_EQ, 0);
 
  done:
   buf_free(buf1);
   buf_free(buf2);
-  buf_shrink_freelists(1);
   tor_free(junk);
 }
 
@@ -611,7 +595,7 @@ test_buffers_zlib_impl(int finalize_with_nil)
   int done;
 
   buf = buf_new_with_capacity(128); /* will round up */
-  zlib_state = tor_zlib_new(1, ZLIB_METHOD);
+  zlib_state = tor_zlib_new(1, ZLIB_METHOD, HIGH_COMPRESSION);
 
   msg = tor_malloc(512);
   crypto_rand(msg, 512);
@@ -688,7 +672,7 @@ test_buffers_zlib_fin_at_chunk_end(void *arg)
   tt_uint_op(buf->head->datalen, OP_EQ, headerjunk);
   tt_uint_op(buf_datalen(buf), OP_EQ, headerjunk);
   /* Write an empty string, with finalization on. */
-  zlib_state = tor_zlib_new(1, ZLIB_METHOD);
+  zlib_state = tor_zlib_new(1, ZLIB_METHOD, HIGH_COMPRESSION);
   tt_int_op(write_to_buf_zlib(buf, zlib_state, "", 0, 1), OP_EQ, 0);
 
   in_len = buf_datalen(buf);

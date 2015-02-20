@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2014, The Tor Project, Inc. */
+ * Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -55,7 +55,7 @@
 #define MIN_SUPPORTED_CONSENSUS_METHOD 13
 
 /** The highest consensus method that we currently support. */
-#define MAX_SUPPORTED_CONSENSUS_METHOD 18
+#define MAX_SUPPORTED_CONSENSUS_METHOD 20
 
 /** Lowest consensus method where microdesc consensuses omit any entry
  * with no microdesc. */
@@ -79,8 +79,16 @@
  * microdescriptors. */
 #define MIN_METHOD_FOR_ID_HASH_IN_MD 18
 
+/** Lowest consensus method where we include "package" lines*/
+#define MIN_METHOD_FOR_PACKAGE_LINES 19
+
+/** Lowest consensus method where authorities may include
+ * GuardFraction information in microdescriptors. */
+#define MIN_METHOD_FOR_GUARDFRACTION 20
+
 /** Default bandwidth to clip unmeasured bandwidths to using method >=
- * MIN_METHOD_TO_CLIP_UNMEASURED_BW */
+ * MIN_METHOD_TO_CLIP_UNMEASURED_BW.  (This is not a consensus method; do not
+ * get confused with the above macros.) */
 #define DEFAULT_MAX_UNMEASURED_BW_KB 20
 
 void dirvote_free_all(void);
@@ -160,6 +168,7 @@ STATIC char *format_networkstatus_vote(crypto_pk_t *private_key,
                                  networkstatus_t *v3_ns);
 STATIC char *dirvote_compute_params(smartlist_t *votes, int method,
                              int total_authorities);
+STATIC char *compute_consensus_package_lines(smartlist_t *votes);
 #endif
 
 #endif

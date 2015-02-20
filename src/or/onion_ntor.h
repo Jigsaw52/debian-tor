@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2014, The Tor Project, Inc. */
+/* Copyright (c) 2012-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #ifndef TOR_ONION_NTOR_H
@@ -36,7 +36,8 @@ int onion_skin_ntor_client_handshake(
                              const ntor_handshake_state_t *handshake_state,
                              const uint8_t *handshake_reply,
                              uint8_t *key_out,
-                             size_t key_out_len);
+                             size_t key_out_len,
+                             const char **msg_out);
 
 #ifdef ONION_NTOR_PRIVATE
 

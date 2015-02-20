@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2014, The Tor Project, Inc. */
+ * Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -804,8 +804,10 @@ connection_ap_process_end_not_open(
             return 0;
           }
 
-          if ((tor_addr_family(&addr) == AF_INET && !conn->ipv4_traffic_ok) ||
-              (tor_addr_family(&addr) == AF_INET6 && !conn->ipv6_traffic_ok)) {
+          if ((tor_addr_family(&addr) == AF_INET &&
+                                          !conn->entry_cfg.ipv4_traffic) ||
+              (tor_addr_family(&addr) == AF_INET6 &&
+                                          !conn->entry_cfg.ipv6_traffic)) {
             log_fn(LOG_PROTOCOL_WARN, LD_APP,
                    "Got an EXITPOLICY failure on a connection with a "
                    "mismatched family. Closing.");
@@ -1156,11 +1158,11 @@ connection_ap_handshake_socks_got_resolved_cell(entry_connection_t *conn,
         addr_hostname = addr;
       }
     } else if (tor_addr_family(&addr->addr) == AF_INET) {
-      if (!addr_ipv4 && conn->ipv4_traffic_ok) {
+      if (!addr_ipv4 && conn->entry_cfg.ipv4_traffic) {
         addr_ipv4 = addr;
       }
     } else if (tor_addr_family(&addr->addr) == AF_INET6) {
-      if (!addr_ipv6 && conn->ipv6_traffic_ok) {
+      if (!addr_ipv6 && conn->entry_cfg.ipv6_traffic) {
         addr_ipv6 = addr;
       }
     }
@@ -1181,7 +1183,7 @@ connection_ap_handshake_socks_got_resolved_cell(entry_connection_t *conn,
     return;
   }
 
-  if (conn->prefer_ipv6_traffic) {
+  if (conn->entry_cfg.prefer_ipv6) {
     addr_best = addr_ipv6 ? addr_ipv6 : addr_ipv4;
   } else {
     addr_best = addr_ipv4 ? addr_ipv4 : addr_ipv6;
@@ -1327,8 +1329,8 @@ connection_edge_process_relay_cell_not_open(
         return 0;
       }
 
-      if ((family == AF_INET && ! entry_conn->ipv4_traffic_ok) ||
-          (family == AF_INET6 && ! entry_conn->ipv6_traffic_ok)) {
+      if ((family == AF_INET && ! entry_conn->entry_cfg.ipv4_traffic) ||
+          (family == AF_INET6 && ! entry_conn->entry_cfg.ipv6_traffic)) {
         log_fn(LOG_PROTOCOL_WARN, LD_APP,
                "Got a connected cell to %s with unsupported address family."
                " Closing.", fmt_addr(&addr));
@@ -1644,8 +1646,9 @@ connection_edge_process_relay_cell(cell_t *cell, circuit_t *circ,
         }
         if ((reason = circuit_finish_handshake(TO_ORIGIN_CIRCUIT(circ),
                                          &extended_cell.created_cell)) < 0) {
-          log_warn(domain,"circuit_finish_handshake failed.");
-          return reason;
+          circuit_mark_for_close(circ, -reason);
+          return 0; /* We don't want to cause a warning, so we mark the circuit
+                     * here. */
         }
       }
       if ((reason=circuit_send_next_onion_skin(TO_ORIGIN_CIRCUIT(circ)))<0) {
@@ -2433,6 +2436,12 @@ cell_queues_get_total_allocation(void)
   return total_cells_allocated * packed_cell_mem_cost();
 }
 
+/** How long after we've been low on memory should we try to conserve it? */
+#define MEMORY_PRESSURE_INTERVAL (30*60)
+
+/** The time at which we were last low on memory. */
+static time_t last_time_under_memory_pressure = 0;
+
 /** Check whether we've got too much space used for cells.  If so,
  * call the OOM handler and return 1.  Otherwise, return 0. */
 STATIC int
@@ -2441,11 +2450,35 @@ cell_queues_check_size(void)
   size_t alloc = cell_queues_get_total_allocation();
   alloc += buf_get_total_allocation();
   alloc += tor_zlib_get_total_allocation();
-  if (alloc >= get_options()->MaxMemInQueues) {
-    circuits_handle_oom(alloc);
-    return 1;
+  const size_t rend_cache_total = rend_cache_get_total_allocation();
+  alloc += rend_cache_total;
+  if (alloc >= get_options()->MaxMemInQueues_low_threshold) {
+    last_time_under_memory_pressure = approx_time();
+    if (alloc >= get_options()->MaxMemInQueues) {
+      /* If we're spending over 20% of the memory limit on hidden service
+       * descriptors, free them until we're down to 10%.
+       */
+      if (rend_cache_total > get_options()->MaxMemInQueues / 5) {
+        const size_t bytes_to_remove =
+          rend_cache_total - (size_t)(get_options()->MaxMemInQueues / 10);
+        rend_cache_clean_v2_descs_as_dir(time(NULL), bytes_to_remove);
+        alloc -= rend_cache_total;
+        alloc += rend_cache_get_total_allocation();
+      }
+      circuits_handle_oom(alloc);
+      return 1;
+    }
   }
   return 0;
+}
+
+/** Return true if we've been under memory pressure in the last
+ * MEMORY_PRESSURE_INTERVAL seconds. */
+int
+have_been_under_memory_pressure(void)
+{
+  return last_time_under_memory_pressure + MEMORY_PRESSURE_INTERVAL
+    < approx_time();
 }
 
 /**

@@ -1,6 +1,6 @@
 /* Copyright (c) 2001-2003, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2014, The Tor Project, Inc. */
+ * Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #ifndef TOR_TEST_H
@@ -157,6 +157,8 @@ crypto_pk_t *pk_generate(int idx);
     static retval NS(mock_fn) args; int CALLED(mock_fn) = 0
 #define NS_MOCK(name) MOCK(name, NS(name))
 #define NS_UNMOCK(name) UNMOCK(name)
+
+extern const struct testcase_setup_t passthrough_setup;
 
 #endif
 

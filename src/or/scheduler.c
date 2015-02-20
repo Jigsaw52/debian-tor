@@ -1,4 +1,4 @@
-/* * Copyright (c) 2013, The Tor Project, Inc. */
+/* * Copyright (c) 2013-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -613,7 +613,7 @@ scheduler_touch_channel(channel_t *chan)
  */
 
 void
-scheduler_adjust_queue_size(channel_t *chan, char dir, uint64_t adj)
+scheduler_adjust_queue_size(channel_t *chan, int dir, uint64_t adj)
 {
   time_t now = approx_time();
 

@@ -1,7 +1,7 @@
 /* Copyright 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2014, The Tor Project, Inc. */
+ * Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -745,6 +745,7 @@ circuit_free(circuit_t *circ)
 {
   void *mem;
   size_t memlen;
+  int should_free = 1;
   if (!circ)
     return;
 
@@ -783,6 +784,8 @@ circuit_free(circuit_t *circ)
     mem = ocirc;
     memlen = sizeof(or_circuit_t);
     tor_assert(circ->magic == OR_CIRCUIT_MAGIC);
+
+    should_free = (ocirc->workqueue_entry == NULL);
 
     crypto_cipher_free(ocirc->p_crypto);
     crypto_digest_free(ocirc->p_digest);
@@ -826,8 +829,18 @@ circuit_free(circuit_t *circ)
    * "active" checks will be violated. */
   cell_queue_clear(&circ->n_chan_cells);
 
-  memwipe(mem, 0xAA, memlen); /* poison memory */
-  tor_free(mem);
+  if (should_free) {
+    memwipe(mem, 0xAA, memlen); /* poison memory */
+    tor_free(mem);
+  } else {
+    /* If we made it here, this is an or_circuit_t that still has a pending
+     * cpuworker request which we weren't able to cancel.  Instead, set up
+     * the magic value so that when the reply comes back, we'll know to discard
+     * the reply and free this structure.
+     */
+    memwipe(mem, 0xAA, memlen);
+    circ->magic = DEAD_CIRCUIT_MAGIC;
+  }
 }
 
 /** Deallocate the linked list circ-><b>cpath</b>, and remove the cpath from
@@ -1532,7 +1545,7 @@ circuit_find_to_cannibalize(uint8_t purpose, extend_info_t *info,
           do {
             const node_t *ri2;
             if (tor_memeq(hop->extend_info->identity_digest,
-                        info->identity_digest, DIGEST_LEN))
+                          info->identity_digest, DIGEST_LEN))
               goto next;
             if (ri1 &&
                 (ri2 = node_get_by_id(hop->extend_info->identity_digest))
@@ -2050,17 +2063,6 @@ circuits_handle_oom(size_t current_allocation)
              "MaxMemInQueues.)");
 
   {
-    const size_t recovered = buf_shrink_freelists(1);
-    if (recovered >= current_allocation) {
-      log_warn(LD_BUG, "We somehow recovered more memory from freelists "
-               "than we thought we had allocated");
-      current_allocation = 0;
-    } else {
-      current_allocation -= recovered;
-    }
-  }
-
-  {
     size_t mem_target = (size_t)(get_options()->MaxMemInQueues *
                                  FRACTION_OF_DATA_TO_RETAIN_ON_OOM);
     if (current_allocation <= mem_target)
@@ -2142,12 +2144,6 @@ circuits_handle_oom(size_t current_allocation)
   } SMARTLIST_FOREACH_END(circ);
 
  done_recovering_mem:
-
-#ifdef ENABLE_MEMPOOLS
-  clean_cell_pool(); /* In case this helps. */
-#endif /* ENABLE_MEMPOOLS */
-  buf_shrink_freelists(1); /* This is necessary to actually release buffer
-                              chunks. */
 
   log_notice(LD_GENERAL, "Removed "U64_FORMAT" bytes by killing %d circuits; "
              "%d circuits remain alive. Also killed %d non-linked directory "

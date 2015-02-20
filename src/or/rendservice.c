@@ -1,5 +1,5 @@
 /* Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2014, The Tor Project, Inc. */
+ * Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -66,9 +66,16 @@ static ssize_t rend_service_parse_intro_for_v3(
  * a real port on some IP.
  */
 typedef struct rend_service_port_config_t {
+  /* The incoming HS virtual port we're mapping */
   uint16_t virtual_port;
+  /* Is this an AF_UNIX port? */
+  unsigned int is_unix_addr:1;
+  /* The outgoing TCP port to use, if !is_unix_addr */
   uint16_t real_port;
+  /* The outgoing IPv4 or IPv6 address to use, if !is_unix_addr */
   tor_addr_t real_addr;
+  /* The socket path to connect to, if is_unix_addr */
+  char unix_addr[FLEXIBLE_ARRAY_MEMBER];
 } rend_service_port_config_t;
 
 /** Try to maintain this many intro points per service by default. */
@@ -129,6 +136,9 @@ typedef struct rend_service_t {
    * when they do, this keeps us from launching multiple simultaneous attempts
    * to connect to the same rend point. */
   replaycache_t *accepted_intro_dh_parts;
+  /** If true, we don't close circuits for making requests to unsupported
+   * ports. */
+  int allow_unknown_ports;
 } rend_service_t;
 
 /** A list of rend_service_t's for services run on this OP.
@@ -276,16 +286,48 @@ rend_add_service(rend_service_t *service)
               service->directory);
     for (i = 0; i < smartlist_len(service->ports); ++i) {
       p = smartlist_get(service->ports, i);
-      log_debug(LD_REND,"Service maps port %d to %s",
-                p->virtual_port, fmt_addrport(&p->real_addr, p->real_port));
+      if (!(p->is_unix_addr)) {
+        log_debug(LD_REND,
+                  "Service maps port %d to %s",
+                  p->virtual_port,
+                  fmt_addrport(&p->real_addr, p->real_port));
+      } else {
+#ifdef HAVE_SYS_UN_H
+        log_debug(LD_REND,
+                  "Service maps port %d to socket at \"%s\"",
+                  p->virtual_port, p->unix_addr);
+#else
+        log_debug(LD_REND,
+                  "Service maps port %d to an AF_UNIX socket, but we "
+                  "have no AF_UNIX support on this platform.  This is "
+                  "probably a bug.",
+                  p->virtual_port);
+#endif /* defined(HAVE_SYS_UN_H) */
+      }
     }
   }
+}
+
+/** Return a new rend_service_port_config_t with its path set to
+ * <b>socket_path</b> or empty if <b>socket_path</b> is NULL */
+static rend_service_port_config_t *
+rend_service_port_config_new(const char *socket_path)
+{
+  if (!socket_path)
+    return tor_malloc_zero(sizeof(rend_service_port_config_t) + 1);
+
+  const size_t pathlen = strlen(socket_path) + 1;
+  rend_service_port_config_t *conf =
+    tor_malloc_zero(sizeof(rend_service_port_config_t) + pathlen);
+  memcpy(conf->unix_addr, socket_path, pathlen);
+  conf->is_unix_addr = 1;
+  return conf;
 }
 
 /** Parses a real-port to virtual-port mapping and returns a new
  * rend_service_port_config_t.
  *
- * The format is: VirtualPort (IP|RealPort|IP:RealPort)?
+ * The format is: VirtualPort (IP|RealPort|IP:RealPort|'socket':path)?
  *
  * IP defaults to 127.0.0.1; RealPort defaults to VirtualPort.
  */
@@ -294,11 +336,13 @@ parse_port_config(const char *string)
 {
   smartlist_t *sl;
   int virtport;
-  int realport;
+  int realport = 0;
   uint16_t p;
   tor_addr_t addr;
   const char *addrport;
   rend_service_port_config_t *result = NULL;
+  unsigned int is_unix_addr = 0;
+  char *socket_path = NULL;
 
   sl = smartlist_new();
   smartlist_split_string(sl, string, " ",
@@ -320,8 +364,21 @@ parse_port_config(const char *string)
     realport = virtport;
     tor_addr_from_ipv4h(&addr, 0x7F000001u); /* 127.0.0.1 */
   } else {
+    int ret;
+
     addrport = smartlist_get(sl,1);
-    if (strchr(addrport, ':') || strchr(addrport, '.')) {
+    ret = config_parse_unix_port(addrport, &socket_path);
+    if (ret < 0 && ret != -ENOENT) {
+      if (ret == -EINVAL) {
+        log_warn(LD_CONFIG,
+                 "Empty socket path in hidden service port configuration.");
+      }
+      goto err;
+    }
+    if (socket_path) {
+      is_unix_addr = 1;
+    } else if (strchr(addrport, ':') || strchr(addrport, '.')) {
+      /* else try it as an IP:port pair if it has a : or . in it */
       if (tor_addr_port_lookup(addrport, &addr, &p)<0) {
         log_warn(LD_CONFIG,"Unparseable address in hidden service port "
                  "configuration.");
@@ -340,13 +397,21 @@ parse_port_config(const char *string)
     }
   }
 
-  result = tor_malloc(sizeof(rend_service_port_config_t));
+  /* Allow room for unix_addr */
+  result = rend_service_port_config_new(socket_path);
   result->virtual_port = virtport;
-  result->real_port = realport;
-  tor_addr_copy(&result->real_addr, &addr);
+  result->is_unix_addr = is_unix_addr;
+  if (!is_unix_addr) {
+    result->real_port = realport;
+    tor_addr_copy(&result->real_addr, &addr);
+    result->unix_addr[0] = '\0';
+  }
+
  err:
   SMARTLIST_FOREACH(sl, char *, c, tor_free(c));
   smartlist_free(sl);
+  if (socket_path) tor_free(socket_path);
+
   return result;
 }
 
@@ -397,6 +462,19 @@ rend_config_services(const or_options_t *options, int validate_only)
          return -1;
        }
        smartlist_add(service->ports, portcfg);
+     } else if (!strcasecmp(line->key, "HiddenServiceAllowUnknownPorts")) {
+       service->allow_unknown_ports = (int)tor_parse_long(line->value,
+                                                         10, 0, 1, &ok, NULL);
+       if (!ok) {
+         log_warn(LD_CONFIG,
+                  "HiddenServiceAllowUnknownPorts should be 0 or 1, not %s",
+                  line->value);
+         rend_service_free(service);
+         return -1;
+       }
+       log_info(LD_CONFIG,
+                "HiddenServiceAllowUnknownPorts=%d for %s",
+                (int)service->allow_unknown_ports, service->directory);
      } else if (!strcasecmp(line->key,
                             "HiddenServiceDirGroupReadable")) {
          service->dir_group_readable = (int)tor_parse_long(line->value,
@@ -531,7 +609,7 @@ rend_config_services(const or_options_t *options, int validate_only)
     }
   }
   if (service) {
-    cpd_check_t check_opts = CPD_CHECK_MODE_ONLY;
+    cpd_check_t check_opts = CPD_CHECK_MODE_ONLY|CPD_CHECK;
     if (service->dir_group_readable) {
       check_opts |= CPD_GROUP_READ;
     }
@@ -1054,8 +1132,8 @@ rend_check_authorization(rend_service_t *service,
   }
 
   /* Allow the request. */
-  log_debug(LD_REND, "Client %s authorized for service %s.",
-            auth_client->client_name, service->service_id);
+  log_info(LD_REND, "Client %s authorized for service %s.",
+           auth_client->client_name, service->service_id);
   return 1;
 }
 
@@ -3270,6 +3348,9 @@ rend_services_introduce(void)
   smartlist_free(exclude_nodes);
 }
 
+#define MIN_REND_INITIAL_POST_DELAY (30)
+#define MIN_REND_INITIAL_POST_DELAY_TESTING (5)
+
 /** Regenerate and upload rendezvous service descriptors for all
  * services, if necessary. If the descriptor has been dirty enough
  * for long enough, definitely upload; else only upload when the
@@ -3284,6 +3365,9 @@ rend_consider_services_upload(time_t now)
   int i;
   rend_service_t *service;
   int rendpostperiod = get_options()->RendPostPeriod;
+  int rendinitialpostdelay = (get_options()->TestingTorNetwork ?
+                              MIN_REND_INITIAL_POST_DELAY_TESTING :
+                              MIN_REND_INITIAL_POST_DELAY);
 
   if (!get_options()->PublishHidServDescriptors)
     return;
@@ -3291,17 +3375,17 @@ rend_consider_services_upload(time_t now)
   for (i=0; i < smartlist_len(rend_service_list); ++i) {
     service = smartlist_get(rend_service_list, i);
     if (!service->next_upload_time) { /* never been uploaded yet */
-      /* The fixed lower bound of 30 seconds ensures that the descriptor
-       * is stable before being published. See comment below. */
+      /* The fixed lower bound of rendinitialpostdelay seconds ensures that
+       * the descriptor is stable before being published. See comment below. */
       service->next_upload_time =
-        now + 30 + crypto_rand_int(2*rendpostperiod);
+        now + rendinitialpostdelay + crypto_rand_int(2*rendpostperiod);
     }
     if (service->next_upload_time < now ||
         (service->desc_is_dirty &&
-         service->desc_is_dirty < now-30)) {
+         service->desc_is_dirty < now-rendinitialpostdelay)) {
       /* if it's time, or if the directory servers have a wrong service
-       * descriptor and ours has been stable for 30 seconds, upload a
-       * new one of each format. */
+       * descriptor and ours has been stable for rendinitialpostdelay seconds,
+       * upload a new one of each format. */
       rend_service_update_descriptor(service);
       upload_service_descriptor(service);
     }
@@ -3380,9 +3464,64 @@ rend_service_dump_stats(int severity)
   }
 }
 
+#ifdef HAVE_SYS_UN_H
+
+/** Given <b>ports</b>, a smarlist containing rend_service_port_config_t,
+ * add the given <b>p</b>, a AF_UNIX port to the list. Return 0 on success
+ * else return -ENOSYS if AF_UNIX is not supported (see function in the
+ * #else statement below). */
+static int
+add_unix_port(smartlist_t *ports, rend_service_port_config_t *p)
+{
+  tor_assert(ports);
+  tor_assert(p);
+  tor_assert(p->is_unix_addr);
+
+  smartlist_add(ports, p);
+  return 0;
+}
+
+/** Given <b>conn</b> set it to use the given port <b>p</b> values. Return 0
+ * on success else return -ENOSYS if AF_UNIX is not supported (see function
+ * in the #else statement below). */
+static int
+set_unix_port(edge_connection_t *conn, rend_service_port_config_t *p)
+{
+  tor_assert(conn);
+  tor_assert(p);
+  tor_assert(p->is_unix_addr);
+
+  conn->base_.socket_family = AF_UNIX;
+  tor_addr_make_unspec(&conn->base_.addr);
+  conn->base_.port = 1;
+  conn->base_.address = tor_strdup(p->unix_addr);
+  return 0;
+}
+
+#else /* defined(HAVE_SYS_UN_H) */
+
+static int
+set_unix_port(edge_connection_t *conn, rend_service_port_config_t *p)
+{
+  (void) conn;
+  (void) p;
+  return -ENOSYS;
+}
+
+static int
+add_unix_port(smartlist_t *ports, rend_service_port_config_t *p)
+{
+  (void) ports;
+  (void) p;
+  return -ENOSYS;
+}
+
+#endif /* HAVE_SYS_UN_H */
+
 /** Given <b>conn</b>, a rendezvous exit stream, look up the hidden service for
  * 'circ', and look up the port and address based on conn-\>port.
- * Assign the actual conn-\>addr and conn-\>port. Return -1 if failure,
+ * Assign the actual conn-\>addr and conn-\>port. Return -2 on failure
+ * for which the circuit should be closed, -1 on other failure,
  * or 0 for success.
  */
 int
@@ -3393,6 +3532,7 @@ rend_service_set_connection_addr_port(edge_connection_t *conn,
   char serviceid[REND_SERVICE_ID_LEN_BASE32+1];
   smartlist_t *matching_ports;
   rend_service_port_config_t *chosen_port;
+  unsigned int warn_once = 0;
 
   tor_assert(circ->base_.purpose == CIRCUIT_PURPOSE_S_REND_JOINED);
   tor_assert(circ->rend_data);
@@ -3405,24 +3545,53 @@ rend_service_set_connection_addr_port(edge_connection_t *conn,
     log_warn(LD_REND, "Couldn't find any service associated with pk %s on "
              "rendezvous circuit %u; closing.",
              serviceid, (unsigned)circ->base_.n_circ_id);
-    return -1;
+    return -2;
   }
   matching_ports = smartlist_new();
   SMARTLIST_FOREACH(service->ports, rend_service_port_config_t *, p,
   {
-    if (conn->base_.port == p->virtual_port) {
+    if (conn->base_.port != p->virtual_port) {
+      continue;
+    }
+    if (!(p->is_unix_addr)) {
       smartlist_add(matching_ports, p);
+    } else {
+      if (add_unix_port(matching_ports, p)) {
+        if (!warn_once) {
+         /* Unix port not supported so warn only once. */
+          log_warn(LD_REND,
+              "Saw AF_UNIX virtual port mapping for port %d on service "
+              "%s, which is unsupported on this platform. Ignoring it.",
+              conn->base_.port, serviceid);
+        }
+        warn_once++;
+      }
     }
   });
   chosen_port = smartlist_choose(matching_ports);
   smartlist_free(matching_ports);
   if (chosen_port) {
-    tor_addr_copy(&conn->base_.addr, &chosen_port->real_addr);
-    conn->base_.port = chosen_port->real_port;
+    if (!(chosen_port->is_unix_addr)) {
+      /* Get a non-AF_UNIX connection ready for connection_exit_connect() */
+      tor_addr_copy(&conn->base_.addr, &chosen_port->real_addr);
+      conn->base_.port = chosen_port->real_port;
+    } else {
+      if (set_unix_port(conn, chosen_port)) {
+        /* Simply impossible to end up here else we were able to add a Unix
+         * port without AF_UNIX support... ? */
+        tor_assert(0);
+      }
+    }
     return 0;
   }
-  log_info(LD_REND, "No virtual port mapping exists for port %d on service %s",
-           conn->base_.port,serviceid);
-  return -1;
+
+  log_info(LD_REND,
+           "No virtual port mapping exists for port %d on service %s",
+           conn->base_.port, serviceid);
+
+  if (service->allow_unknown_ports)
+    return -1;
+  else
+    return -2;
 }
 

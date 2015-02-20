@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2014, The Tor Project, Inc. */
+ * Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -1319,7 +1319,7 @@ entry_guards_parse_state(or_state_t *state, int set, char **msg)
                "EntryGuardDownSince/UnlistedSince without EntryGuard");
         break;
       }
-      if (parse_iso_time(line->value, &when)<0) {
+      if (parse_iso_time_(line->value, &when, 0)<0) {
         *msg = tor_strdup("Unable to parse entry nodes: "
                           "Bad time in EntryGuardDownSince/UnlistedSince");
         break;
@@ -1523,6 +1523,13 @@ entry_guards_parse_state(or_state_t *state, int set, char **msg)
   return *msg ? -1 : 0;
 }
 
+/** How long will we let a change in our guard nodes stay un-saved
+ * when we are trying to avoid disk writes? */
+#define SLOW_GUARD_STATE_FLUSH_TIME 600
+/** How long will we let a change in our guard nodes stay un-saved
+ * when we are not trying to avoid disk writes? */
+#define FAST_GUARD_STATE_FLUSH_TIME 30
+
 /** Our list of entry guards has changed, or some element of one
  * of our entry guards has changed. Write the changes to disk within
  * the next few minutes.
@@ -1533,8 +1540,12 @@ entry_guards_changed(void)
   time_t when;
   entry_guards_dirty = 1;
 
+  if (get_options()->AvoidDiskWrites)
+    when = time(NULL) + SLOW_GUARD_STATE_FLUSH_TIME;
+  else
+    when = time(NULL) + FAST_GUARD_STATE_FLUSH_TIME;
+
   /* or_state_save() will call entry_guards_update_state(). */
-  when = get_options()->AvoidDiskWrites ? time(NULL) + 3600 : time(NULL)+600;
   or_state_mark_dirty(get_or_state(), when);
 }
 
@@ -1655,6 +1666,9 @@ getinfo_helper_entry_guards(control_connection_t *conn,
         } else if (e->bad_since) {
           when = e->bad_since;
           status = "unusable";
+        } else if (e->unreachable_since) {
+          when = e->unreachable_since;
+          status = "down";
         } else {
           status = "up";
         }
@@ -1681,6 +1695,63 @@ getinfo_helper_entry_guards(control_connection_t *conn,
     smartlist_free(sl);
   }
   return 0;
+}
+
+/** Return 0 if we should apply guardfraction information found in the
+ *  consensus. A specific consensus can be specified with the
+ *  <b>ns</b> argument, if NULL the most recent one will be picked.*/
+int
+should_apply_guardfraction(const networkstatus_t *ns)
+{
+  /* We need to check the corresponding torrc option and the consensus
+   * parameter if we need to. */
+  const or_options_t *options = get_options();
+
+  /* If UseGuardFraction is 'auto' then check the same-named consensus
+   * parameter. If the consensus parameter is not present, default to
+   * "off". */
+  if (options->UseGuardFraction == -1) {
+    return networkstatus_get_param(ns, "UseGuardFraction",
+                                   0, /* default to "off" */
+                                   0, 1);
+  }
+
+  return options->UseGuardFraction;
+}
+
+/* Given the original bandwidth of a guard and its guardfraction,
+ * calculate how much bandwidth the guard should have as a guard and
+ * as a non-guard.
+ *
+ * Quoting from proposal236:
+ *
+ *   Let Wpf denote the weight from the 'bandwidth-weights' line a
+ *   client would apply to N for position p if it had the guard
+ *   flag, Wpn the weight if it did not have the guard flag, and B the
+ *   measured bandwidth of N in the consensus.  Then instead of choosing
+ *   N for position p proportionally to Wpf*B or Wpn*B, clients should
+ *   choose N proportionally to F*Wpf*B + (1-F)*Wpn*B.
+ *
+ * This function fills the <b>guardfraction_bw</b> structure. It sets
+ * <b>guard_bw</b> to F*B and <b>non_guard_bw</b> to (1-F)*B.
+ */
+void
+guard_get_guardfraction_bandwidth(guardfraction_bandwidth_t *guardfraction_bw,
+                                  int orig_bandwidth,
+                                  uint32_t guardfraction_percentage)
+{
+  double guardfraction_fraction;
+
+  /* Turn the percentage into a fraction. */
+  tor_assert(guardfraction_percentage <= 100);
+  guardfraction_fraction = guardfraction_percentage / 100.0;
+
+  long guard_bw = tor_lround(guardfraction_fraction * orig_bandwidth);
+  tor_assert(guard_bw <= INT_MAX);
+
+  guardfraction_bw->guard_bw = (int) guard_bw;
+
+  guardfraction_bw->non_guard_bw = orig_bandwidth - (int) guard_bw;
 }
 
 /** A list of configured bridges. Whenever we actually get a descriptor
@@ -2357,7 +2428,9 @@ entries_retry_helper(const or_options_t *options, int act)
   SMARTLIST_FOREACH_BEGIN(entry_guards, entry_guard_t *, e) {
       node = node_get_by_id(e->identity);
       if (node && node_has_descriptor(node) &&
-          node_is_bridge(node) == need_bridges) {
+          node_is_bridge(node) == need_bridges &&
+          (!need_bridges || (!e->bad_since &&
+                             node_is_a_configured_bridge(node)))) {
         any_known = 1;
         if (node->is_running)
           any_running = 1; /* some entry is both known and running */

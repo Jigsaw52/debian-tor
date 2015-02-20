@@ -1,9 +1,9 @@
 dnl Copyright (c) 2001-2004, Roger Dingledine
 dnl Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson
-dnl Copyright (c) 2007-2014, The Tor Project, Inc.
+dnl Copyright (c) 2007-2015, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
-AC_INIT([tor],[0.2.6.2-alpha])
+AC_INIT([tor],[0.2.6.3-alpha])
 AC_CONFIG_SRCDIR([src/or/main.c])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE
@@ -25,10 +25,6 @@ fi
 CPPFLAGS="$CPPFLAGS -I\${top_srcdir}/src/common"
 
 #XXXX020 We should make these enabled or not, before 0.2.0.x-final
-AC_ARG_ENABLE(buf-freelists,
-   AS_HELP_STRING(--enable-buf-freelists, enable freelists for buffer RAM))
-AC_ARG_ENABLE(mempools,
-   AS_HELP_STRING(--enable-mempools, enable mempools for relay cells))
 AC_ARG_ENABLE(openbsd-malloc,
    AS_HELP_STRING(--enable-openbsd-malloc, Use malloc code from openbsd.  Linux only))
 AC_ARG_ENABLE(instrument-downloads,
@@ -45,6 +41,8 @@ AC_ARG_ENABLE(unittests,
    AS_HELP_STRING(--disable-unittests, [Don't build unit tests for Tor. Risky!]))
 AC_ARG_ENABLE(coverage,
    AS_HELP_STRING(--enable-coverage, [Enable coverage support in the unit-test build]))
+AC_ARG_ENABLE(system-torrc,
+   AS_HELP_STRING(--disable-system-torrc, [Don't look for a system-wide torrc file]))
 
 AM_CONDITIONAL(UNITTESTS_ENABLED, test x$enable_unittests != xno)
 AM_CONDITIONAL(COVERAGE_ENABLED, test x$enable_coverage = xyes)
@@ -54,6 +52,11 @@ if test "$enable_static_tor" = "yes"; then
   enable_static_openssl="yes";
   enable_static_zlib="yes";
   CFLAGS="$CFLAGS -static"
+fi
+
+if test "$enable_system_torrc" = "no"; then
+  AC_DEFINE(DISABLE_SYSTEM_TORRC, 1,
+            [Defined if we're not going to look for a torrc in SYSCONF])
 fi
 
 if test x$enable_buf_freelists = xyes; then
@@ -119,44 +122,35 @@ AC_ARG_ENABLE(systemd,
 
 
 # systemd support
-if test x$enable_systemd = xfalse ; then
+if test x$enable_systemd = xno ; then
     have_systemd=no;
 else
     PKG_CHECK_MODULES(SYSTEMD,
         [libsystemd-daemon],
         have_systemd=yes,
         have_systemd=no)
+    if test x$have_systemd=xno; then
+        AC_MSG_NOTICE([Okay, checking for systemd a different way...])
+        PKG_CHECK_MODULES(SYSTEMD,
+            [libsystemd],
+            have_systemd=yes,
+            have_systemd=no)
+    fi
 fi
 
 if test x$have_systemd = xyes; then
     AC_DEFINE(HAVE_SYSTEMD,1,[Have systemd])
-    TOR_SYSTEMD_LIBS="-lsystemd-daemon"
+    TOR_SYSTEMD_CFLAGS="${SYSTEMD_CFLAGS}"
+    TOR_SYSTEMD_LIBS="${SYSTEMD_LIBS}"
+    PKG_CHECK_MODULES(SYSTEMD209, [systemd >= 209],
+         [AC_DEFINE(HAVE_SYSTEMD_209,1,[Have systemd v209 or more])], [])
 fi
+AC_SUBST(TOR_SYSTEMD_CFLAGS)
 AC_SUBST(TOR_SYSTEMD_LIBS)
 
 if test x$enable_systemd = xyes -a x$have_systemd != xyes ; then
     AC_MSG_ERROR([Explicitly requested systemd support, but systemd not found])
 fi
-
-AC_ARG_ENABLE(threads,
-     AS_HELP_STRING(--disable-threads, disable multi-threading support))
-
-if test x$enable_threads = x; then
-   case $host in
-    *-*-solaris* )
-     # Don't try multithreading on solaris -- cpuworkers seem to lock.
-     AC_MSG_NOTICE([You are running Solaris; Sometimes threading makes
-cpu workers lock up here, so I will disable threads.])
-     enable_threads="no";;
-    *)
-     enable_threads="yes";;
-   esac
-fi
-
-ifdef([HAVE_SYSTEMD], [
-AC_SEARCH_LIBS([sd_watchdog_enabled], [systemd-daemon],
-    [AC_DEFINE(HAVE_SYSTEMD_209,1,[Have systemd v209 or more])], [])
-])
 
 case $host in
    *-*-solaris* )
@@ -247,7 +241,7 @@ AM_CONDITIONAL(MINIUPNPC, test x$upnp = xtrue)
 AM_PROG_CC_C_O
 AC_PROG_CC_C99
 
-AC_ARG_VAR(PYTHON)
+AC_ARG_VAR([PYTHON], [path to Python binary])
 AC_CHECK_PROGS(PYTHON, [python python2 python2.7 python3 python3.3])
 if test "x$PYTHON" = "x"; then
   AC_MSG_WARN([Python unavailable; some tests will not be run.])
@@ -386,6 +380,9 @@ fi
 AC_SEARCH_LIBS(pthread_create, [pthread])
 AC_SEARCH_LIBS(pthread_detach, [pthread])
 
+AM_CONDITIONAL(THREADS_WIN32, test "$bwin32" = "true")
+AM_CONDITIONAL(THREADS_PTHREADS, test "$bwin32" = "false")
+
 dnl -------------------------------------------------------------------
 dnl Check for functions before libevent, since libevent-1.2 apparently
 dnl exports strlcpy without defining it in a header.
@@ -396,6 +393,7 @@ AC_CHECK_FUNCS(
         backtrace \
         backtrace_symbols_fd \
         clock_gettime \
+	eventfd \
         flock \
         ftime \
         getaddrinfo \
@@ -410,6 +408,8 @@ AC_CHECK_FUNCS(
         localtime_r \
         lround \
         memmem \
+	pipe \
+	pipe2 \
         prctl \
         rint \
         sigaction \
@@ -423,7 +423,7 @@ AC_CHECK_FUNCS(
         sysconf \
 	sysctl \
         uname \
-        usleep \
+	usleep \
         vasprintf \
 	_vscprintf
 )
@@ -951,6 +951,7 @@ AC_CHECK_HEADERS(
         netinet/in6.h \
         pwd.h \
         stdint.h \
+	sys/eventfd.h \
         sys/file.h \
         sys/ioctl.h \
         sys/limits.h \
@@ -1544,8 +1545,7 @@ if test "$GCC" = yes; then
   # accident waiting to happen.
   CFLAGS="$CFLAGS -Wall -fno-strict-aliasing"
 else
-  # Autoconf sets -g -O2 by default. Override optimization level
-  # for non-gcc compilers
+  # Override optimization level for non-gcc compilers
   CFLAGS="$CFLAGS -O"
   enable_gcc_warnings=no
   enable_gcc_warnings_advisory=no

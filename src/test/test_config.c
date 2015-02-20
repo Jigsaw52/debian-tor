@@ -1,6 +1,6 @@
 /* Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2014, The Tor Project, Inc. */
+ * Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #include "orconfig.h"
@@ -51,8 +51,7 @@ test_config_addressmap(void *arg)
 
 /* Use old interface for now, so we don't need to rewrite the unit tests */
 #define addressmap_rewrite(a,s,eo,ao)                                   \
-  addressmap_rewrite((a),(s),AMR_FLAG_USE_IPV4_DNS|AMR_FLAG_USE_IPV6_DNS, \
-                     (eo),(ao))
+  addressmap_rewrite((a),(s), ~0, (eo),(ao))
 
   /* MapAddress .invalidwildcard.com .torserver.exit  - no match */
   strlcpy(address, "www.invalidwildcard.com", sizeof(address));
@@ -177,6 +176,7 @@ test_config_addressmap(void *arg)
  done:
   config_free_lines(get_options_mutable()->AddressMap);
   get_options_mutable()->AddressMap = NULL;
+  addressmap_free_all();
 }
 
 static int
@@ -1217,7 +1217,6 @@ test_config_resolve_my_address(void *arg)
 
   UNMOCK(tor_gethostname);
   tor_free(hostname_out);
-
 
 /*
  * CASE 7:

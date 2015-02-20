@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2014, The Tor Project, Inc. */
+ * Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -65,7 +65,7 @@ static int compute_weighted_bandwidths(const smartlist_t *sl,
                                        bandwidth_weight_rule_t rule,
                                        u64_dbl_t **bandwidths_out);
 static const routerstatus_t *router_pick_directory_server_impl(
-                                           dirinfo_type_t auth, int flags);
+                              dirinfo_type_t auth, int flags, int *n_busy_out);
 static const routerstatus_t *router_pick_trusteddirserver_impl(
                 const smartlist_t *sourcelist, dirinfo_type_t auth,
                 int flags, int *n_busy_out);
@@ -1206,6 +1206,7 @@ router_reload_router_list_impl(desc_store_t *store)
 
   tor_free(fname);
   fname = get_datadir_fname_suffix(store->fname_base, ".new");
+  /* don't load empty files - we wouldn't get any data, even if we tried */
   if (file_status(fname) == FN_FILE)
     contents = read_file_to_str(fname, RFTS_BIN|RFTS_IGNORE_MISSING, &st);
   if (contents) {
@@ -1287,14 +1288,24 @@ router_get_fallback_dir_servers(void)
 const routerstatus_t *
 router_pick_directory_server(dirinfo_type_t type, int flags)
 {
+  int busy = 0;
   const routerstatus_t *choice;
 
   if (!routerlist)
     return NULL;
 
-  choice = router_pick_directory_server_impl(type, flags);
+  choice = router_pick_directory_server_impl(type, flags, &busy);
   if (choice || !(flags & PDS_RETRY_IF_NO_SERVERS))
     return choice;
+
+  if (busy) {
+    /* If the reason that we got no server is that servers are "busy",
+     * we must be excluding good servers because we already have serverdesc
+     * fetches with them.  Do not mark down servers up because of this. */
+    tor_assert((flags & (PDS_NO_EXISTING_SERVERDESC_FETCH|
+                         PDS_NO_EXISTING_MICRODESC_FETCH)));
+    return NULL;
+  }
 
   log_info(LD_DIR,
            "No reachable router entries for dirservers. "
@@ -1302,7 +1313,7 @@ router_pick_directory_server(dirinfo_type_t type, int flags)
   /* mark all authdirservers as up again */
   mark_all_dirservers_up(fallback_dir_servers);
   /* try again */
-  choice = router_pick_directory_server_impl(type, flags);
+  choice = router_pick_directory_server_impl(type, flags, NULL);
   return choice;
 }
 
@@ -1412,11 +1423,15 @@ router_pick_dirserver_generic(smartlist_t *sourcelist,
 #define DIR_503_TIMEOUT (60*60)
 
 /** Pick a random running valid directory server/mirror from our
- * routerlist.  Arguments are as for router_pick_directory_server(), except
- * that RETRY_IF_NO_SERVERS is ignored.
+ * routerlist.  Arguments are as for router_pick_directory_server(), except:
+ *
+ * If <b>n_busy_out</b> is provided, set *<b>n_busy_out</b> to the number of
+ * directories that we excluded for no other reason than
+ * PDS_NO_EXISTING_SERVERDESC_FETCH or PDS_NO_EXISTING_MICRODESC_FETCH.
  */
 static const routerstatus_t *
-router_pick_directory_server_impl(dirinfo_type_t type, int flags)
+router_pick_directory_server_impl(dirinfo_type_t type, int flags,
+                                  int *n_busy_out)
 {
   const or_options_t *options = get_options();
   const node_t *result;
@@ -1425,10 +1440,12 @@ router_pick_directory_server_impl(dirinfo_type_t type, int flags)
   smartlist_t *overloaded_direct, *overloaded_tunnel;
   time_t now = time(NULL);
   const networkstatus_t *consensus = networkstatus_get_latest_consensus();
-  int requireother = ! (flags & PDS_ALLOW_SELF);
-  int fascistfirewall = ! (flags & PDS_IGNORE_FASCISTFIREWALL);
-  int for_guard = (flags & PDS_FOR_GUARD);
-  int try_excluding = 1, n_excluded = 0;
+  const int requireother = ! (flags & PDS_ALLOW_SELF);
+  const int fascistfirewall = ! (flags & PDS_IGNORE_FASCISTFIREWALL);
+  const int no_serverdesc_fetching =(flags & PDS_NO_EXISTING_SERVERDESC_FETCH);
+  const int no_microdesc_fetching = (flags & PDS_NO_EXISTING_MICRODESC_FETCH);
+  const int for_guard = (flags & PDS_FOR_GUARD);
+  int try_excluding = 1, n_excluded = 0, n_busy = 0;
 
   if (!consensus)
     return NULL;
@@ -1475,7 +1492,24 @@ router_pick_directory_server_impl(dirinfo_type_t type, int flags)
     }
 
     /* XXXX IP6 proposal 118 */
-    tor_addr_from_ipv4h(&addr, node->rs->addr);
+    tor_addr_from_ipv4h(&addr, status->addr);
+
+    if (no_serverdesc_fetching && (
+       connection_get_by_type_addr_port_purpose(
+         CONN_TYPE_DIR, &addr, status->dir_port, DIR_PURPOSE_FETCH_SERVERDESC)
+    || connection_get_by_type_addr_port_purpose(
+         CONN_TYPE_DIR, &addr, status->dir_port, DIR_PURPOSE_FETCH_EXTRAINFO)
+    )) {
+      ++n_busy;
+      continue;
+    }
+
+    if (no_microdesc_fetching && connection_get_by_type_addr_port_purpose(
+      CONN_TYPE_DIR, &addr, status->dir_port, DIR_PURPOSE_FETCH_MICRODESC)
+    ) {
+      ++n_busy;
+      continue;
+    }
 
     is_overloaded = status->last_dir_503_at + DIR_503_TIMEOUT > now;
 
@@ -1515,13 +1549,18 @@ router_pick_directory_server_impl(dirinfo_type_t type, int flags)
   smartlist_free(overloaded_direct);
   smartlist_free(overloaded_tunnel);
 
-  if (result == NULL && try_excluding && !options->StrictNodes && n_excluded) {
+  if (result == NULL && try_excluding && !options->StrictNodes && n_excluded
+      && !n_busy) {
     /* If we got no result, and we are excluding nodes, and StrictNodes is
      * not set, try again without excluding nodes. */
     try_excluding = 0;
     n_excluded = 0;
+    n_busy = 0;
     goto retry_without_exclude;
   }
+
+  if (n_busy_out)
+    *n_busy_out = n_busy;
 
   return result ? result->rs : NULL;
 }
@@ -1736,7 +1775,7 @@ routerlist_add_node_and_family(smartlist_t *sl, const routerinfo_t *router)
 /** Add every suitable node from our nodelist to <b>sl</b>, so that
  * we can pick a node for a circuit.
  */
-static void
+void
 router_add_running_nodes_to_smartlist(smartlist_t *sl, int allow_invalid,
                                       int need_uptime, int need_capacity,
                                       int need_guard, int need_desc)
@@ -1964,6 +2003,7 @@ compute_weighted_bandwidths(const smartlist_t *sl,
   double Wg = -1, Wm = -1, We = -1, Wd = -1;
   double Wgb = -1, Wmb = -1, Web = -1, Wdb = -1;
   uint64_t weighted_bw = 0;
+  guardfraction_bandwidth_t guardfraction_bw;
   u64_dbl_t *bandwidths;
 
   /* Can't choose exit and guard at same time */
@@ -2053,6 +2093,8 @@ compute_weighted_bandwidths(const smartlist_t *sl,
   SMARTLIST_FOREACH_BEGIN(sl, const node_t *, node) {
     int is_exit = 0, is_guard = 0, is_dir = 0, this_bw = 0;
     double weight = 1;
+    double weight_without_guard_flag = 0; /* Used for guardfraction */
+    double final_weight = 0;
     is_exit = node->is_exit && ! node->is_bad_exit;
     is_guard = node->is_possible_guard;
     is_dir = node_is_dir(node);
@@ -2080,8 +2122,10 @@ compute_weighted_bandwidths(const smartlist_t *sl,
 
     if (is_guard && is_exit) {
       weight = (is_dir ? Wdb*Wd : Wd);
+      weight_without_guard_flag = (is_dir ? Web*We : We);
     } else if (is_guard) {
       weight = (is_dir ? Wgb*Wg : Wg);
+      weight_without_guard_flag = (is_dir ? Wmb*Wm : Wm);
     } else if (is_exit) {
       weight = (is_dir ? Web*We : We);
     } else { // middle
@@ -2093,8 +2137,43 @@ compute_weighted_bandwidths(const smartlist_t *sl,
       this_bw = 0;
     if (weight < 0.0)
       weight = 0.0;
+    if (weight_without_guard_flag < 0.0)
+      weight_without_guard_flag = 0.0;
 
-    bandwidths[node_sl_idx].dbl = weight*this_bw + 0.5;
+    /* If guardfraction information is available in the consensus, we
+     * want to calculate this router's bandwidth according to its
+     * guardfraction. Quoting from proposal236:
+     *
+     *    Let Wpf denote the weight from the 'bandwidth-weights' line a
+     *    client would apply to N for position p if it had the guard
+     *    flag, Wpn the weight if it did not have the guard flag, and B the
+     *    measured bandwidth of N in the consensus.  Then instead of choosing
+     *    N for position p proportionally to Wpf*B or Wpn*B, clients should
+     *    choose N proportionally to F*Wpf*B + (1-F)*Wpn*B.
+     */
+    if (node->rs && node->rs->has_guardfraction && rule != WEIGHT_FOR_GUARD) {
+      /* XXX The assert should actually check for is_guard. However,
+       * that crashes dirauths because of #13297. This should be
+       * equivalent: */
+      tor_assert(node->rs->is_possible_guard);
+
+      guard_get_guardfraction_bandwidth(&guardfraction_bw,
+                                        this_bw,
+                                        node->rs->guardfraction_percentage);
+
+      /* Calculate final_weight = F*Wpf*B + (1-F)*Wpn*B */
+      final_weight =
+        guardfraction_bw.guard_bw * weight +
+        guardfraction_bw.non_guard_bw * weight_without_guard_flag;
+
+      log_debug(LD_GENERAL, "%s: Guardfraction weight %f instead of %f (%s)",
+                node->rs->nickname, final_weight, weight*this_bw,
+                bandwidth_weight_rule_to_string(rule));
+    } else { /* no guardfraction information. calculate the weight normally. */
+      final_weight = weight*this_bw;
+    }
+
+    bandwidths[node_sl_idx].dbl = final_weight + 0.5;
   } SMARTLIST_FOREACH_END(node);
 
   log_debug(LD_CIRC, "Generated weighted bandwidths for rule %s based "
@@ -2752,7 +2831,7 @@ routerlist_insert(routerlist_t *rl, routerinfo_t *ri)
  * corresponding router in rl-\>routers or rl-\>old_routers.  Return the status
  * of inserting <b>ei</b>.  Free <b>ei</b> if it isn't inserted. */
 MOCK_IMPL(STATIC was_router_added_t,
-extrainfo_insert,(routerlist_t *rl, extrainfo_t *ei))
+extrainfo_insert,(routerlist_t *rl, extrainfo_t *ei, int warn_if_incompatible))
 {
   was_router_added_t r;
   const char *compatibility_error_msg;
@@ -2761,6 +2840,7 @@ extrainfo_insert,(routerlist_t *rl, extrainfo_t *ei))
   signed_descriptor_t *sd =
     sdmap_get(rl->desc_by_eid_map, ei->cache_info.signed_descriptor_digest);
   extrainfo_t *ei_tmp;
+  const int severity = warn_if_incompatible ? LOG_WARN : LOG_INFO;
 
   {
     extrainfo_t *ei_generated = router_get_my_extrainfo();
@@ -2772,13 +2852,37 @@ extrainfo_insert,(routerlist_t *rl, extrainfo_t *ei))
     r = ROUTER_NOT_IN_CONSENSUS;
     goto done;
   }
+  if (! sd) {
+    /* The extrainfo router doesn't have a known routerdesc to attach it to.
+     * This just won't work. */;
+    static ratelim_t no_sd_ratelim = RATELIM_INIT(1800);
+    r = ROUTER_BAD_EI;
+    log_fn_ratelim(&no_sd_ratelim, severity, LD_BUG,
+                   "No entry found in extrainfo map.");
+    goto done;
+  }
+  if (tor_memneq(ei->cache_info.signed_descriptor_digest,
+                 sd->extra_info_digest, DIGEST_LEN)) {
+    static ratelim_t digest_mismatch_ratelim = RATELIM_INIT(1800);
+    /* The sd we got from the map doesn't match the digest we used to look
+     * it up. This makes no sense. */
+    r = ROUTER_BAD_EI;
+    log_fn_ratelim(&digest_mismatch_ratelim, severity, LD_BUG,
+                     "Mismatch in digest in extrainfo map.");
+    goto done;
+  }
   if (routerinfo_incompatible_with_extrainfo(ri, ei, sd,
                                              &compatibility_error_msg)) {
+    char d1[HEX_DIGEST_LEN+1], d2[HEX_DIGEST_LEN+1];
     r = (ri->cache_info.extrainfo_is_bogus) ?
       ROUTER_BAD_EI : ROUTER_NOT_IN_CONSENSUS;
 
-    log_warn(LD_DIR,"router info incompatible with extra info (reason: %s)",
-             compatibility_error_msg);
+    base16_encode(d1, sizeof(d1), ri->cache_info.identity_digest, DIGEST_LEN);
+    base16_encode(d2, sizeof(d2), ei->cache_info.identity_digest, DIGEST_LEN);
+
+    log_fn(severity,LD_DIR,
+           "router info incompatible with extra info (ri id: %s, ei id %s, "
+           "reason: %s)", d1, d2, compatibility_error_msg);
 
     goto done;
   }
@@ -3324,7 +3428,7 @@ router_add_extrainfo_to_routerlist(extrainfo_t *ei, const char **msg,
   if (msg) *msg = NULL;
   /*XXXX023 Do something with msg */
 
-  inserted = extrainfo_insert(router_get_routerlist(), ei);
+  inserted = extrainfo_insert(router_get_routerlist(), ei, !from_cache);
 
   if (WRA_WAS_ADDED(inserted) && !from_cache)
     signed_desc_append_to_journal(&ei->cache_info,
@@ -4185,51 +4289,57 @@ list_pending_fpsk_downloads(fp_pair_map_t *result)
  * range.)  If <b>source</b> is given, download from <b>source</b>;
  * otherwise, download from an appropriate random directory server.
  */
-static void
-initiate_descriptor_downloads(const routerstatus_t *source,
-                              int purpose,
-                              smartlist_t *digests,
-                              int lo, int hi, int pds_flags)
+MOCK_IMPL(STATIC void, initiate_descriptor_downloads,
+          (const routerstatus_t *source, int purpose, smartlist_t *digests,
+           int lo, int hi, int pds_flags))
 {
-  int i, n = hi-lo;
   char *resource, *cp;
-  size_t r_len;
-
-  int digest_len = DIGEST_LEN, enc_digest_len = HEX_DIGEST_LEN;
-  char sep = '+';
-  int b64_256 = 0;
+  int digest_len, enc_digest_len;
+  const char *sep;
+  int b64_256;
+  smartlist_t *tmp;
 
   if (purpose == DIR_PURPOSE_FETCH_MICRODESC) {
     /* Microdescriptors are downloaded by "-"-separated base64-encoded
      * 256-bit digests. */
     digest_len = DIGEST256_LEN;
-    enc_digest_len = BASE64_DIGEST256_LEN;
-    sep = '-';
+    enc_digest_len = BASE64_DIGEST256_LEN + 1;
+    sep = "-";
     b64_256 = 1;
+  } else {
+    digest_len = DIGEST_LEN;
+    enc_digest_len = HEX_DIGEST_LEN + 1;
+    sep = "+";
+    b64_256 = 0;
   }
 
-  if (n <= 0)
-    return;
   if (lo < 0)
     lo = 0;
   if (hi > smartlist_len(digests))
     hi = smartlist_len(digests);
 
-  r_len = 8 + (enc_digest_len+1)*n;
-  cp = resource = tor_malloc(r_len);
-  memcpy(cp, "d/", 2);
-  cp += 2;
-  for (i = lo; i < hi; ++i) {
+  if (hi-lo <= 0)
+    return;
+
+  tmp = smartlist_new();
+
+  for (; lo < hi; ++lo) {
+    cp = tor_malloc(enc_digest_len);
     if (b64_256) {
-      digest256_to_base64(cp, smartlist_get(digests, i));
+      digest256_to_base64(cp, smartlist_get(digests, lo));
     } else {
-      base16_encode(cp, r_len-(cp-resource),
-                    smartlist_get(digests,i), digest_len);
+      base16_encode(cp, enc_digest_len, smartlist_get(digests, lo),
+                    digest_len);
     }
-    cp += enc_digest_len;
-    *cp++ = sep;
+    smartlist_add(tmp, cp);
   }
-  memcpy(cp-1, ".z", 3);
+
+  cp = smartlist_join_strings(tmp, sep, 0, NULL);
+  tor_asprintf(&resource, "d/%s.z", cp);
+
+  SMARTLIST_FOREACH(tmp, char *, cp1, tor_free(cp1));
+  smartlist_free(tmp);
+  tor_free(cp);
 
   if (source) {
     /* We know which authority we want. */
@@ -4244,14 +4354,28 @@ initiate_descriptor_downloads(const routerstatus_t *source,
   tor_free(resource);
 }
 
-/** Max amount of hashes to download per request.
- * Since squid does not like URLs >= 4096 bytes we limit it to 96.
- *   4096 - strlen(http://255.255.255.255/tor/server/d/.z) == 4058
- *   4058/41 (40 for the hash and 1 for the + that separates them) => 98
- *   So use 96 because it's a nice number.
+/** Return the max number of hashes to put in a URL for a given request.
  */
-#define MAX_DL_PER_REQUEST 96
-#define MAX_MICRODESC_DL_PER_REQUEST 92
+static int
+max_dl_per_request(const or_options_t *options, int purpose)
+{
+  /* Since squid does not like URLs >= 4096 bytes we limit it to 96.
+   *   4096 - strlen(http://255.255.255.255/tor/server/d/.z) == 4058
+   *   4058/41 (40 for the hash and 1 for the + that separates them) => 98
+   *   So use 96 because it's a nice number.
+   */
+  int max = 96;
+  if (purpose == DIR_PURPOSE_FETCH_MICRODESC) {
+    max = 92;
+  }
+  /* If we're going to tunnel our connections, we can ask for a lot more
+   * in a request. */
+  if (!directory_fetches_from_authorities(options)) {
+    max = 500;
+  }
+  return max;
+}
+
 /** Don't split our requests so finely that we are requesting fewer than
  * this number per server. */
 #define MIN_DL_PER_REQUEST 4
@@ -4273,92 +4397,89 @@ launch_descriptor_downloads(int purpose,
                             smartlist_t *downloadable,
                             const routerstatus_t *source, time_t now)
 {
-  int should_delay = 0, n_downloadable;
   const or_options_t *options = get_options();
   const char *descname;
+  const int fetch_microdesc = (purpose == DIR_PURPOSE_FETCH_MICRODESC);
+  int n_downloadable = smartlist_len(downloadable);
 
-  tor_assert(purpose == DIR_PURPOSE_FETCH_SERVERDESC ||
-             purpose == DIR_PURPOSE_FETCH_MICRODESC);
+  int i, n_per_request, max_dl_per_req;
+  const char *req_plural = "", *rtr_plural = "";
+  int pds_flags = PDS_RETRY_IF_NO_SERVERS;
 
-  descname = (purpose == DIR_PURPOSE_FETCH_SERVERDESC) ?
-    "routerdesc" : "microdesc";
+  tor_assert(fetch_microdesc || purpose == DIR_PURPOSE_FETCH_SERVERDESC);
+  descname = fetch_microdesc ? "microdesc" : "routerdesc";
 
-  n_downloadable = smartlist_len(downloadable);
+  if (!n_downloadable)
+    return;
+
   if (!directory_fetches_dir_info_early(options)) {
     if (n_downloadable >= MAX_DL_TO_DELAY) {
       log_debug(LD_DIR,
                 "There are enough downloadable %ss to launch requests.",
                 descname);
-      should_delay = 0;
     } else {
-      should_delay = (last_descriptor_download_attempted +
-                      options->TestingClientMaxIntervalWithoutRequest) > now;
-      if (!should_delay && n_downloadable) {
-        if (last_descriptor_download_attempted) {
-          log_info(LD_DIR,
-                   "There are not many downloadable %ss, but we've "
-                   "been waiting long enough (%d seconds). Downloading.",
-                   descname,
-                   (int)(now-last_descriptor_download_attempted));
-        } else {
-          log_info(LD_DIR,
-                   "There are not many downloadable %ss, but we haven't "
-                   "tried downloading descriptors recently. Downloading.",
-                   descname);
-        }
+
+      /* should delay */
+      if ((last_descriptor_download_attempted +
+          options->TestingClientMaxIntervalWithoutRequest) > now)
+        return;
+
+      if (last_descriptor_download_attempted) {
+        log_info(LD_DIR,
+                 "There are not many downloadable %ss, but we've "
+                 "been waiting long enough (%d seconds). Downloading.",
+                 descname,
+                 (int)(now-last_descriptor_download_attempted));
+      } else {
+        log_info(LD_DIR,
+                 "There are not many downloadable %ss, but we haven't "
+                 "tried downloading descriptors recently. Downloading.",
+                 descname);
       }
     }
   }
 
-  if (! should_delay && n_downloadable) {
-    int i, n_per_request;
-    const char *req_plural = "", *rtr_plural = "";
-    int pds_flags = PDS_RETRY_IF_NO_SERVERS;
-    if (! authdir_mode_any_nonhidserv(options)) {
-      /* If we wind up going to the authorities, we want to only open one
-       * connection to each authority at a time, so that we don't overload
-       * them.  We do this by setting PDS_NO_EXISTING_SERVERDESC_FETCH
-       * regardless of whether we're a cache or not; it gets ignored if we're
-       * not calling router_pick_trusteddirserver.
-       *
-       * Setting this flag can make initiate_descriptor_downloads() ignore
-       * requests.  We need to make sure that we do in fact call
-       * update_router_descriptor_downloads() later on, once the connections
-       * have succeeded or failed.
-       */
-      pds_flags |= (purpose == DIR_PURPOSE_FETCH_MICRODESC) ?
-        PDS_NO_EXISTING_MICRODESC_FETCH :
-        PDS_NO_EXISTING_SERVERDESC_FETCH;
-    }
-
-    n_per_request = CEIL_DIV(n_downloadable, MIN_REQUESTS);
-    if (purpose == DIR_PURPOSE_FETCH_MICRODESC) {
-      if (n_per_request > MAX_MICRODESC_DL_PER_REQUEST)
-        n_per_request = MAX_MICRODESC_DL_PER_REQUEST;
-    } else {
-      if (n_per_request > MAX_DL_PER_REQUEST)
-        n_per_request = MAX_DL_PER_REQUEST;
-    }
-    if (n_per_request < MIN_DL_PER_REQUEST)
-      n_per_request = MIN_DL_PER_REQUEST;
-
-    if (n_downloadable > n_per_request)
-      req_plural = rtr_plural = "s";
-    else if (n_downloadable > 1)
-      rtr_plural = "s";
-
-    log_info(LD_DIR,
-             "Launching %d request%s for %d %s%s, %d at a time",
-             CEIL_DIV(n_downloadable, n_per_request), req_plural,
-             n_downloadable, descname, rtr_plural, n_per_request);
-    smartlist_sort_digests(downloadable);
-    for (i=0; i < n_downloadable; i += n_per_request) {
-      initiate_descriptor_downloads(source, purpose,
-                                    downloadable, i, i+n_per_request,
-                                    pds_flags);
-    }
-    last_descriptor_download_attempted = now;
+  if (!authdir_mode_any_nonhidserv(options)) {
+    /* If we wind up going to the authorities, we want to only open one
+     * connection to each authority at a time, so that we don't overload
+     * them.  We do this by setting PDS_NO_EXISTING_SERVERDESC_FETCH
+     * regardless of whether we're a cache or not.
+     *
+     * Setting this flag can make initiate_descriptor_downloads() ignore
+     * requests.  We need to make sure that we do in fact call
+     * update_router_descriptor_downloads() later on, once the connections
+     * have succeeded or failed.
+     */
+    pds_flags |= fetch_microdesc ?
+      PDS_NO_EXISTING_MICRODESC_FETCH :
+      PDS_NO_EXISTING_SERVERDESC_FETCH;
   }
+
+  n_per_request = CEIL_DIV(n_downloadable, MIN_REQUESTS);
+  max_dl_per_req = max_dl_per_request(options, purpose);
+
+  if (n_per_request > max_dl_per_req)
+    n_per_request = max_dl_per_req;
+
+  if (n_per_request < MIN_DL_PER_REQUEST)
+    n_per_request = MIN_DL_PER_REQUEST;
+
+  if (n_downloadable > n_per_request)
+    req_plural = rtr_plural = "s";
+  else if (n_downloadable > 1)
+    rtr_plural = "s";
+
+  log_info(LD_DIR,
+           "Launching %d request%s for %d %s%s, %d at a time",
+           CEIL_DIV(n_downloadable, n_per_request), req_plural,
+           n_downloadable, descname, rtr_plural, n_per_request);
+  smartlist_sort_digests(downloadable);
+  for (i=0; i < n_downloadable; i += n_per_request) {
+    initiate_descriptor_downloads(source, purpose,
+                                  downloadable, i, i+n_per_request,
+                                  pds_flags);
+  }
+  last_descriptor_download_attempted = now;
 }
 
 /** For any descriptor that we want that's currently listed in
@@ -4538,8 +4659,8 @@ update_extrainfo_downloads(time_t now)
   routerlist_t *rl;
   smartlist_t *wanted;
   digestmap_t *pending;
-  int old_routers, i;
-  int n_no_ei = 0, n_pending = 0, n_have = 0, n_delay = 0;
+  int old_routers, i, max_dl_per_req;
+  int n_no_ei = 0, n_pending = 0, n_have = 0, n_delay = 0, n_bogus[2] = {0,0};
   if (! options->DownloadExtraInfo)
     return;
   if (should_delay_dir_fetches(options, NULL))
@@ -4584,19 +4705,54 @@ update_extrainfo_downloads(time_t now)
         ++n_pending;
         continue;
       }
+
+      const signed_descriptor_t *sd2 = router_get_by_extrainfo_digest(d);
+      if (sd2 != sd) {
+        if (sd2 != NULL) {
+          char d1[HEX_DIGEST_LEN+1], d2[HEX_DIGEST_LEN+1];
+          char d3[HEX_DIGEST_LEN+1], d4[HEX_DIGEST_LEN+1];
+          base16_encode(d1, sizeof(d1), sd->identity_digest, DIGEST_LEN);
+          base16_encode(d2, sizeof(d2), sd2->identity_digest, DIGEST_LEN);
+          base16_encode(d3, sizeof(d3), d, DIGEST_LEN);
+          base16_encode(d4, sizeof(d3), sd2->extra_info_digest, DIGEST_LEN);
+
+          log_info(LD_DIR, "Found an entry in %s with mismatched "
+                   "router_get_by_extrainfo_digest() value. This has ID %s "
+                   "but the entry in the map has ID %s. This has EI digest "
+                   "%s and the entry in the map has EI digest %s.",
+                   old_routers?"old_routers":"routers",
+                   d1, d2, d3, d4);
+        } else {
+          char d1[HEX_DIGEST_LEN+1], d2[HEX_DIGEST_LEN+1];
+          base16_encode(d1, sizeof(d1), sd->identity_digest, DIGEST_LEN);
+          base16_encode(d2, sizeof(d2), d, DIGEST_LEN);
+
+          log_info(LD_DIR, "Found an entry in %s with NULL "
+                   "router_get_by_extrainfo_digest() value. This has ID %s "
+                   "and EI digest %s.",
+                   old_routers?"old_routers":"routers",
+                   d1, d2);
+        }
+        ++n_bogus[old_routers];
+        continue;
+      }
       smartlist_add(wanted, d);
     }
   }
   digestmap_free(pending, NULL);
 
   log_info(LD_DIR, "Extrainfo download status: %d router with no ei, %d "
-           "with present ei, %d delaying, %d pending, %d downloadable.",
-           n_no_ei, n_have, n_delay, n_pending, smartlist_len(wanted));
+           "with present ei, %d delaying, %d pending, %d downloadable, %d "
+           "bogus in routers, %d bogus in old_routers",
+           n_no_ei, n_have, n_delay, n_pending, smartlist_len(wanted),
+           n_bogus[0], n_bogus[1]);
 
   smartlist_shuffle(wanted);
-  for (i = 0; i < smartlist_len(wanted); i += MAX_DL_PER_REQUEST) {
+
+  max_dl_per_req = max_dl_per_request(options, DIR_PURPOSE_FETCH_EXTRAINFO);
+  for (i = 0; i < smartlist_len(wanted); i += max_dl_per_req) {
     initiate_descriptor_downloads(NULL, DIR_PURPOSE_FETCH_EXTRAINFO,
-                                  wanted, i, i + MAX_DL_PER_REQUEST,
+                                  wanted, i, i+max_dl_per_req,
                 PDS_RETRY_IF_NO_SERVERS|PDS_NO_EXISTING_SERVERDESC_FETCH);
   }
 

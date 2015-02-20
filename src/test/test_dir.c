@@ -1,6 +1,6 @@
 /* Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2014, The Tor Project, Inc. */
+ * Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #include "orconfig.h"
@@ -714,9 +714,10 @@ mock_get_by_ei_desc_digest(const char *d)
 
 static smartlist_t *mock_ei_insert_list = NULL;
 static was_router_added_t
-mock_ei_insert(routerlist_t *rl, extrainfo_t *ei)
+mock_ei_insert(routerlist_t *rl, extrainfo_t *ei, int warn_if_incompatible)
 {
   (void) rl;
+  (void) warn_if_incompatible;
   smartlist_add(mock_ei_insert_list, ei);
   return ROUTER_ADDED_SUCCESSFULLY;
 }
@@ -844,6 +845,42 @@ test_dir_versions(void *arg)
   tt_int_op(4,OP_EQ, ver1.patchlevel);
   tt_int_op(VER_RELEASE,OP_EQ, ver1.status);
   tt_str_op("",OP_EQ, ver1.status_tag);
+
+  tt_int_op(0, OP_EQ, tor_version_parse("10.1", &ver1));
+  tt_int_op(10, OP_EQ, ver1.major);
+  tt_int_op(1, OP_EQ, ver1.minor);
+  tt_int_op(0, OP_EQ, ver1.micro);
+  tt_int_op(0, OP_EQ, ver1.patchlevel);
+  tt_int_op(VER_RELEASE, OP_EQ, ver1.status);
+  tt_str_op("", OP_EQ, ver1.status_tag);
+  tt_int_op(0, OP_EQ, tor_version_parse("5.99.999", &ver1));
+  tt_int_op(5, OP_EQ, ver1.major);
+  tt_int_op(99, OP_EQ, ver1.minor);
+  tt_int_op(999, OP_EQ, ver1.micro);
+  tt_int_op(0, OP_EQ, ver1.patchlevel);
+  tt_int_op(VER_RELEASE, OP_EQ, ver1.status);
+  tt_str_op("", OP_EQ, ver1.status_tag);
+  tt_int_op(0, OP_EQ, tor_version_parse("10.1-alpha", &ver1));
+  tt_int_op(10, OP_EQ, ver1.major);
+  tt_int_op(1, OP_EQ, ver1.minor);
+  tt_int_op(0, OP_EQ, ver1.micro);
+  tt_int_op(0, OP_EQ, ver1.patchlevel);
+  tt_int_op(VER_RELEASE, OP_EQ, ver1.status);
+  tt_str_op("alpha", OP_EQ, ver1.status_tag);
+  tt_int_op(0, OP_EQ, tor_version_parse("2.1.700-alpha", &ver1));
+  tt_int_op(2, OP_EQ, ver1.major);
+  tt_int_op(1, OP_EQ, ver1.minor);
+  tt_int_op(700, OP_EQ, ver1.micro);
+  tt_int_op(0, OP_EQ, ver1.patchlevel);
+  tt_int_op(VER_RELEASE, OP_EQ, ver1.status);
+  tt_str_op("alpha", OP_EQ, ver1.status_tag);
+  tt_int_op(0, OP_EQ, tor_version_parse("1.6.8-alpha-dev", &ver1));
+  tt_int_op(1, OP_EQ, ver1.major);
+  tt_int_op(6, OP_EQ, ver1.minor);
+  tt_int_op(8, OP_EQ, ver1.micro);
+  tt_int_op(0, OP_EQ, ver1.patchlevel);
+  tt_int_op(VER_RELEASE, OP_EQ, ver1.status);
+  tt_str_op("alpha-dev", OP_EQ, ver1.status_tag);
 
 #define tt_versionstatus_op(vs1, op, vs2)                               \
   tt_assert_test_type(vs1,vs2,#vs1" "#op" "#vs2,version_status_t,       \
@@ -2893,6 +2930,175 @@ test_dir_http_handling(void *args)
   tor_free(url);
 }
 
+static void
+test_dir_purpose_needs_anonymity(void *arg)
+{
+  (void)arg;
+  tt_int_op(1, ==, purpose_needs_anonymity(0, ROUTER_PURPOSE_BRIDGE));
+  tt_int_op(1, ==, purpose_needs_anonymity(0, ROUTER_PURPOSE_GENERAL));
+  tt_int_op(0, ==, purpose_needs_anonymity(DIR_PURPOSE_FETCH_MICRODESC,
+                                            ROUTER_PURPOSE_GENERAL));
+ done: ;
+}
+
+static void
+test_dir_fetch_type(void *arg)
+{
+  (void)arg;
+  tt_assert(dir_fetch_type(DIR_PURPOSE_FETCH_MICRODESC, ROUTER_PURPOSE_GENERAL,
+                           NULL) == MICRODESC_DIRINFO);
+  tt_assert(dir_fetch_type(DIR_PURPOSE_FETCH_SERVERDESC, ROUTER_PURPOSE_BRIDGE,
+                           NULL) == BRIDGE_DIRINFO);
+  tt_assert(dir_fetch_type(DIR_PURPOSE_FETCH_CONSENSUS, ROUTER_PURPOSE_GENERAL,
+                           "microdesc") == (V3_DIRINFO | MICRODESC_DIRINFO));
+ done: ;
+}
+
+static void
+test_dir_packages(void *arg)
+{
+  smartlist_t *votes = smartlist_new();
+  char *res = NULL;
+  (void)arg;
+
+#define BAD(s) \
+  tt_int_op(0, ==, validate_recommended_package_line(s));
+#define GOOD(s) \
+  tt_int_op(1, ==, validate_recommended_package_line(s));
+  GOOD("tor 0.2.6.3-alpha "
+       "http://torproject.example.com/dist/tor-0.2.6.3-alpha.tar.gz "
+       "sha256=sssdlkfjdsklfjdskfljasdklfj");
+  GOOD("tor 0.2.6.3-alpha "
+       "http://torproject.example.com/dist/tor-0.2.6.3-alpha.tar.gz "
+       "sha256=sssdlkfjdsklfjdskfljasdklfj blake2b=fred");
+  BAD("tor 0.2.6.3-alpha "
+       "http://torproject.example.com/dist/tor-0.2.6.3-alpha.tar.gz "
+       "sha256=sssdlkfjdsklfjdskfljasdklfj=");
+  BAD("tor 0.2.6.3-alpha "
+       "http://torproject.example.com/dist/tor-0.2.6.3-alpha.tar.gz "
+       "sha256=sssdlkfjdsklfjdskfljasdklfj blake2b");
+  BAD("tor 0.2.6.3-alpha "
+       "http://torproject.example.com/dist/tor-0.2.6.3-alpha.tar.gz ");
+  BAD("tor 0.2.6.3-alpha "
+       "http://torproject.example.com/dist/tor-0.2.6.3-alpha.tar.gz");
+  BAD("tor 0.2.6.3-alpha ");
+  BAD("tor 0.2.6.3-alpha");
+  BAD("tor ");
+  BAD("tor");
+  BAD("");
+  BAD("=foobar sha256="
+      "3c179f46ca77069a6a0bac70212a9b3b838b2f66129cb52d568837fc79d8fcc7");
+  BAD("= = sha256="
+      "3c179f46ca77069a6a0bac70212a9b3b838b2f66129cb52d568837fc79d8fcc7");
+
+  BAD("sha512= sha256="
+      "3c179f46ca77069a6a0bac70212a9b3b838b2f66129cb52d568837fc79d8fcc7");
+
+  smartlist_add(votes, tor_malloc_zero(sizeof(networkstatus_t)));
+  smartlist_add(votes, tor_malloc_zero(sizeof(networkstatus_t)));
+  smartlist_add(votes, tor_malloc_zero(sizeof(networkstatus_t)));
+  smartlist_add(votes, tor_malloc_zero(sizeof(networkstatus_t)));
+  smartlist_add(votes, tor_malloc_zero(sizeof(networkstatus_t)));
+  smartlist_add(votes, tor_malloc_zero(sizeof(networkstatus_t)));
+  SMARTLIST_FOREACH(votes, networkstatus_t *, ns,
+                    ns->package_lines = smartlist_new());
+
+#define ADD(i, s)                                                       \
+  smartlist_add(((networkstatus_t*)smartlist_get(votes, (i)))->package_lines, \
+                (void*)(s));
+
+  /* Only one vote for this one. */
+  ADD(4, "cisco 99z http://foobar.example.com/ sha256=blahblah");
+
+  /* Only two matching entries for this one, but 3 voters */
+  ADD(1, "mystic 99y http://barfoo.example.com/ sha256=blahblah");
+  ADD(3, "mystic 99y http://foobar.example.com/ sha256=blahblah");
+  ADD(4, "mystic 99y http://foobar.example.com/ sha256=blahblah");
+
+  /* Only two matching entries for this one, but at least 4 voters */
+  ADD(1, "mystic 99p http://barfoo.example.com/ sha256=ggggggg");
+  ADD(3, "mystic 99p http://foobar.example.com/ sha256=blahblah");
+  ADD(4, "mystic 99p http://foobar.example.com/ sha256=blahblah");
+  ADD(5, "mystic 99p http://foobar.example.com/ sha256=ggggggg");
+
+  /* This one has only invalid votes. */
+  ADD(0, "haffenreffer 1.2 http://foobar.example.com/ sha256");
+  ADD(1, "haffenreffer 1.2 http://foobar.example.com/ ");
+  ADD(2, "haffenreffer 1.2 ");
+  ADD(3, "haffenreffer ");
+  ADD(4, "haffenreffer");
+
+  /* Three matching votes for this; it should actually go in! */
+  ADD(2, "element 0.66.1 http://quux.example.com/ sha256=abcdef");
+  ADD(3, "element 0.66.1 http://quux.example.com/ sha256=abcdef");
+  ADD(4, "element 0.66.1 http://quux.example.com/ sha256=abcdef");
+  ADD(1, "element 0.66.1 http://quum.example.com/ sha256=abcdef");
+  ADD(0, "element 0.66.1 http://quux.example.com/ sha256=abcde");
+
+  /* Three votes for A, three votes for B */
+  ADD(0, "clownshoes 22alpha1 http://quumble.example.com/ blake2=foob");
+  ADD(1, "clownshoes 22alpha1 http://quumble.example.com/ blake2=foob");
+  ADD(2, "clownshoes 22alpha1 http://quumble.example.com/ blake2=foob");
+  ADD(3, "clownshoes 22alpha1 http://quumble.example.com/ blake2=fooz");
+  ADD(4, "clownshoes 22alpha1 http://quumble.example.com/ blake2=fooz");
+  ADD(5, "clownshoes 22alpha1 http://quumble.example.com/ blake2=fooz");
+
+  /* Three votes for A, two votes for B */
+  ADD(1, "clownshoes 22alpha3 http://quumble.example.com/ blake2=foob");
+  ADD(2, "clownshoes 22alpha3 http://quumble.example.com/ blake2=foob");
+  ADD(3, "clownshoes 22alpha3 http://quumble.example.com/ blake2=fooz");
+  ADD(4, "clownshoes 22alpha3 http://quumble.example.com/ blake2=fooz");
+  ADD(5, "clownshoes 22alpha3 http://quumble.example.com/ blake2=fooz");
+
+  /* Four votes for A, two for B. */
+  ADD(0, "clownshoes 22alpha4 http://quumble.example.com/ blake2=foob");
+  ADD(1, "clownshoes 22alpha4 http://quumble.example.com/ blake2=foob");
+  ADD(2, "clownshoes 22alpha4 http://quumble.example.cam/ blake2=fooa");
+  ADD(3, "clownshoes 22alpha4 http://quumble.example.cam/ blake2=fooa");
+  ADD(4, "clownshoes 22alpha4 http://quumble.example.cam/ blake2=fooa");
+  ADD(5, "clownshoes 22alpha4 http://quumble.example.cam/ blake2=fooa");
+
+  /* Five votes for A ... all from the same guy.  Three for B. */
+  ADD(0, "cbc 99.1.11.1.1 http://example.com/cbc/ cubehash=ahooy sha512=m");
+  ADD(1, "cbc 99.1.11.1.1 http://example.com/cbc/ cubehash=ahooy sha512=m");
+  ADD(3, "cbc 99.1.11.1.1 http://example.com/cbc/ cubehash=ahooy sha512=m");
+  ADD(2, "cbc 99.1.11.1.1 http://example.com/ cubehash=ahooy");
+  ADD(2, "cbc 99.1.11.1.1 http://example.com/ cubehash=ahooy");
+  ADD(2, "cbc 99.1.11.1.1 http://example.com/ cubehash=ahooy");
+  ADD(2, "cbc 99.1.11.1.1 http://example.com/ cubehash=ahooy");
+  ADD(2, "cbc 99.1.11.1.1 http://example.com/ cubehash=ahooy");
+
+  /* As above but new replaces old: no two match. */
+  ADD(0, "cbc 99.1.11.1.2 http://example.com/cbc/ cubehash=ahooy sha512=m");
+  ADD(1, "cbc 99.1.11.1.2 http://example.com/cbc/ cubehash=ahooy sha512=m");
+  ADD(1, "cbc 99.1.11.1.2 http://example.com/cbc/x cubehash=ahooy sha512=m");
+  ADD(2, "cbc 99.1.11.1.2 http://example.com/cbc/ cubehash=ahooy sha512=m");
+  ADD(2, "cbc 99.1.11.1.2 http://example.com/ cubehash=ahooy");
+  ADD(2, "cbc 99.1.11.1.2 http://example.com/ cubehash=ahooy");
+  ADD(2, "cbc 99.1.11.1.2 http://example.com/ cubehash=ahooy");
+  ADD(2, "cbc 99.1.11.1.2 http://example.com/ cubehash=ahooy");
+  ADD(2, "cbc 99.1.11.1.2 http://example.com/ cubehash=ahooy");
+
+  res = compute_consensus_package_lines(votes);
+  tt_assert(res);
+  tt_str_op(res, ==,
+    "package cbc 99.1.11.1.1 http://example.com/cbc/ cubehash=ahooy sha512=m\n"
+    "package clownshoes 22alpha3 http://quumble.example.com/ blake2=fooz\n"
+    "package clownshoes 22alpha4 http://quumble.example.cam/ blake2=fooa\n"
+    "package element 0.66.1 http://quux.example.com/ sha256=abcdef\n"
+    "package mystic 99y http://foobar.example.com/ sha256=blahblah\n"
+            );
+
+#undef ADD
+#undef BAD
+#undef GOOD
+ done:
+  SMARTLIST_FOREACH(votes, networkstatus_t *, ns,
+                    { smartlist_free(ns->package_lines); tor_free(ns); });
+  smartlist_free(votes);
+  tor_free(res);
+}
+
 #define DIR_LEGACY(name)                                                   \
   { #name, test_dir_ ## name , TT_FORK, NULL, NULL }
 
@@ -2920,6 +3126,9 @@ struct testcase_t dir_tests[] = {
   DIR_LEGACY(clip_unmeasured_bw_kb_alt),
   DIR(fmt_control_ns, 0),
   DIR(http_handling, 0),
+  DIR(purpose_needs_anonymity, 0),
+  DIR(fetch_type, 0),
+  DIR(packages, 0),
   END_OF_TESTCASES
 };
 

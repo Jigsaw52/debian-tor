@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2014, The Tor Project, Inc. */
+ * Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -76,6 +76,12 @@
 #endif
 
 #ifdef HAVE_SYSTEMD
+#   if defined(__COVERITY__) && !defined(__INCLUDE_LEVEL__)
+/* Systemd's use of gcc's __INCLUDE_LEVEL__ extension macro appears to confuse
+ * Coverity. Here's a kludge to unconfuse it.
+ */
+#   define __INCLUDE_LEVEL__ 2
+#   endif
 #include <systemd/sd-daemon.h>
 #endif
 
@@ -384,6 +390,10 @@ connection_remove(connection_t *conn)
   log_debug(LD_NET,"removing socket %d (type %s), n_conns now %d",
             (int)conn->s, conn_type_to_string(conn->type),
             smartlist_len(connection_array));
+
+  if (conn->type == CONN_TYPE_AP && conn->socket_family == AF_UNIX) {
+    log_info(LD_NET, "Closing SOCKS SocksSocket connection");
+  }
 
   control_event_conn_bandwidth(conn);
 
@@ -1213,7 +1223,6 @@ run_scheduled_events(time_t now)
   static time_t time_to_check_v3_certificate = 0;
   static time_t time_to_check_listeners = 0;
   static time_t time_to_download_networkstatus = 0;
-  static time_t time_to_shrink_memory = 0;
   static time_t time_to_try_getting_descriptors = 0;
   static time_t time_to_reset_descriptor_failures = 0;
   static time_t time_to_add_entropy = 0;
@@ -1261,7 +1270,7 @@ run_scheduled_events(time_t now)
       get_onion_key_set_at()+MIN_ONION_KEY_LIFETIME < now) {
     log_info(LD_GENERAL,"Rotating onion key.");
     rotate_onion_key();
-    cpuworkers_rotate();
+    cpuworkers_rotate_keyinfo();
     if (router_rebuild_descriptor(1)<0) {
       log_info(LD_CONFIG, "Couldn't rebuild router descriptor");
     }
@@ -1437,7 +1446,7 @@ run_scheduled_events(time_t now)
   if (time_to_clean_caches < now) {
     rep_history_clean(now - options->RephistTrackTime);
     rend_cache_clean(now);
-    rend_cache_clean_v2_descs_as_dir(now);
+    rend_cache_clean_v2_descs_as_dir(now, 0);
     microdesc_cache_rebuild(NULL, 0);
 #define CLEAN_CACHES_INTERVAL (30*60)
     time_to_clean_caches = now + CLEAN_CACHES_INTERVAL;
@@ -1562,22 +1571,6 @@ run_scheduled_events(time_t now)
   connection_or_set_bad_connections(NULL, 0);
   for (i=0;i<smartlist_len(connection_array);i++) {
     run_connection_housekeeping(i, now);
-  }
-  if (time_to_shrink_memory < now) {
-    SMARTLIST_FOREACH(connection_array, connection_t *, conn, {
-        if (conn->outbuf)
-          buf_shrink(conn->outbuf);
-        if (conn->inbuf)
-          buf_shrink(conn->inbuf);
-      });
-#ifdef ENABLE_MEMPOOL
-    clean_cell_pool();
-#endif /* ENABLE_MEMPOOL */
-    buf_shrink_freelists(0);
-/** How often do we check buffers and pools for empty space that can be
- * deallocated? */
-#define MEM_SHRINK_INTERVAL (60)
-    time_to_shrink_memory = now + MEM_SHRINK_INTERVAL;
   }
 
   /* 6. And remove any marked circuits... */
@@ -1770,7 +1763,9 @@ static periodic_timer_t *systemd_watchdog_timer = NULL;
 static void
 systemd_watchdog_callback(periodic_timer_t *timer, void *arg)
 {
-  sd_notify(1, "WATCHDOG=1");
+  (void)timer;
+  (void)arg;
+  sd_notify(0, "WATCHDOG=1");
 }
 #endif
 
@@ -1948,9 +1943,9 @@ do_hup(void)
    * force a retry there. */
 
   if (server_mode(options)) {
-    /* Restart cpuworker and dnsworker processes, so they get up-to-date
+    /* Update cpuworker and dnsworker processes, so they get up-to-date
      * configuration options. */
-    cpuworkers_rotate();
+    cpuworkers_rotate_keyinfo();
     dns_reset();
   }
   return 0;
@@ -2081,7 +2076,7 @@ do_main_loop(void)
 #endif
 
 #ifdef HAVE_SYSTEMD
-  log_notice(LD_GENERAL, "Signaling readyness to systemd");
+  log_notice(LD_GENERAL, "Signaling readiness to systemd");
   sd_notify(0, "READY=1");
 #endif
 
@@ -2163,6 +2158,9 @@ process_signal(uintptr_t sig)
         tor_cleanup();
         exit(0);
       }
+#ifdef HAVE_SYSTEMD
+      sd_notify(0, "STOPPING=1");
+#endif
       hibernate_begin_shutdown();
       break;
 #ifdef SIGPIPE
@@ -2182,11 +2180,17 @@ process_signal(uintptr_t sig)
       control_event_signal(sig);
       break;
     case SIGHUP:
+#ifdef HAVE_SYSTEMD
+      sd_notify(0, "RELOADING=1");
+#endif
       if (do_hup() < 0) {
         log_warn(LD_CONFIG,"Restart failed (config error?). Exiting.");
         tor_cleanup();
         exit(1);
       }
+#ifdef HAVE_SYSTEMD
+      sd_notify(0, "READY=1");
+#endif
       control_event_signal(sig);
       break;
 #ifdef SIGCHLD
@@ -2239,7 +2243,6 @@ dumpmemusage(int severity)
   dump_routerlist_mem_usage(severity);
   dump_cell_pool_usage(severity);
   dump_dns_mem_usage(severity);
-  buf_dump_freelist_sizes(severity);
   tor_log_mallinfo(severity);
 }
 
@@ -2631,7 +2634,6 @@ tor_free_all(int postfork)
   channel_free_all();
   connection_free_all();
   scheduler_free_all();
-  buf_shrink_freelists(1);
   memarea_clear_freelist();
   nodelist_free_all();
   microdesc_free_all();

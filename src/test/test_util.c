@@ -1,20 +1,16 @@
 /* Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2014, The Tor Project, Inc. */
+ * Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #include "orconfig.h"
 #define COMPAT_PRIVATE
 #define CONTROL_PRIVATE
-#define MEMPOOL_PRIVATE
 #define UTIL_PRIVATE
 #include "or.h"
 #include "config.h"
 #include "control.h"
 #include "test.h"
-#ifdef ENABLE_MEMPOOLS
-#include "mempool.h"
-#endif /* ENABLE_MEMPOOLS */
 #include "memarea.h"
 #include "util_process.h"
 
@@ -589,15 +585,17 @@ test_util_time(void *arg)
   i = parse_iso_time("2004-8-4 0:48:22", &t_res);
   tt_int_op(0,OP_EQ, i);
   tt_int_op(t_res,OP_EQ, (time_t)1091580502UL);
-  tt_int_op(-1,OP_EQ, parse_iso_time("2004-08-zz 99-99x99 GMT", &t_res));
-  tt_int_op(-1,OP_EQ, parse_iso_time("2011-03-32 00:00:00 GMT", &t_res));
-  tt_int_op(-1,OP_EQ, parse_iso_time("2011-03-30 24:00:00 GMT", &t_res));
-  tt_int_op(-1,OP_EQ, parse_iso_time("2011-03-30 23:60:00 GMT", &t_res));
-  tt_int_op(-1,OP_EQ, parse_iso_time("2011-03-30 23:59:62 GMT", &t_res));
-  tt_int_op(-1,OP_EQ, parse_iso_time("1969-03-30 23:59:59 GMT", &t_res));
-  tt_int_op(-1,OP_EQ, parse_iso_time("2011-00-30 23:59:59 GMT", &t_res));
+  tt_int_op(-1,OP_EQ, parse_iso_time("2004-08-zz 99-99x99", &t_res));
+  tt_int_op(-1,OP_EQ, parse_iso_time("2011-03-32 00:00:00", &t_res));
+  tt_int_op(-1,OP_EQ, parse_iso_time("2011-03-30 24:00:00", &t_res));
+  tt_int_op(-1,OP_EQ, parse_iso_time("2011-03-30 23:60:00", &t_res));
+  tt_int_op(-1,OP_EQ, parse_iso_time("2011-03-30 23:59:62", &t_res));
+  tt_int_op(-1,OP_EQ, parse_iso_time("1969-03-30 23:59:59", &t_res));
+  tt_int_op(-1,OP_EQ, parse_iso_time("2011-00-30 23:59:59", &t_res));
   tt_int_op(-1,OP_EQ, parse_iso_time("2147483647-08-29 14:00:00", &t_res));
   tt_int_op(-1,OP_EQ, parse_iso_time("2011-03-30 23:59", &t_res));
+  tt_int_op(-1,OP_EQ, parse_iso_time("2004-08-04 00:48:22.100", &t_res));
+  tt_int_op(-1,OP_EQ, parse_iso_time("2004-08-04 00:48:22XYZ", &t_res));
 
   /* Test tor_gettimeofday */
 
@@ -1605,142 +1603,6 @@ test_util_pow2(void *arg)
   ;
 }
 
-/** mutex for thread test to stop the threads hitting data at the same time. */
-static tor_mutex_t *thread_test_mutex_ = NULL;
-/** mutexes for the thread test to make sure that the threads have to
- * interleave somewhat. */
-static tor_mutex_t *thread_test_start1_ = NULL,
-                   *thread_test_start2_ = NULL;
-/** Shared strmap for the thread test. */
-static strmap_t *thread_test_strmap_ = NULL;
-/** The name of thread1 for the thread test */
-static char *thread1_name_ = NULL;
-/** The name of thread2 for the thread test */
-static char *thread2_name_ = NULL;
-
-static void thread_test_func_(void* _s) ATTR_NORETURN;
-
-/** How many iterations have the threads in the unit test run? */
-static int t1_count = 0, t2_count = 0;
-
-/** Helper function for threading unit tests: This function runs in a
- * subthread. It grabs its own mutex (start1 or start2) to make sure that it
- * should start, then it repeatedly alters _test_thread_strmap protected by
- * thread_test_mutex_. */
-static void
-thread_test_func_(void* _s)
-{
-  char *s = _s;
-  int i, *count;
-  tor_mutex_t *m;
-  char buf[64];
-  char **cp;
-  if (!strcmp(s, "thread 1")) {
-    m = thread_test_start1_;
-    cp = &thread1_name_;
-    count = &t1_count;
-  } else {
-    m = thread_test_start2_;
-    cp = &thread2_name_;
-    count = &t2_count;
-  }
-
-  tor_snprintf(buf, sizeof(buf), "%lu", tor_get_thread_id());
-  *cp = tor_strdup(buf);
-
-  tor_mutex_acquire(m);
-
-  for (i=0; i<10000; ++i) {
-    tor_mutex_acquire(thread_test_mutex_);
-    strmap_set(thread_test_strmap_, "last to run", *cp);
-    ++*count;
-    tor_mutex_release(thread_test_mutex_);
-  }
-  tor_mutex_acquire(thread_test_mutex_);
-  strmap_set(thread_test_strmap_, s, *cp);
-  tor_mutex_release(thread_test_mutex_);
-
-  tor_mutex_release(m);
-
-  spawn_exit();
-}
-
-/** Run unit tests for threading logic. */
-static void
-test_util_threads(void *arg)
-{
-  char *s1 = NULL, *s2 = NULL;
-  int done = 0, timedout = 0;
-  time_t started;
-#ifndef _WIN32
-  struct timeval tv;
-  tv.tv_sec=0;
-  tv.tv_usec=100*1000;
-#endif
-  (void)arg;
-  thread_test_mutex_ = tor_mutex_new();
-  thread_test_start1_ = tor_mutex_new();
-  thread_test_start2_ = tor_mutex_new();
-  thread_test_strmap_ = strmap_new();
-  s1 = tor_strdup("thread 1");
-  s2 = tor_strdup("thread 2");
-  tor_mutex_acquire(thread_test_start1_);
-  tor_mutex_acquire(thread_test_start2_);
-  spawn_func(thread_test_func_, s1);
-  spawn_func(thread_test_func_, s2);
-  tor_mutex_release(thread_test_start2_);
-  tor_mutex_release(thread_test_start1_);
-  started = time(NULL);
-  while (!done) {
-    tor_mutex_acquire(thread_test_mutex_);
-    strmap_assert_ok(thread_test_strmap_);
-    if (strmap_get(thread_test_strmap_, "thread 1") &&
-        strmap_get(thread_test_strmap_, "thread 2")) {
-      done = 1;
-    } else if (time(NULL) > started + 150) {
-      timedout = done = 1;
-    }
-    tor_mutex_release(thread_test_mutex_);
-#ifndef _WIN32
-    /* Prevent the main thread from starving the worker threads. */
-    select(0, NULL, NULL, NULL, &tv);
-#endif
-  }
-  tor_mutex_acquire(thread_test_start1_);
-  tor_mutex_release(thread_test_start1_);
-  tor_mutex_acquire(thread_test_start2_);
-  tor_mutex_release(thread_test_start2_);
-
-  tor_mutex_free(thread_test_mutex_);
-
-  if (timedout) {
-    printf("\nTimed out: %d %d", t1_count, t2_count);
-    tt_assert(strmap_get(thread_test_strmap_, "thread 1"));
-    tt_assert(strmap_get(thread_test_strmap_, "thread 2"));
-    tt_assert(!timedout);
-  }
-
-  /* different thread IDs. */
-  tt_assert(strcmp(strmap_get(thread_test_strmap_, "thread 1"),
-                     strmap_get(thread_test_strmap_, "thread 2")));
-  tt_assert(!strcmp(strmap_get(thread_test_strmap_, "thread 1"),
-                      strmap_get(thread_test_strmap_, "last to run")) ||
-              !strcmp(strmap_get(thread_test_strmap_, "thread 2"),
-                      strmap_get(thread_test_strmap_, "last to run")));
-
- done:
-  tor_free(s1);
-  tor_free(s2);
-  tor_free(thread1_name_);
-  tor_free(thread2_name_);
-  if (thread_test_strmap_)
-    strmap_free(thread_test_strmap_, NULL);
-  if (thread_test_start1_)
-    tor_mutex_free(thread_test_start1_);
-  if (thread_test_start2_)
-    tor_mutex_free(thread_test_start2_);
-}
-
 /** Run unit tests for compression functions */
 static void
 test_util_gzip(void *arg)
@@ -1820,7 +1682,7 @@ test_util_gzip(void *arg)
   tor_free(buf1);
   tor_free(buf2);
   tor_free(buf3);
-  state = tor_zlib_new(1, ZLIB_METHOD);
+  state = tor_zlib_new(1, ZLIB_METHOD, HIGH_COMPRESSION);
   tt_assert(state);
   cp1 = buf1 = tor_malloc(1024);
   len1 = 1024;
@@ -2778,69 +2640,6 @@ test_util_path_is_relative(void *arg)
   ;
 }
 
-#ifdef ENABLE_MEMPOOLS
-
-/** Run unittests for memory pool allocator */
-static void
-test_util_mempool(void *arg)
-{
-  mp_pool_t *pool = NULL;
-  smartlist_t *allocated = NULL;
-  int i;
-
-  (void)arg;
-  pool = mp_pool_new(1, 100);
-  tt_assert(pool);
-  tt_assert(pool->new_chunk_capacity >= 100);
-  tt_assert(pool->item_alloc_size >= sizeof(void*)+1);
-  mp_pool_destroy(pool);
-  pool = NULL;
-
-  pool = mp_pool_new(241, 2500);
-  tt_assert(pool);
-  tt_assert(pool->new_chunk_capacity >= 10);
-  tt_assert(pool->item_alloc_size >= sizeof(void*)+241);
-  tt_int_op(pool->item_alloc_size & 0x03,OP_EQ, 0);
-  tt_assert(pool->new_chunk_capacity < 60);
-
-  allocated = smartlist_new();
-  for (i = 0; i < 20000; ++i) {
-    if (smartlist_len(allocated) < 20 || crypto_rand_int(2)) {
-      void *m = mp_pool_get(pool);
-      memset(m, 0x09, 241);
-      smartlist_add(allocated, m);
-      //printf("%d: %p\n", i, m);
-      //mp_pool_assert_ok(pool);
-    } else {
-      int idx = crypto_rand_int(smartlist_len(allocated));
-      void *m = smartlist_get(allocated, idx);
-      //printf("%d: free %p\n", i, m);
-      smartlist_del(allocated, idx);
-      mp_pool_release(m);
-      //mp_pool_assert_ok(pool);
-    }
-    if (crypto_rand_int(777)==0)
-      mp_pool_clean(pool, 1, 1);
-
-    if (i % 777)
-      mp_pool_assert_ok(pool);
-  }
-
- done:
-  if (allocated) {
-    SMARTLIST_FOREACH(allocated, void *, m, mp_pool_release(m));
-    mp_pool_assert_ok(pool);
-    mp_pool_clean(pool, 0, 0);
-    mp_pool_assert_ok(pool);
-    smartlist_free(allocated);
-  }
-
-  if (pool)
-    mp_pool_destroy(pool);
-}
-
-#endif /* ENABLE_MEMPOOLS */
-
 /** Run unittests for memory area allocator */
 static void
 test_util_memarea(void *arg)
@@ -3512,370 +3311,6 @@ test_util_fgets_eagain(void *ptr)
   if (test_pipe[1] != -1)
     close(test_pipe[1]);
 }
-#endif
-
-#ifndef BUILDDIR
-#define BUILDDIR "."
-#endif
-
-#ifdef _WIN32
-#define notify_pending_waitpid_callbacks() STMT_NIL
-#define TEST_CHILD "test-child.exe"
-#define EOL "\r\n"
-#else
-#define TEST_CHILD (BUILDDIR "/src/test/test-child")
-#define EOL "\n"
-#endif
-
-#ifdef _WIN32
-/* I've assumed Windows doesn't have the gap between fork and exec
- * that causes the race condition on unix-like platforms */
-#define MATCH_PROCESS_STATUS(s1,s2)         ((s1) == (s2))
-
-#else
-/* work around a race condition of the timing of SIGCHLD handler updates
- * to the process_handle's fields, and checks of those fields
- *
- * TODO: Once we can signal failure to exec, change PROCESS_STATUS_RUNNING to
- * PROCESS_STATUS_ERROR (and similarly with *_OR_NOTRUNNING) */
-#define PROCESS_STATUS_RUNNING_OR_NOTRUNNING  (PROCESS_STATUS_RUNNING+1)
-#define IS_RUNNING_OR_NOTRUNNING(s)           \
-  ((s) == PROCESS_STATUS_RUNNING || (s) == PROCESS_STATUS_NOTRUNNING)
-/* well, this is ugly */
-#define MATCH_PROCESS_STATUS(s1,s2)           \
-  (  (s1) == (s2)                                         \
-     ||((s1) == PROCESS_STATUS_RUNNING_OR_NOTRUNNING      \
-        && IS_RUNNING_OR_NOTRUNNING(s2))                  \
-     ||((s2) == PROCESS_STATUS_RUNNING_OR_NOTRUNNING      \
-        && IS_RUNNING_OR_NOTRUNNING(s1)))
-
-#endif // _WIN32
-
-/** Helper function for testing tor_spawn_background */
-static void
-run_util_spawn_background(const char *argv[], const char *expected_out,
-                          const char *expected_err, int expected_exit,
-                          int expected_status)
-{
-  int retval, exit_code;
-  ssize_t pos;
-  process_handle_t *process_handle=NULL;
-  char stdout_buf[100], stderr_buf[100];
-  int status;
-
-  /* Start the program */
-#ifdef _WIN32
-  status = tor_spawn_background(NULL, argv, NULL, &process_handle);
-#else
-  status = tor_spawn_background(argv[0], argv, NULL, &process_handle);
-#endif
-
-  notify_pending_waitpid_callbacks();
-
-  /* the race condition doesn't affect status,
-   * because status isn't updated by the SIGCHLD handler,
-   * but we still need to handle PROCESS_STATUS_RUNNING_OR_NOTRUNNING */
-  tt_assert(MATCH_PROCESS_STATUS(expected_status, status));
-  if (status == PROCESS_STATUS_ERROR) {
-    tt_ptr_op(process_handle, OP_EQ, NULL);
-    return;
-  }
-
-  tt_assert(process_handle != NULL);
-
-  /* When a spawned process forks, fails, then exits very quickly,
-   * (this typically occurs when exec fails)
-   * there is a race condition between the SIGCHLD handler
-   * updating the process_handle's fields, and this test
-   * checking the process status in those fields.
-   * The SIGCHLD update can occur before or after the code below executes.
-   * This causes intermittent failures in spawn_background_fail(),
-   * typically when the machine is under load.
-   * We use PROCESS_STATUS_RUNNING_OR_NOTRUNNING to avoid this issue. */
-
-  /* the race condition affects the change in
-   * process_handle->status from RUNNING to NOTRUNNING */
-  tt_assert(MATCH_PROCESS_STATUS(expected_status, process_handle->status));
-
-#ifndef _WIN32
-  notify_pending_waitpid_callbacks();
-  /* the race condition affects the change in
-   * process_handle->waitpid_cb to NULL,
-   * so we skip the check if expected_status is ambiguous,
-   * that is, PROCESS_STATUS_RUNNING_OR_NOTRUNNING */
-  tt_assert(process_handle->waitpid_cb != NULL
-              || expected_status == PROCESS_STATUS_RUNNING_OR_NOTRUNNING);
-#endif
-
-#ifdef _WIN32
-  tt_assert(process_handle->stdout_pipe != INVALID_HANDLE_VALUE);
-  tt_assert(process_handle->stderr_pipe != INVALID_HANDLE_VALUE);
-#else
-  tt_assert(process_handle->stdout_pipe >= 0);
-  tt_assert(process_handle->stderr_pipe >= 0);
-#endif
-
-  /* Check stdout */
-  pos = tor_read_all_from_process_stdout(process_handle, stdout_buf,
-                                         sizeof(stdout_buf) - 1);
-  tt_assert(pos >= 0);
-  stdout_buf[pos] = '\0';
-  tt_int_op(strlen(expected_out),OP_EQ, pos);
-  tt_str_op(expected_out,OP_EQ, stdout_buf);
-
-  notify_pending_waitpid_callbacks();
-
-  /* Check it terminated correctly */
-  retval = tor_get_exit_code(process_handle, 1, &exit_code);
-  tt_int_op(PROCESS_EXIT_EXITED,OP_EQ, retval);
-  tt_int_op(expected_exit,OP_EQ, exit_code);
-  // TODO: Make test-child exit with something other than 0
-
-#ifndef _WIN32
-  notify_pending_waitpid_callbacks();
-  tt_ptr_op(process_handle->waitpid_cb, OP_EQ, NULL);
-#endif
-
-  /* Check stderr */
-  pos = tor_read_all_from_process_stderr(process_handle, stderr_buf,
-                                         sizeof(stderr_buf) - 1);
-  tt_assert(pos >= 0);
-  stderr_buf[pos] = '\0';
-  tt_str_op(expected_err,OP_EQ, stderr_buf);
-  tt_int_op(strlen(expected_err),OP_EQ, pos);
-
-  notify_pending_waitpid_callbacks();
-
- done:
-  if (process_handle)
-    tor_process_handle_destroy(process_handle, 1);
-}
-
-/** Check that we can launch a process and read the output */
-static void
-test_util_spawn_background_ok(void *ptr)
-{
-  const char *argv[] = {TEST_CHILD, "--test", NULL};
-  const char *expected_out = "OUT"EOL "--test"EOL "SLEEPING"EOL "DONE" EOL;
-  const char *expected_err = "ERR"EOL;
-
-  (void)ptr;
-
-  run_util_spawn_background(argv, expected_out, expected_err, 0,
-      PROCESS_STATUS_RUNNING);
-}
-
-/** Check that failing to find the executable works as expected */
-static void
-test_util_spawn_background_fail(void *ptr)
-{
-  const char *argv[] = {BUILDDIR "/src/test/no-such-file", "--test", NULL};
-  const char *expected_err = "";
-  char expected_out[1024];
-  char code[32];
-#ifdef _WIN32
-  const int expected_status = PROCESS_STATUS_ERROR;
-#else
-  /* TODO: Once we can signal failure to exec, set this to be
-   * PROCESS_STATUS_RUNNING_OR_ERROR */
-  const int expected_status = PROCESS_STATUS_RUNNING_OR_NOTRUNNING;
-#endif
-
-  memset(expected_out, 0xf0, sizeof(expected_out));
-  memset(code, 0xf0, sizeof(code));
-
-  (void)ptr;
-
-  tor_snprintf(code, sizeof(code), "%x/%x",
-    9 /* CHILD_STATE_FAILEXEC */ , ENOENT);
-  tor_snprintf(expected_out, sizeof(expected_out),
-    "ERR: Failed to spawn background process - code %s\n", code);
-
-  run_util_spawn_background(argv, expected_out, expected_err, 255,
-      expected_status);
-}
-
-/** Test that reading from a handle returns a partial read rather than
- * blocking */
-static void
-test_util_spawn_background_partial_read_impl(int exit_early)
-{
-  const int expected_exit = 0;
-  const int expected_status = PROCESS_STATUS_RUNNING;
-
-  int retval, exit_code;
-  ssize_t pos = -1;
-  process_handle_t *process_handle=NULL;
-  int status;
-  char stdout_buf[100], stderr_buf[100];
-
-  const char *argv[] = {TEST_CHILD, "--test", NULL};
-  const char *expected_out[] = { "OUT" EOL "--test" EOL "SLEEPING" EOL,
-                                 "DONE" EOL,
-                                 NULL };
-  const char *expected_err = "ERR" EOL;
-
-#ifndef _WIN32
-  int eof = 0;
-#endif
-  int expected_out_ctr;
-
-  if (exit_early) {
-    argv[1] = "--hang";
-    expected_out[0] = "OUT"EOL "--hang"EOL "SLEEPING" EOL;
-  }
-
-  /* Start the program */
-#ifdef _WIN32
-  status = tor_spawn_background(NULL, argv, NULL, &process_handle);
-#else
-  status = tor_spawn_background(argv[0], argv, NULL, &process_handle);
-#endif
-  tt_int_op(expected_status,OP_EQ, status);
-  tt_assert(process_handle);
-  tt_int_op(expected_status,OP_EQ, process_handle->status);
-
-  /* Check stdout */
-  for (expected_out_ctr = 0; expected_out[expected_out_ctr] != NULL;) {
-#ifdef _WIN32
-    pos = tor_read_all_handle(process_handle->stdout_pipe, stdout_buf,
-                              sizeof(stdout_buf) - 1, NULL);
-#else
-    /* Check that we didn't read the end of file last time */
-    tt_assert(!eof);
-    pos = tor_read_all_handle(process_handle->stdout_handle, stdout_buf,
-                              sizeof(stdout_buf) - 1, NULL, &eof);
-#endif
-    log_info(LD_GENERAL, "tor_read_all_handle() returned %d", (int)pos);
-
-    /* We would have blocked, keep on trying */
-    if (0 == pos)
-      continue;
-
-    tt_assert(pos > 0);
-    stdout_buf[pos] = '\0';
-    tt_str_op(expected_out[expected_out_ctr],OP_EQ, stdout_buf);
-    tt_int_op(strlen(expected_out[expected_out_ctr]),OP_EQ, pos);
-    expected_out_ctr++;
-  }
-
-  if (exit_early) {
-    tor_process_handle_destroy(process_handle, 1);
-    process_handle = NULL;
-    goto done;
-  }
-
-  /* The process should have exited without writing more */
-#ifdef _WIN32
-  pos = tor_read_all_handle(process_handle->stdout_pipe, stdout_buf,
-                            sizeof(stdout_buf) - 1,
-                            process_handle);
-  tt_int_op(0,OP_EQ, pos);
-#else
-  if (!eof) {
-    /* We should have got all the data, but maybe not the EOF flag */
-    pos = tor_read_all_handle(process_handle->stdout_handle, stdout_buf,
-                              sizeof(stdout_buf) - 1,
-                              process_handle, &eof);
-    tt_int_op(0,OP_EQ, pos);
-    tt_assert(eof);
-  }
-  /* Otherwise, we got the EOF on the last read */
-#endif
-
-  /* Check it terminated correctly */
-  retval = tor_get_exit_code(process_handle, 1, &exit_code);
-  tt_int_op(PROCESS_EXIT_EXITED,OP_EQ, retval);
-  tt_int_op(expected_exit,OP_EQ, exit_code);
-
-  // TODO: Make test-child exit with something other than 0
-
-  /* Check stderr */
-  pos = tor_read_all_from_process_stderr(process_handle, stderr_buf,
-                                         sizeof(stderr_buf) - 1);
-  tt_assert(pos >= 0);
-  stderr_buf[pos] = '\0';
-  tt_str_op(expected_err,OP_EQ, stderr_buf);
-  tt_int_op(strlen(expected_err),OP_EQ, pos);
-
- done:
-  tor_process_handle_destroy(process_handle, 1);
-}
-
-static void
-test_util_spawn_background_partial_read(void *arg)
-{
-  (void)arg;
-  test_util_spawn_background_partial_read_impl(0);
-}
-
-static void
-test_util_spawn_background_exit_early(void *arg)
-{
-  (void)arg;
-  test_util_spawn_background_partial_read_impl(1);
-}
-
-static void
-test_util_spawn_background_waitpid_notify(void *arg)
-{
-  int retval, exit_code;
-  process_handle_t *process_handle=NULL;
-  int status;
-  int ms_timer;
-
-  const char *argv[] = {TEST_CHILD, "--fast", NULL};
-
-  (void) arg;
-
-#ifdef _WIN32
-  status = tor_spawn_background(NULL, argv, NULL, &process_handle);
-#else
-  status = tor_spawn_background(argv[0], argv, NULL, &process_handle);
-#endif
-
-  tt_int_op(status, OP_EQ, PROCESS_STATUS_RUNNING);
-  tt_ptr_op(process_handle, OP_NE, NULL);
-
-  /* We're not going to look at the stdout/stderr output this time. Instead,
-   * we're testing whether notify_pending_waitpid_calbacks() can report the
-   * process exit (on unix) and/or whether tor_get_exit_code() can notice it
-   * (on windows) */
-
-#ifndef _WIN32
-  ms_timer = 30*1000;
-  tt_ptr_op(process_handle->waitpid_cb, OP_NE, NULL);
-  while (process_handle->waitpid_cb && ms_timer > 0) {
-    tor_sleep_msec(100);
-    ms_timer -= 100;
-    notify_pending_waitpid_callbacks();
-  }
-  tt_int_op(ms_timer, OP_GT, 0);
-  tt_ptr_op(process_handle->waitpid_cb, OP_EQ, NULL);
-#endif
-
-  ms_timer = 30*1000;
-  while (((retval = tor_get_exit_code(process_handle, 0, &exit_code))
-                == PROCESS_EXIT_RUNNING) && ms_timer > 0) {
-    tor_sleep_msec(100);
-    ms_timer -= 100;
-  }
-  tt_int_op(ms_timer, OP_GT, 0);
-
-  tt_int_op(retval, OP_EQ, PROCESS_EXIT_EXITED);
-
- done:
-  tor_process_handle_destroy(process_handle, 1);
-}
-
-#undef TEST_CHILD
-#undef EOL
-
-#undef MATCH_PROCESS_STATUS
-
-#ifndef _WIN32
-#undef PROCESS_STATUS_RUNNING_OR_NOTRUNNING
-#undef IS_RUNNING_OR_NOTRUNNING
 #endif
 
 /**
@@ -4612,26 +4047,26 @@ test_util_round_to_next_multiple_of(void *arg)
 {
   (void)arg;
 
-  tt_assert(round_uint64_to_next_multiple_of(0,1) == 0);
-  tt_assert(round_uint64_to_next_multiple_of(0,7) == 0);
+  tt_u64_op(round_uint64_to_next_multiple_of(0,1), ==, 0);
+  tt_u64_op(round_uint64_to_next_multiple_of(0,7), ==, 0);
 
-  tt_assert(round_uint64_to_next_multiple_of(99,1) == 99);
-  tt_assert(round_uint64_to_next_multiple_of(99,7) == 105);
-  tt_assert(round_uint64_to_next_multiple_of(99,9) == 99);
+  tt_u64_op(round_uint64_to_next_multiple_of(99,1), ==, 99);
+  tt_u64_op(round_uint64_to_next_multiple_of(99,7), ==, 105);
+  tt_u64_op(round_uint64_to_next_multiple_of(99,9), ==, 99);
 
-  tt_assert(round_int64_to_next_multiple_of(0,1) == 0);
-  tt_assert(round_int64_to_next_multiple_of(0,7) == 0);
+  tt_i64_op(round_int64_to_next_multiple_of(0,1), ==, 0);
+  tt_i64_op(round_int64_to_next_multiple_of(0,7), ==, 0);
 
-  tt_assert(round_int64_to_next_multiple_of(99,1) == 99);
-  tt_assert(round_int64_to_next_multiple_of(99,7) == 105);
-  tt_assert(round_int64_to_next_multiple_of(99,9) == 99);
+  tt_i64_op(round_int64_to_next_multiple_of(99,1), ==, 99);
+  tt_i64_op(round_int64_to_next_multiple_of(99,7), ==, 105);
+  tt_i64_op(round_int64_to_next_multiple_of(99,9), ==, 99);
 
-  tt_assert(round_int64_to_next_multiple_of(-99,1) == -99);
-  tt_assert(round_int64_to_next_multiple_of(-99,7) == -98);
-  tt_assert(round_int64_to_next_multiple_of(-99,9) == -99);
+  tt_i64_op(round_int64_to_next_multiple_of(-99,1), ==, -99);
+  tt_i64_op(round_int64_to_next_multiple_of(-99,7), ==, -98);
+  tt_i64_op(round_int64_to_next_multiple_of(-99,9), ==, -99);
 
-  tt_assert(round_int64_to_next_multiple_of(INT64_MIN,2) == INT64_MIN);
-  tt_assert(round_int64_to_next_multiple_of(INT64_MAX,2) ==
+  tt_i64_op(round_int64_to_next_multiple_of(INT64_MIN,2), ==, INT64_MIN);
+  tt_i64_op(round_int64_to_next_multiple_of(INT64_MAX,2), ==,
                                             INT64_MAX-INT64_MAX%2);
  done:
   ;
@@ -4652,25 +4087,26 @@ test_util_laplace(void *arg)
   const double delta_f = 15.0, epsilon = 0.3; /* b = 15.0 / 0.3 = 50.0 */
   (void)arg;
 
-  tt_assert(isinf(sample_laplace_distribution(mu, b, 0.0)));
-  test_feq(-69.88855213, sample_laplace_distribution(mu, b, 0.01));
-  test_feq(24.0, sample_laplace_distribution(mu, b, 0.5));
-  test_feq(24.48486498, sample_laplace_distribution(mu, b, 0.51));
-  test_feq(117.88855213, sample_laplace_distribution(mu, b, 0.99));
+  tt_i64_op(INT64_MIN, ==, sample_laplace_distribution(mu, b, 0.0));
+  tt_i64_op(-69, ==, sample_laplace_distribution(mu, b, 0.01));
+  tt_i64_op(24, ==, sample_laplace_distribution(mu, b, 0.5));
+  tt_i64_op(24, ==, sample_laplace_distribution(mu, b, 0.51));
+  tt_i64_op(117, ==, sample_laplace_distribution(mu, b, 0.99));
 
   /* >>> laplace.ppf([0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99],
    * ...             loc = 0, scale = 50)
    * array([         -inf,  -80.47189562,  -34.65735903,    0.        ,
    *          34.65735903,   80.47189562,  195.60115027])
    */
-  tt_assert(INT64_MIN + 20 ==
+  tt_i64_op(INT64_MIN + 20, ==,
             add_laplace_noise(20, 0.0, delta_f, epsilon));
-  tt_assert(-60 == add_laplace_noise(20, 0.1, delta_f, epsilon));
-  tt_assert(-14 == add_laplace_noise(20, 0.25, delta_f, epsilon));
-  tt_assert(20 == add_laplace_noise(20, 0.5, delta_f, epsilon));
-  tt_assert(54 == add_laplace_noise(20, 0.75, delta_f, epsilon));
-  tt_assert(100 == add_laplace_noise(20, 0.9, delta_f, epsilon));
-  tt_assert(215 == add_laplace_noise(20, 0.99, delta_f, epsilon));
+  tt_i64_op(-60, ==, add_laplace_noise(20, 0.1, delta_f, epsilon));
+  tt_i64_op(-14, ==, add_laplace_noise(20, 0.25, delta_f, epsilon));
+  tt_i64_op(20, ==, add_laplace_noise(20, 0.5, delta_f, epsilon));
+  tt_i64_op(54, ==, add_laplace_noise(20, 0.75, delta_f, epsilon));
+  tt_i64_op(100, ==, add_laplace_noise(20, 0.9, delta_f, epsilon));
+  tt_i64_op(215, ==, add_laplace_noise(20, 0.99, delta_f, epsilon));
+
  done:
   ;
 }
@@ -4780,23 +4216,6 @@ test_util_socket(void *arg)
     tor_close_socket(fd4);
 }
 
-static void *
-socketpair_test_setup(const struct testcase_t *testcase)
-{
-  return testcase->setup_data;
-}
-static int
-socketpair_test_cleanup(const struct testcase_t *testcase, void *ptr)
-{
-  (void)testcase;
-  (void)ptr;
-  return 1;
-}
-
-static const struct testcase_setup_t socketpair_setup = {
-  socketpair_test_setup, socketpair_test_cleanup
-};
-
 /* Test for socketpair and ersatz_socketpair().  We test them both, since
  * the latter is a tolerably good way to exersize tor_accept_socket(). */
 static void
@@ -4849,7 +4268,7 @@ test_util_max_mem(void *arg)
   } else {
     /* You do not have a petabyte. */
 #if SIZEOF_SIZE_T == SIZEOF_UINT64_T
-    tt_uint_op(memory1, OP_LT, (U64_LITERAL(1)<<50));
+    tt_u64_op(memory1, OP_LT, (U64_LITERAL(1)<<50));
 #endif
   }
 
@@ -4925,7 +4344,6 @@ struct testcase_t util_tests[] = {
   UTIL_LEGACY(memarea),
   UTIL_LEGACY(control_formats),
   UTIL_LEGACY(mmap),
-  UTIL_LEGACY(threads),
   UTIL_LEGACY(sscanf),
   UTIL_LEGACY(format_time_interval),
   UTIL_LEGACY(path_is_relative),
@@ -4947,11 +4365,6 @@ struct testcase_t util_tests[] = {
   UTIL_TEST(exit_status, 0),
   UTIL_TEST(fgets_eagain, 0),
 #endif
-  UTIL_TEST(spawn_background_ok, 0),
-  UTIL_TEST(spawn_background_fail, 0),
-  UTIL_TEST(spawn_background_partial_read, 0),
-  UTIL_TEST(spawn_background_exit_early, 0),
-  UTIL_TEST(spawn_background_waitpid_notify, 0),
   UTIL_TEST(format_hex_number, 0),
   UTIL_TEST(format_dec_number, 0),
   UTIL_TEST(join_win_cmdline, 0),
@@ -4972,10 +4385,10 @@ struct testcase_t util_tests[] = {
   UTIL_TEST(mathlog, 0),
   UTIL_TEST(weak_random, 0),
   UTIL_TEST(socket, TT_FORK),
-  { "socketpair", test_util_socketpair, TT_FORK, &socketpair_setup,
+  { "socketpair", test_util_socketpair, TT_FORK, &passthrough_setup,
     (void*)"0" },
   { "socketpair_ersatz", test_util_socketpair, TT_FORK,
-    &socketpair_setup, (void*)"1" },
+    &passthrough_setup, (void*)"1" },
   UTIL_TEST(max_mem, 0),
   UTIL_TEST(hostname_validation, 0),
   UTIL_TEST(ipv4_validation, 0),

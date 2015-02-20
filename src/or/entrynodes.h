@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2014, The Tor Project, Inc. */
+ * Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -159,6 +159,22 @@ int validate_pluggable_transports_config(void);
 
 double pathbias_get_close_success_count(entry_guard_t *guard);
 double pathbias_get_use_success_count(entry_guard_t *guard);
+
+/** Contains the bandwidth of a relay as a guard and as a non-guard
+ *  after the guardfraction has been considered. */
+typedef struct guardfraction_bandwidth_t {
+  /** Bandwidth as a guard after guardfraction has been considered. */
+  int guard_bw;
+  /** Bandwidth as a non-guard after guardfraction has been considered. */
+  int non_guard_bw;
+} guardfraction_bandwidth_t;
+
+int should_apply_guardfraction(const networkstatus_t *ns);
+
+void
+guard_get_guardfraction_bandwidth(guardfraction_bandwidth_t *guardfraction_bw,
+                                  int orig_bandwidth,
+                                  uint32_t guardfraction_percentage);
 
 #endif
 

@@ -1,6 +1,6 @@
 /* Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2014, The Tor Project, Inc. */
+ * Copyright (c) 2007-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #include "or.h"
@@ -20,6 +20,7 @@
 #include "networkstatus.h"
 #include "nodelist.h"
 #include "policies.h"
+#include "relay.h"
 #include "rendclient.h"
 #include "rendcommon.h"
 #include "rephist.h"
@@ -63,8 +64,6 @@ static void directory_send_command(dir_connection_t *conn,
                              time_t if_modified_since);
 static int directory_handle_command(dir_connection_t *conn);
 static int body_is_plausible(const char *body, size_t body_len, int purpose);
-static int purpose_needs_anonymity(uint8_t dir_purpose,
-                                   uint8_t router_purpose);
 static char *http_get_header(const char *headers, const char *which);
 static void http_set_address_origin(const char *headers, connection_t *conn);
 static void connection_dir_download_routerdesc_failed(dir_connection_t *conn);
@@ -119,7 +118,7 @@ static void directory_initiate_command_rend(const tor_addr_t *addr,
 /** Return true iff the directory purpose <b>dir_purpose</b> (and if it's
  * fetching descriptors, it's fetching them for <b>router_purpose</b>)
  * must use an anonymous connection to a directory. */
-static int
+STATIC int
 purpose_needs_anonymity(uint8_t dir_purpose, uint8_t router_purpose)
 {
   if (get_options()->AllDirActionsPrivate)
@@ -195,6 +194,46 @@ dir_conn_purpose_to_string(int purpose)
 
   log_warn(LD_BUG, "Called with unknown purpose %d", purpose);
   return "(unknown)";
+}
+
+/** Return the requisite directory information types. */
+STATIC dirinfo_type_t
+dir_fetch_type(int dir_purpose, int router_purpose, const char *resource)
+{
+  dirinfo_type_t type;
+  switch (dir_purpose) {
+    case DIR_PURPOSE_FETCH_EXTRAINFO:
+      type = EXTRAINFO_DIRINFO;
+      if (router_purpose == ROUTER_PURPOSE_BRIDGE)
+        type |= BRIDGE_DIRINFO;
+      else
+        type |= V3_DIRINFO;
+      break;
+    case DIR_PURPOSE_FETCH_SERVERDESC:
+      if (router_purpose == ROUTER_PURPOSE_BRIDGE)
+        type = BRIDGE_DIRINFO;
+      else
+        type = V3_DIRINFO;
+      break;
+    case DIR_PURPOSE_FETCH_STATUS_VOTE:
+    case DIR_PURPOSE_FETCH_DETACHED_SIGNATURES:
+    case DIR_PURPOSE_FETCH_CERTIFICATE:
+      type = V3_DIRINFO;
+      break;
+    case DIR_PURPOSE_FETCH_CONSENSUS:
+      type = V3_DIRINFO;
+      if (resource && !strcmp(resource, "microdesc"))
+        type |= MICRODESC_DIRINFO;
+      break;
+    case DIR_PURPOSE_FETCH_MICRODESC:
+      type = MICRODESC_DIRINFO;
+      break;
+    default:
+      log_warn(LD_BUG, "Unexpected purpose %d", (int)dir_purpose);
+      type = NO_DIRINFO;
+      break;
+  }
+  return type;
 }
 
 /** Return true iff <b>identity_digest</b> is the digest of a router which
@@ -385,47 +424,21 @@ directory_pick_generic_dirserver(dirinfo_type_t type, int pds_flags,
  * Use <b>pds_flags</b> as arguments to router_pick_directory_server()
  * or router_pick_trusteddirserver().
  */
-void
-directory_get_from_dirserver(uint8_t dir_purpose, uint8_t router_purpose,
-                             const char *resource, int pds_flags)
+MOCK_IMPL(void, directory_get_from_dirserver, (uint8_t dir_purpose,
+                                               uint8_t router_purpose,
+                                               const char *resource,
+                                               int pds_flags))
 {
   const routerstatus_t *rs = NULL;
   const or_options_t *options = get_options();
   int prefer_authority = directory_fetches_from_authorities(options);
   int require_authority = 0;
   int get_via_tor = purpose_needs_anonymity(dir_purpose, router_purpose);
-  dirinfo_type_t type;
+  dirinfo_type_t type = dir_fetch_type(dir_purpose, router_purpose, resource);
   time_t if_modified_since = 0;
 
-  /* FFFF we could break this switch into its own function, and call
-   * it elsewhere in directory.c. -RD */
-  switch (dir_purpose) {
-    case DIR_PURPOSE_FETCH_EXTRAINFO:
-      type = EXTRAINFO_DIRINFO |
-             (router_purpose == ROUTER_PURPOSE_BRIDGE ? BRIDGE_DIRINFO :
-                                                        V3_DIRINFO);
-      break;
-    case DIR_PURPOSE_FETCH_SERVERDESC:
-      type = (router_purpose == ROUTER_PURPOSE_BRIDGE ? BRIDGE_DIRINFO :
-                                                        V3_DIRINFO);
-      break;
-    case DIR_PURPOSE_FETCH_STATUS_VOTE:
-    case DIR_PURPOSE_FETCH_DETACHED_SIGNATURES:
-    case DIR_PURPOSE_FETCH_CERTIFICATE:
-      type = V3_DIRINFO;
-      break;
-    case DIR_PURPOSE_FETCH_CONSENSUS:
-      type = V3_DIRINFO;
-      if (resource && !strcmp(resource,"microdesc"))
-        type |= MICRODESC_DIRINFO;
-      break;
-    case DIR_PURPOSE_FETCH_MICRODESC:
-      type = MICRODESC_DIRINFO;
-      break;
-    default:
-      log_warn(LD_BUG, "Unexpected purpose %d", (int)dir_purpose);
-      return;
-  }
+  if (type == NO_DIRINFO)
+    return;
 
   if (dir_purpose == DIR_PURPOSE_FETCH_CONSENSUS) {
     int flav = FLAV_NS;
@@ -525,20 +538,16 @@ directory_get_from_dirserver(uint8_t dir_purpose, uint8_t router_purpose,
         /* */
         rs = directory_pick_generic_dirserver(type, pds_flags,
                                               dir_purpose);
-        if (!rs) {
-          /*XXXX024 I'm pretty sure this can never do any good, since
-           * rs isn't set. */
+        if (!rs)
           get_via_tor = 1; /* last resort: try routing it via Tor */
-        }
       }
     }
-  } else { /* get_via_tor */
+  }
+
+  if (get_via_tor) {
     /* Never use fascistfirewall; we're going via Tor. */
-    if (1) {
-      /* anybody with a non-zero dirport will do. Disregard firewalls. */
-      pds_flags |= PDS_IGNORE_FASCISTFIREWALL;
-      rs = router_pick_directory_server(type, pds_flags);
-    }
+    pds_flags |= PDS_IGNORE_FASCISTFIREWALL;
+    rs = router_pick_directory_server(type, pds_flags);
   }
 
   /* If we have any hope of building an indirect conn, we know some router
@@ -1270,7 +1279,8 @@ directory_send_command(dir_connection_t *conn,
       return;
   }
 
-  if (strlen(proxystring) + strlen(url) >= 4096) {
+  /* warn in the non-tunneled case */
+  if (direct && (strlen(proxystring) + strlen(url) >= 4096)) {
     log_warn(LD_BUG,
              "Squid does not like URLs longer than 4095 bytes, and this "
              "one is %d bytes long: %s%s",
@@ -2200,12 +2210,15 @@ connection_dir_reached_eof(dir_connection_t *conn)
  */
 #define MAX_DIRECTORY_OBJECT_SIZE (10*(1<<20))
 
+#define MAX_VOTE_DL_SIZE (MAX_DIRECTORY_OBJECT_SIZE * 5)
+
 /** Read handler for directory connections.  (That's connections <em>to</em>
  * directory servers and connections <em>at</em> directory servers.)
  */
 int
 connection_dir_process_inbuf(dir_connection_t *conn)
 {
+  size_t max_size;
   tor_assert(conn);
   tor_assert(conn->base_.type == CONN_TYPE_DIR);
 
@@ -2224,7 +2237,11 @@ connection_dir_process_inbuf(dir_connection_t *conn)
     return 0;
   }
 
-  if (connection_get_inbuf_len(TO_CONN(conn)) > MAX_DIRECTORY_OBJECT_SIZE) {
+  max_size =
+    (TO_CONN(conn)->purpose == DIR_PURPOSE_FETCH_STATUS_VOTE) ?
+    MAX_VOTE_DL_SIZE : MAX_DIRECTORY_OBJECT_SIZE;
+
+  if (connection_get_inbuf_len(TO_CONN(conn)) > max_size) {
     log_warn(LD_HTTP,
              "Too much data received from directory connection (%s): "
              "denial of service attempt, or you need to upgrade?",
@@ -2539,6 +2556,24 @@ client_likes_consensus(networkstatus_t *v, const char *want_url)
   return (have >= need_at_least);
 }
 
+/** Return the compression level we should use for sending a compressed
+ * response of size <b>n_bytes</b>. */
+static zlib_compression_level_t
+choose_compression_level(ssize_t n_bytes)
+{
+  if (! have_been_under_memory_pressure()) {
+    return HIGH_COMPRESSION; /* we have plenty of RAM. */
+  } else if (n_bytes < 0) {
+    return HIGH_COMPRESSION; /* unknown; might be big. */
+  } else if (n_bytes < 1024) {
+    return LOW_COMPRESSION;
+  } else if (n_bytes < 2048) {
+    return MEDIUM_COMPRESSION;
+  } else {
+    return HIGH_COMPRESSION;
+  }
+}
+
 /** Helper function: called when a dirserver gets a complete HTTP GET
  * request.  Look for a request for a directory or for a rendezvous
  * service descriptor.  On finding one, write a response into
@@ -2724,7 +2759,7 @@ directory_handle_command_get(dir_connection_t *conn, const char *headers,
                                smartlist_len(dir_fps) == 1 ? lifetime : 0);
     conn->fingerprint_stack = dir_fps;
     if (! compressed)
-      conn->zlib_state = tor_zlib_new(0, ZLIB_METHOD);
+      conn->zlib_state = tor_zlib_new(0, ZLIB_METHOD, HIGH_COMPRESSION);
 
     /* Prime the connection with some data. */
     conn->dir_spool_src = DIR_SPOOL_NETWORKSTATUS;
@@ -2812,7 +2847,8 @@ directory_handle_command_get(dir_connection_t *conn, const char *headers,
 
     if (smartlist_len(items)) {
       if (compressed) {
-        conn->zlib_state = tor_zlib_new(1, ZLIB_METHOD);
+        conn->zlib_state = tor_zlib_new(1, ZLIB_METHOD,
+                                    choose_compression_level(estimated_len));
         SMARTLIST_FOREACH(items, const char *, c,
                  connection_write_to_buf_zlib(c, strlen(c), conn, 0));
         connection_write_to_buf_zlib("", 0, conn, 1);
@@ -2861,7 +2897,8 @@ directory_handle_command_get(dir_connection_t *conn, const char *headers,
     conn->fingerprint_stack = fps;
 
     if (compressed)
-      conn->zlib_state = tor_zlib_new(1, ZLIB_METHOD);
+      conn->zlib_state = tor_zlib_new(1, ZLIB_METHOD,
+                                      choose_compression_level(dlen));
 
     connection_dirserv_flushed_some(conn);
     goto done;
@@ -2929,7 +2966,8 @@ directory_handle_command_get(dir_connection_t *conn, const char *headers,
       }
       write_http_response_header(conn, -1, compressed, cache_lifetime);
       if (compressed)
-        conn->zlib_state = tor_zlib_new(1, ZLIB_METHOD);
+        conn->zlib_state = tor_zlib_new(1, ZLIB_METHOD,
+                                        choose_compression_level(dlen));
       /* Prime the connection with some data. */
       connection_dirserv_flushed_some(conn);
     }
@@ -3004,7 +3042,8 @@ directory_handle_command_get(dir_connection_t *conn, const char *headers,
 
     write_http_response_header(conn, compressed?-1:len, compressed, 60*60);
     if (compressed) {
-      conn->zlib_state = tor_zlib_new(1, ZLIB_METHOD);
+      conn->zlib_state = tor_zlib_new(1, ZLIB_METHOD,
+                                      choose_compression_level(len));
       SMARTLIST_FOREACH(certs, authority_cert_t *, c,
             connection_write_to_buf_zlib(c->cache_info.signed_descriptor_body,
                                          c->cache_info.signed_descriptor_len,

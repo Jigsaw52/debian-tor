@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, The Tor Project, Inc. */
+/* Copyright (c) 2014-2015, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /* Unit tests for handling different kinds of relay cell */
@@ -104,7 +104,7 @@ test_relaycell_resolved(void *arg)
       tt_int_op(srm_answer_is_set, OP_EQ, 0);                        \
     }                                                             \
     tt_int_op(srm_ttl, OP_EQ, ttl);                                  \
-    tt_int_op(srm_expires, OP_EQ, expires);                          \
+    tt_i64_op(srm_expires, OP_EQ, expires);                          \
   } while (0)
 
   (void)arg;
@@ -137,9 +137,9 @@ test_relaycell_resolved(void *arg)
   /* Now put it in the right state. */
   ENTRY_TO_CONN(entryconn)->state = AP_CONN_STATE_RESOLVE_WAIT;
   entryconn->socks_request->command = SOCKS_COMMAND_RESOLVE;
-  entryconn->ipv4_traffic_ok = 1;
-  entryconn->ipv6_traffic_ok = 1;
-  entryconn->prefer_ipv6_traffic = 0;
+  entryconn->entry_cfg.ipv4_traffic = 1;
+  entryconn->entry_cfg.ipv6_traffic = 1;
+  entryconn->entry_cfg.prefer_ipv6 = 0;
 
   /* We prefer ipv4, so we should get the first ipv4 answer */
   MOCK_RESET();
@@ -159,7 +159,7 @@ test_relaycell_resolved(void *arg)
   ASSERT_RESOLVED_CALLED(RESOLVED_TYPE_IPV4, "\x12\x00\x00\x01", 512, -1);
 
   /* now prefer ipv6, and get the first ipv6 answer */
-  entryconn->prefer_ipv6_traffic = 1;
+  entryconn->entry_cfg.prefer_ipv6 = 1;
   MOCK_RESET();
   r = connection_edge_process_resolved_cell(edgeconn, &cell, &rh);
   tt_int_op(r, OP_EQ, 0);
@@ -182,7 +182,7 @@ test_relaycell_resolved(void *arg)
   /* But if we don't allow IPv4, we report nothing if the cell contains only
    * ipv4 */
   MOCK_RESET();
-  entryconn->ipv4_traffic_ok = 0;
+  entryconn->entry_cfg.ipv4_traffic = 0;
   r = connection_edge_process_resolved_cell(edgeconn, &cell, &rh);
   tt_int_op(r, OP_EQ, 0);
   ASSERT_MARK_CALLED(END_STREAM_REASON_DONE|
@@ -191,7 +191,7 @@ test_relaycell_resolved(void *arg)
 
   /* If we wanted hostnames, we report nothing, since we only had IPs. */
   MOCK_RESET();
-  entryconn->ipv4_traffic_ok = 1;
+  entryconn->entry_cfg.ipv4_traffic = 1;
   entryconn->socks_request->command = SOCKS_COMMAND_RESOLVE_PTR;
   r = connection_edge_process_resolved_cell(edgeconn, &cell, &rh);
   tt_int_op(r, OP_EQ, 0);
