@@ -1,3 +1,9 @@
+tor (0.2.6.3-alpha-2~20150223) experimental; urgency=medium
+
+  * Build with --enable-gcc-warnings-advisory.
+
+ -- Peter Palfrader <weasel@debian.org>  Mon, 23 Feb 2015 18:39:37 +0100
+
 tor (0.2.6.3-alpha-1) experimental; urgency=medium
 
   * New upstream version.

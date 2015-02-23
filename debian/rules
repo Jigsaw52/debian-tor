@@ -28,7 +28,8 @@ override_dh_auto_configure:
 		--infodir=\$${prefix}/share/info \
 		--localstatedir=/var \
 		--sysconfdir=/etc \
-		--disable-silent-rules
+		--disable-silent-rules \
+		--enable-gcc-warnings-advisory
 
 override_dh_clean:
 	! [ -e debian/micro-revision.i ] || rm -f src/or/micro-revision.i
