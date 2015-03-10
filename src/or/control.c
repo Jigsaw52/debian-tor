@@ -4971,15 +4971,18 @@ static int bootstrap_problems = 0;
  *
  * <b>status</b> is the new status, that is, what task we will be doing
  * next. <b>progress</b> is zero if we just started this task, else it
- * represents progress on the task. */
-void
+ * represents progress on the task.
+ *
+ * Return true if we logged a message at level NOTICE, and false otherwise.
+ */
+int
 control_event_bootstrap(bootstrap_status_t status, int progress)
 {
   const char *tag, *summary;
   char buf[BOOTSTRAP_MSG_LEN];
 
   if (bootstrap_percent == BOOTSTRAP_STATUS_DONE)
-    return; /* already bootstrapped; nothing to be done here. */
+    return 0; /* already bootstrapped; nothing to be done here. */
 
   /* special case for handshaking status, since our TLS handshaking code
    * can't distinguish what the connection is going to be for. */
@@ -5026,7 +5029,10 @@ control_event_bootstrap(bootstrap_status_t status, int progress)
       /* Remember that we gave a notice at this level. */
       notice_bootstrap_percent = bootstrap_percent;
     }
+    return loglevel == LOG_NOTICE;
   }
+
+  return 0;
 }
 
 /** Called when Tor has failed to make bootstrapping progress in a way
@@ -5080,19 +5086,26 @@ MOCK_IMPL(void,
 
   log_fn(severity,
          LD_CONTROL, "Problem bootstrapping. Stuck at %d%%: %s. (%s; %s; "
-         "count %d; recommendation %s)",
+         "count %d; recommendation %s; host %s at %s:%d)",
          status, summary, warn,
          orconn_end_reason_to_control_string(reason),
-         bootstrap_problems, recommendation);
+         bootstrap_problems, recommendation,
+         hex_str(or_conn->identity_digest, DIGEST_LEN),
+         or_conn->base_.address,
+         or_conn->base_.port);
 
   connection_or_report_broken_states(severity, LD_HANDSHAKE);
 
   tor_snprintf(buf, sizeof(buf),
       "BOOTSTRAP PROGRESS=%d TAG=%s SUMMARY=\"%s\" WARNING=\"%s\" REASON=%s "
-      "COUNT=%d RECOMMENDATION=%s",
+      "COUNT=%d RECOMMENDATION=%s HOSTID=\"%s\" HOSTADDR=\"%s:%d\"",
       bootstrap_percent, tag, summary, warn,
       orconn_end_reason_to_control_string(reason), bootstrap_problems,
-      recommendation);
+      recommendation,
+      hex_str(or_conn->identity_digest, DIGEST_LEN),
+      or_conn->base_.address,
+      (int)or_conn->base_.port);
+
   tor_snprintf(last_sent_bootstrap_message,
                sizeof(last_sent_bootstrap_message),
                "WARN %s", buf);
