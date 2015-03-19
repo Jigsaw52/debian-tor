@@ -1,3 +1,13 @@
+tor (0.2.5.11-1) unstable; urgency=medium
+
+  * New upstream version.
+    - Directory authority changes.
+    - Fix assertion errors that may trigger under high DNS load.
+    - No longer break on HUP (happens daily on Debian) with seccomp2 enabled.
+    - and more - please consult the upstream changelog.
+
+ -- Peter Palfrader <weasel@debian.org>  Thu, 19 Mar 2015 18:26:22 +0100
+
 tor (0.2.5.10-1) unstable; urgency=medium
 
   * New upstream version.
