@@ -337,7 +337,7 @@ NS(test_main)(void *arg)
   actual = log_heartbeat(0);
 
   tt_int_op(actual, OP_EQ, expected);
-  tt_int_op(CALLED(logv), OP_EQ, 4);
+  tt_int_op(CALLED(logv), OP_EQ, 5);
 
   done:
     NS_UNMOCK(tls_get_write_overhead_ratio);
@@ -429,6 +429,12 @@ NS(logv)(int severity, log_domain_mask_t domain,
       tt_int_op(va_arg(ap, int), OP_EQ, 1);  /* handshakes requested (TAP) */
       tt_int_op(va_arg(ap, int), OP_EQ, 1);  /* handshakes assigned (NTOR) */
       tt_int_op(va_arg(ap, int), OP_EQ, 1);  /* handshakes requested (NTOR) */
+      break;
+    case 4:
+      tt_int_op(severity, OP_EQ, LOG_NOTICE);
+      tt_int_op(domain, OP_EQ, LD_HEARTBEAT);
+      tt_ptr_op(strstr(funcname, "rep_hist_log_link_protocol_counts"),
+                OP_NE, NULL);
       break;
     default:
       tt_abort_msg("unexpected call to logv()");  // TODO: prettyprint args
@@ -878,7 +884,8 @@ NS(logv)(int severity, log_domain_mask_t domain, const char *funcname,
       tt_ptr_op(strstr(funcname, "log_heartbeat"), OP_NE, NULL);
       tt_ptr_op(suffix, OP_EQ, NULL);
       tt_str_op(format, OP_EQ,
-          "Average packaged cell fullness: %2.3f%%. TLS write overhead: %.f%%");
+          "Average packaged cell fullness: %2.3f%%. "
+          "TLS write overhead: %.f%%");
       tt_double_op(fabs(va_arg(ap, double) - 50.0), <=, DBL_EPSILON);
       tt_double_op(fabs(va_arg(ap, double) - 0.0), <=, DBL_EPSILON);
       break;
@@ -1026,7 +1033,8 @@ NS(logv)(int severity, log_domain_mask_t domain,
       tt_ptr_op(strstr(funcname, "log_heartbeat"), OP_NE, NULL);
       tt_ptr_op(suffix, OP_EQ, NULL);
       tt_str_op(format, OP_EQ,
-          "Average packaged cell fullness: %2.3f%%. TLS write overhead: %.f%%");
+          "Average packaged cell fullness: %2.3f%%. "
+          "TLS write overhead: %.f%%");
       tt_int_op(fabs(va_arg(ap, double) - 100.0) <= DBL_EPSILON, OP_EQ, 1);
       tt_double_op(fabs(va_arg(ap, double) - 100.0), <=, DBL_EPSILON);
       break;
