@@ -1,3 +1,29 @@
+tor (0.2.4.26-1~deb6u1) squeeze-lts; urgency=medium
+
+  * New upstream version.
+    + Fixes the following security relevant issues (copied from upstream
+      changelog):
+      - Fix an assertion failure that could occur under high DNS load.
+        Fixes bug 14129; bugfix on Tor 0.0.7rc1. Found by "jowr";
+        diagnosed and fixed by "cypherpunks".
+      - Fix a bug that could lead to a relay crashing with an assertion
+        failure if a buffer of exactly the wrong layout was passed to
+        buf_pullup() at exactly the wrong time. Fixes bug 15083; bugfix on
+        0.2.0.10-alpha. Patch from 'cypherpunks'.
+      - Do not assert if the 'data' pointer on a buffer is advanced to the
+        very end of the buffer; log a BUG message instead. Only assert if
+        it is past that point. Fixes bug 15083; bugfix on 0.2.0.10-alpha.
+      - Disable support for SSLv3. All versions of OpenSSL in use with Tor
+        today support TLS 1.0 or later, so we can safely turn off support
+        for this old (and insecure) protocol. Fixes bug 13426.
+    + Updates the list of directory authorities and the geoIP database.
+    + Use correct byte order when sending the address of the chosen rendezvous
+      point to a hidden service.  This bug meant that clients were leaking to
+      the hidden service whether they were on a little-endian (common) or
+      big-endian (rare) system.
+
+ -- Peter Palfrader <weasel@debian.org>  Sun, 22 Mar 2015 20:18:45 +0100
+
 tor (0.2.4.23-1~deb6u1) squeeze-lts; urgency=low
 
   * Build for squeeze.
