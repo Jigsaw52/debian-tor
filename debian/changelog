@@ -1,3 +1,10 @@
+tor (0.2.6.6-1) experimental; urgency=medium
+
+  * New upstream version.
+  * Stick to experimental for now to keep unstable open as a track to jessie.
+
+ -- Peter Palfrader <weasel@debian.org>  Tue, 24 Mar 2015 21:56:04 +0100
+
 tor (0.2.6.5-rc-1) experimental; urgency=medium
 
   * New upstream version.

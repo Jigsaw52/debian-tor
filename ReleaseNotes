@@ -4,9 +4,17 @@ of Tor. If you want to see more detailed descriptions of the changes in
 each development snapshot, see the ChangeLog file.
 
 
-Changes in version 0.2.6.???
+Changes in version 0.2.6.6 - 2015-03-24
+  Tor 0.2.6.6 is the first stable release in the 0.2.6 series.
 
-  Write a blurb here.
+  It adds numerous safety, security, correctness, and performance
+  improvements. Client programs can be configured to use more kinds of
+  sockets, AutomapHosts works better, the multithreading backend is
+  improved, cell transmission is refactored, test coverage is much
+  higher, more denial-of-service attacks are handled, guard selection is
+  improved to handle long-term guards better, pluggable transports
+  should work a bit better, and some annoying hidden service performance
+  bugs should be addressed.
 
   o New compiler and system requirements:
     - Tor 0.2.6.x requires that your compiler support more of the C99
@@ -201,6 +209,13 @@ Changes in version 0.2.6.???
       circuits through that guard. Fixes bug 9819; bugfix on
       0.2.1.1-alpha. Reported by "skruffy".
 
+  o Major bugfixes (pluggable transports):
+    - Initialize the extended OR Port authentication cookie before
+      launching pluggable transports. This prevents a race condition
+      that occured when server-side pluggable transports would cache the
+      authentication cookie before it has been (re)generated. Fixes bug
+      15240; bugfix on 0.2.5.1-alpha.
+
   o Major bugfixes (relay, stability, possible security):
     - Fix a bug that could lead to a relay crashing with an assertion
       failure if a buffer of exactly the wrong layout is passed to
@@ -275,6 +290,12 @@ Changes in version 0.2.6.???
     - Reduce the time delay before saving guard status to disk from 10
       minutes to 30 seconds (or from one hour to 10 minutes if
       AvoidDiskWrites is set). Closes ticket 12485.
+
+  o Minor features (heartbeat):
+    - On relays, report how many connections we negotiated using each
+      version of the Tor link protocols. This information will let us
+      know if removing support for very old versions of the Tor
+      protocols is harming the network. Closes ticket 15212.
 
   o Minor features (hidden service):
     - Make Sybil attacks against hidden services harder by changing the
@@ -654,6 +675,9 @@ Changes in version 0.2.6.???
     - Fix the ioctl()-based network interface lookup code so that it
       will work on systems that have variable-length struct ifreq, for
       example Mac OS X.
+    - Use the correct datatype in the SipHash-2-4 function to prevent
+      compilers from assuming any sort of alignment. Fixes bug 15436;
+      bugfix on 0.2.5.3-alpha.
 
   o Minor bugfixes (preventative security, C safety):
     - When reading a hexadecimal, base-32, or base-64 encoded value from
@@ -814,8 +838,8 @@ Changes in version 0.2.6.???
       ticket 14202.
     - Remove a test for a long-defunct broken version-one
       directory server.
-
-  o Code simplification and refactoring:
+    - Refactor main loop to extract the 'loop' part. This makes it
+      easier to run Tor under Shadow. Closes ticket 15176.
     - Stop using can_complete_circuits as a global variable; access it
       with a function instead.
     - Avoid using operators directly as macro arguments: this lets us
