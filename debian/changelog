@@ -1,3 +1,15 @@
+tor (0.2.4.27-1~deb6u1) squeeze-lts; urgency=medium
+
+  * New upstream version, fixing hidden service related Denial of
+    Service bugs:
+    - Fix two remotely triggerable assertion failures (upstream bugs
+      #15600 and #15601).
+    - Disallow multiple INTRODUCE1 cells on the same circuit at introduction
+      points, making overwhelming hidden services with introductions more
+      expensive (upstream bug #15515).
+
+ -- Peter Palfrader <weasel@debian.org>  Mon, 06 Apr 2015 20:45:25 +0200
+
 tor (0.2.4.26-1~deb6u1) squeeze-lts; urgency=medium
 
   * New upstream version.
