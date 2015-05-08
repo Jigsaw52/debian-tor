@@ -15,7 +15,7 @@ endif
 %:
 	dh \
 		$@ \
-		--with quilt \
+		--with quilt,systemd \
 		--builddirectory=build \
 		--parallel
 
