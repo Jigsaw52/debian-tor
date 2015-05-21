@@ -2,7 +2,7 @@ Source: tor
 Section: net
 Priority: optional
 Maintainer: Peter Palfrader <weasel@debian.org>
-Build-Depends: debhelper (>= 8.1.0~), quilt, libssl-dev, zlib1g-dev, libevent-dev (>= 1.1), binutils (>= 2.14.90.0.7), hardening-includes, asciidoc (>= 8.2), docbook-xml, docbook-xsl, xmlto, dh-apparmor, libseccomp-dev [amd64 i386], dh-systemd, libsystemd-dev, dh-autoreconf
+Build-Depends: debhelper (>= 8.1.0~), quilt, libssl-dev, zlib1g-dev, libevent-dev (>= 1.1), binutils (>= 2.14.90.0.7), hardening-includes, asciidoc (>= 8.2), docbook-xml, docbook-xsl, xmlto, dh-apparmor, libseccomp-dev [amd64 i386], dh-systemd, libsystemd-dev, pkg-config, dh-autoreconf
 Build-Conflicts: libnacl-dev, libseccomp-dev [!amd64 !i386]
 Standards-Version: 3.9.4
 Homepage: https://www.torproject.org/
