@@ -3,9 +3,12 @@ tor (0.2.6.8-1) experimental; urgency=medium
   * New upstream version.
   * Ship a systemd .service file (closes: #761403).
     Thanks to intrigeri and Arto Jantunen.
+    - Build depend on dh-systemd, libsystemd-dev.
+    - Build with --enable-systemd.
   * Autoreconf on build (closes: #783729).
+    - Build depend on dh-autoreconf.
 
- -- Peter Palfrader <weasel@debian.org>  Thu, 21 May 2015 17:48:34 +0200
+ -- Peter Palfrader <weasel@debian.org>  Thu, 21 May 2015 18:53:50 +0200
 
 tor (0.2.6.7-1) experimental; urgency=medium
 
