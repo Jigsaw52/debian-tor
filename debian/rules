@@ -25,6 +25,7 @@ override_dh_auto_configure:
 	! [ -e debian/micro-revision.i ] || cp debian/micro-revision.i src/or/micro-revision.i
 	dh_auto_configure -- \
 		$(confflags) \
+		--enable-systemd \
 		--prefix=/usr \
 		--mandir=\$${prefix}/share/man \
 		--infodir=\$${prefix}/share/info \
