@@ -15,6 +15,7 @@ endif
 %:
 	dh \
 		$@ \
+		--with autoreconf \
 		--with quilt \
 		--with systemd \
 		--builddirectory=build \
