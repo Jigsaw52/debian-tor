@@ -1,6 +1,10 @@
 # Defaults for tor initscript
 # sourced by /etc/init.d/tor
 # installed at /etc/default/tor by the maintainer scripts
+#
+# Note that this file is not being used for controlling Tor-startup
+# when Tor is launched by systemd.
+#
 
 #
 # This is a bash shell fragment
