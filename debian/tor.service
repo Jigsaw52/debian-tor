@@ -3,12 +3,13 @@ Description = Anonymizing overlay network for TCP
 After = syslog.target network.target nss-lookup.target
 
 [Service]
-Type = forking
+Type = notify
+NotifyAccess = all
 PIDFile = /var/run/tor/tor.pid
 PermissionsStartOnly = yes
 ExecStartPre = /usr/bin/install -Z -m 02750 -o debian-tor -g debian-tor -d /var/run/tor
-ExecStartPre = /usr/bin/tor --defaults-torrc /usr/share/tor/tor-service-defaults-torrc --verify-config
-ExecStart = /usr/bin/tor --defaults-torrc /usr/share/tor/tor-service-defaults-torrc
+ExecStartPre = /usr/bin/tor --defaults-torrc /usr/share/tor/tor-service-defaults-torrc -f /etc/tor/torrc --RunAsDaemon 0 --verify-config
+ExecStart = /usr/bin/tor --defaults-torrc /usr/share/tor/tor-service-defaults-torrc -f /etc/tor/torrc --RunAsDaemon 0
 ExecReload = /bin/kill -HUP ${MAINPID}
 KillSignal = SIGINT
 TimeoutSec = 45
