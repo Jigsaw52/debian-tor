@@ -1,4 +1,4 @@
-tor (0.2.6.8-2) unstable; urgency=medium
+tor (0.2.6.8-2) unstable; urgency=low
 
   * debian/control: Depend on dh-systemd, libsystemd-dev, and pkg-config
     only on linux-any.
