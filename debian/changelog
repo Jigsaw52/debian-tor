@@ -1,6 +1,6 @@
-tor (0.2.6.8-1) experimental; urgency=medium
+tor (0.2.6.8-1) unstable; urgency=medium
 
-  * New upstream version.
+  * New upstream version, upload 0.2.6.x tree to unstable.
   * Ship a systemd .service file (closes: #761403).
     Thanks to intrigeri and Arto Jantunen.
     - Build depend on dh-systemd, libsystemd-dev, pkg-config.
@@ -8,7 +8,7 @@ tor (0.2.6.8-1) experimental; urgency=medium
   * Autoreconf on build (closes: #783729).
     - Build depend on dh-autoreconf.
 
- -- Peter Palfrader <weasel@debian.org>  Thu, 21 May 2015 19:54:19 +0200
+ -- Peter Palfrader <weasel@debian.org>  Sat, 23 May 2015 09:57:44 +0200
 
 tor (0.2.6.7-1) experimental; urgency=medium
 
