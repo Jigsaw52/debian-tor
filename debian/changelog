@@ -3,8 +3,10 @@ tor (0.2.6.8-2) unstable; urgency=low
   * debian/control: Depend on dh-systemd, libsystemd-dev, and pkg-config
     only on linux-any.
   * debian/rules: Build with systemd only if DEB_HOST_ARCH_OS is linux.
+  * patch upstream's configure.ac to check for the existance of
+    libsystemd rather than systemd.
 
- -- Peter Palfrader <weasel@debian.org>  Sat, 23 May 2015 15:48:42 +0200
+ -- Peter Palfrader <weasel@debian.org>  Sat, 23 May 2015 16:28:30 +0200
 
 tor (0.2.6.8-1) unstable; urgency=medium
 
