@@ -1,3 +1,9 @@
+tor (0.2.6.8-2) unstable; urgency=medium
+
+  * Depend on dh-systemd, libsystemd-dev, and pkg-config only on linux-any.
+
+ -- Peter Palfrader <weasel@debian.org>  Sat, 23 May 2015 15:44:30 +0200
+
 tor (0.2.6.8-1) unstable; urgency=medium
 
   * New upstream version, upload 0.2.6.x tree to unstable.
