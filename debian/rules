@@ -3,6 +3,8 @@
 
 DH_VERBOSE ?= 1
 
+DEB_HOST_ARCH_OS := $(shell dpkg-architecture -qDEB_HOST_ARCH_OS)
+
 # allow building against libdmalloc4 - it better be installed
 ifneq (,$(findstring with-dmalloc,$(DEB_BUILD_OPTIONS)))
 	confflags += --with-dmalloc
@@ -12,12 +14,17 @@ ifneq (,$(findstring enable-openbsd-malloc,$(DEB_BUILD_OPTIONS)))
 	confflags += --enable-openbsd-malloc
 endif
 
+ifeq ($(DEB_HOST_ARCH_OS),linux)
+	dhoptions += --with systemd
+	confflags += --enable-systemd
+endif
+
 %:
 	dh \
 		$@ \
+		$(dhoptions) \
 		--with autoreconf \
 		--with quilt \
-		--with systemd \
 		--builddirectory=build \
 		--parallel
 
@@ -25,7 +32,6 @@ override_dh_auto_configure:
 	! [ -e debian/micro-revision.i ] || cp debian/micro-revision.i src/or/micro-revision.i
 	dh_auto_configure -- \
 		$(confflags) \
-		--enable-systemd \
 		--prefix=/usr \
 		--mandir=\$${prefix}/share/man \
 		--infodir=\$${prefix}/share/info \

@@ -1,8 +1,10 @@
 tor (0.2.6.8-2) unstable; urgency=medium
 
-  * Depend on dh-systemd, libsystemd-dev, and pkg-config only on linux-any.
+  * debian/control: Depend on dh-systemd, libsystemd-dev, and pkg-config
+    only on linux-any.
+  * debian/rules: Build with systemd only if DEB_HOST_ARCH_OS is linux.
 
- -- Peter Palfrader <weasel@debian.org>  Sat, 23 May 2015 15:44:30 +0200
+ -- Peter Palfrader <weasel@debian.org>  Sat, 23 May 2015 15:48:42 +0200
 
 tor (0.2.6.8-1) unstable; urgency=medium
 
