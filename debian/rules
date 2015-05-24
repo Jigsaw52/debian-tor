@@ -22,9 +22,9 @@ endif
 %:
 	dh \
 		$@ \
-		$(dhoptions) \
-		--with autoreconf \
 		--with quilt \
+		--with autoreconf \
+		$(dhoptions) \
 		--builddirectory=build \
 		--parallel
 
