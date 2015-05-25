@@ -3,8 +3,9 @@ tor (0.2.6.8-4) unstable; urgency=medium
   * Remove whitespace around = in the systemd service file.  Apparently
     the spaces confuse deb-systemd-helper, which then resulted in Tor
     not being automatically started on boot (see #786418).
+  * Remove obsolete After=syslog.target from systemd service file.
 
- -- Peter Palfrader <weasel@debian.org>  Mon, 25 May 2015 21:55:07 +0200
+ -- Peter Palfrader <weasel@debian.org>  Mon, 25 May 2015 22:02:39 +0200
 
 tor (0.2.6.8-3) unstable; urgency=low
 
