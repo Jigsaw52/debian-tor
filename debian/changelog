@@ -1,3 +1,9 @@
+tor (0.2.6.8-5) XXX; urgency=medium
+
+  * Drop do-not-require-systemd patch as it was merged upstream.
+
+ -- Peter Palfrader <weasel@debian.org>  Tue, 26 May 2015 15:46:42 +0200
+
 tor (0.2.6.8-4) unstable; urgency=medium
 
   * Remove whitespace around = in the systemd service file.  Apparently
