@@ -1,0 +1,53 @@
+From 97330ced0c2e0eeae9bb2bc576bb72190237819d Mon Sep 17 00:00:00 2001
+From: Nick Mathewson <nickm@torproject.org>
+Date: Thu, 28 May 2015 14:05:46 -0400
+Subject: [PATCH] Fix sandbox use with systemd. bug 16212.
+
+---
+ changes/bug16212     |  5 +++++
+ src/common/sandbox.c | 10 ++++++++++
+ 2 files changed, 15 insertions(+)
+ create mode 100644 changes/bug16212
+
+diff --git a/changes/bug16212 b/changes/bug16212
+new file mode 100644
+index 0000000..bc12463
+--- /dev/null
++++ b/changes/bug16212
+@@ -0,0 +1,5 @@
++  o Minor bugfixes (sandbox, systemd):
++    - Allow systemd connections to work with the Linux seccomp2 sandbox
++      code.  Fixes bug 16212; bugfix on 0.2.6.2-alpha.
++      Patch by Peter Palfrader.
++
+diff --git a/src/common/sandbox.c b/src/common/sandbox.c
+index 49316c6..a32bd0d 100644
+--- a/src/common/sandbox.c
++++ b/src/common/sandbox.c
+@@ -170,6 +170,7 @@ static int filter_nopar_gen[] = {
+     SCMP_SYS(read),
+     SCMP_SYS(rt_sigreturn),
+     SCMP_SYS(sched_getaffinity),
++    SCMP_SYS(sendmsg),
+     SCMP_SYS(set_robust_list),
+ #ifdef __NR_sigreturn
+     SCMP_SYS(sigreturn),
+@@ -547,6 +548,15 @@ sb_socket(scmp_filter_ctx ctx, sandbox_cfg_t *filter)
+       SCMP_CMP(0, SCMP_CMP_EQ, PF_UNIX),
+       SCMP_CMP_MASKED(1, SOCK_CLOEXEC|SOCK_NONBLOCK, SOCK_STREAM),
+       SCMP_CMP(2, SCMP_CMP_EQ, 0));
++  if (rc)
++    return rc;
++
++  rc = seccomp_rule_add_3(ctx, SCMP_ACT_ALLOW, SCMP_SYS(socket),
++      SCMP_CMP(0, SCMP_CMP_EQ, PF_UNIX),
++      SCMP_CMP_MASKED(1, SOCK_CLOEXEC|SOCK_NONBLOCK, SOCK_DGRAM),
++      SCMP_CMP(2, SCMP_CMP_EQ, 0));
++  if (rc)
++    return rc;
+ 
+   rc = seccomp_rule_add_3(ctx, SCMP_ACT_ALLOW, SCMP_SYS(socket),
+       SCMP_CMP(0, SCMP_CMP_EQ, PF_NETLINK),
+-- 
+2.1.4
+

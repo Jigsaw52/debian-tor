@@ -1,8 +1,16 @@
-tor (0.2.6.8-5) XXX; urgency=medium
+tor (0.2.6.8-6) XXX; urgency=medium
 
   * Drop do-not-require-systemd patch as it was merged upstream.
 
  -- Peter Palfrader <weasel@debian.org>  Tue, 26 May 2015 15:46:42 +0200
+
+tor (0.2.6.8-5) unstable; urgency=medium
+
+  * Sandboxing, when enabled, would prevent tor from working when
+    started from systemd, as tor wasn't allowed to create a
+    UNIX datagram socket.  Include that patch from upstream's git.
+
+ -- Peter Palfrader <weasel@debian.org>  Sat, 30 May 2015 16:44:27 +0200
 
 tor (0.2.6.8-4) unstable; urgency=medium
 
