@@ -3,7 +3,7 @@ dnl Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson
 dnl Copyright (c) 2007-2015, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
-AC_INIT([tor],[0.2.6.8])
+AC_INIT([tor],[0.2.6.9])
 AC_CONFIG_SRCDIR([src/or/main.c])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE
@@ -131,7 +131,7 @@ if test x$have_systemd = xyes; then
     AC_DEFINE(HAVE_SYSTEMD,1,[Have systemd])
     TOR_SYSTEMD_CFLAGS="${SYSTEMD_CFLAGS}"
     TOR_SYSTEMD_LIBS="${SYSTEMD_LIBS}"
-    PKG_CHECK_MODULES(SYSTEMD209, [systemd >= 209],
+    PKG_CHECK_MODULES(LIBSYSTEMD209, [libsystemd >= 209],
          [AC_DEFINE(HAVE_SYSTEMD_209,1,[Have systemd v209 or more])], [])
 fi
 AC_SUBST(TOR_SYSTEMD_CFLAGS)
