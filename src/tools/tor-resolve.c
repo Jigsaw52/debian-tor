@@ -5,9 +5,9 @@
 
 #include "orconfig.h"
 #include "compat.h"
-#include "../common/util.h"
+#include "util.h"
 #include "address.h"
-#include "../common/torlog.h"
+#include "torlog.h"
 #include "sandbox.h"
 
 #include <stdio.h>
@@ -33,12 +33,8 @@
 #endif
 
 #ifdef _WIN32
-#if defined(_MSC_VER) && (_MSC_VER <= 1300)
-#include <winsock.h>
-#else
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#endif
 #endif
 
 #define RESPONSE_LEN_4 8

@@ -18,6 +18,8 @@
 #include <event.h>
 #endif
 
+#define MAX_INFLIGHT (1<<16)
+
 static int opt_verbose = 0;
 static int opt_n_threads = 8;
 static int opt_n_items = 10000;
@@ -212,6 +214,7 @@ add_n_work_items(threadpool_t *tp, int n)
   while (n_queued++ < n) {
     ent = add_work(tp);
     if (! ent) {
+      puts("Z");
       tor_event_base_loopexit(tor_libevent_get_base(), NULL);
       return -1;
     }
@@ -285,6 +288,10 @@ replysock_readable_cb(tor_socket_t sock, short what, void *arg)
     shutting_down = 1;
     threadpool_queue_update(tp, NULL,
                              workqueue_do_shutdown, NULL, NULL);
+    {
+      struct timeval limit = { 2, 0 };
+      tor_event_base_loopexit(tor_libevent_get_base(), &limit);
+    }
   }
 }
 
@@ -293,14 +300,16 @@ help(void)
 {
   puts(
      "Options:\n"
-     "    -N <items>    Run this many items of work\n"
-     "    -T <threads>  Use this many threads\n"
-     "    -I <inflight> Have no more than this many requests queued at once\n"
-     "    -L <lowwater> Add items whenever fewer than this many are pending\n"
-     "    -C <cancel>   Try to cancel N items of every batch that we add\n"
-     "    -R <ratio>    Make one out of this many items be a slow (RSA) one\n"
-     "    --no-{eventfd2,eventfd,pipe2,pipe,socketpair}\n"
-     "                  Disable one of the alert_socket backends.");
+     "  -h            Display this information\n"
+     "  -v            Be verbose\n"
+     "  -N <items>    Run this many items of work\n"
+     "  -T <threads>  Use this many threads\n"
+     "  -I <inflight> Have no more than this many requests queued at once\n"
+     "  -L <lowwater> Add items whenever fewer than this many are pending\n"
+     "  -C <cancel>   Try to cancel N items of every batch that we add\n"
+     "  -R <ratio>    Make one out of this many items be a slow (RSA) one\n"
+     "  --no-{eventfd2,eventfd,pipe2,pipe,socketpair}\n"
+     "                Disable one of the alert_socket backends.");
 }
 
 int
@@ -346,17 +355,22 @@ main(int argc, char **argv)
       return 1;
     }
   }
+
   if (opt_n_threads < 1 ||
       opt_n_items < 1 || opt_n_inflight < 1 || opt_n_lowwater < 0 ||
-      opt_n_cancel > opt_n_inflight ||
+      opt_n_cancel > opt_n_inflight || opt_n_inflight > MAX_INFLIGHT ||
       opt_ratio_rsa < 0) {
     help();
     return 1;
   }
 
+  if (opt_n_inflight > opt_n_items) {
+      opt_n_inflight = opt_n_items;
+  }
+
   init_logging(1);
   crypto_global_init(1, NULL, NULL);
-  crypto_seed_rng(1);
+  crypto_seed_rng();
 
   rq = replyqueue_new(as_flags);
   tor_assert(rq);
@@ -390,7 +404,7 @@ main(int argc, char **argv)
   }
 
   {
-    struct timeval limit = { 30, 0 };
+    struct timeval limit = { 180, 0 };
     tor_event_base_loopexit(tor_libevent_get_base(), &limit);
   }
 

@@ -255,6 +255,7 @@ workerthread_new(void *state, threadpool_t *pool, replyqueue_t *replyqueue)
 
   if (spawn_func(worker_thread_main, thr) < 0) {
     log_err(LD_GENERAL, "Can't launch worker thread.");
+    tor_free(thr);
     return NULL;
   }
 
@@ -359,12 +360,17 @@ threadpool_queue_update(threadpool_t *pool,
   return 0;
 }
 
+/** Don't have more than this many threads per pool. */
+#define MAX_THREADS 1024
+
 /** Launch threads until we have <b>n</b>. */
 static int
 threadpool_start_threads(threadpool_t *pool, int n)
 {
   if (n < 0)
     return -1;
+  if (n > MAX_THREADS)
+    n = MAX_THREADS;
 
   tor_mutex_acquire(&pool->lock);
 
@@ -377,6 +383,7 @@ threadpool_start_threads(threadpool_t *pool, int n)
     workerthread_t *thr = workerthread_new(state, pool, pool->reply_queue);
 
     if (!thr) {
+      pool->free_thread_state_fn(state);
       tor_mutex_release(&pool->lock);
       return -1;
     }
