@@ -95,6 +95,9 @@
 #ifdef HAVE_SYS_WAIT_H
 #include <sys/wait.h>
 #endif
+#if defined(HAVE_SYS_PRCTL_H) && defined(__linux__)
+#include <sys/prctl.h>
+#endif
 
 #ifdef __clang_analyzer__
 #undef MALLOC_ZERO_WORKS
@@ -771,16 +774,6 @@ fast_memcmpstart(const void *mem, size_t memlen,
   return fast_memcmp(mem, prefix, plen);
 }
 
-/** Given a nul-terminated string s, set every character before the nul
- * to zero. */
-void
-tor_strclear(char *s)
-{
-  while (*s) {
-    *s++ = '\0';
-  }
-}
-
 /** Return a pointer to the first char of s that is not whitespace and
  * not a comment, or to the terminating NUL if no such character exists.
  */
@@ -1043,6 +1036,9 @@ string_is_valid_ipv6_address(const char *string)
 
 /** Return true iff <b>string</b> matches a pattern of DNS names
  * that we allow Tor clients to connect to.
+ *
+ * Note: This allows certain technically invalid characters ('_') to cope
+ * with misconfigured zones that have been encountered in the wild.
  */
 int
 string_is_valid_hostname(const char *string)
@@ -1055,16 +1051,22 @@ string_is_valid_hostname(const char *string)
   smartlist_split_string(components,string,".",0,0);
 
   SMARTLIST_FOREACH_BEGIN(components, char *, c) {
-    if (c[0] == '-') {
+    if ((c[0] == '-') || (*c == '_')) {
       result = 0;
       break;
+    }
+
+    /* Allow a single terminating '.' used rarely to indicate domains
+     * are FQDNs rather than relative. */
+    if ((c_sl_idx > 0) && (c_sl_idx + 1 == c_sl_len) && !*c) {
+      continue;
     }
 
     do {
       if ((*c >= 'a' && *c <= 'z') ||
           (*c >= 'A' && *c <= 'Z') ||
           (*c >= '0' && *c <= '9') ||
-          (*c == '-'))
+          (*c == '-') || (*c == '_'))
         c++;
       else
         result = 0;
@@ -2001,8 +2003,10 @@ read_all(tor_socket_t fd, char *buf, size_t count, int isSocket)
   size_t numread = 0;
   ssize_t result;
 
-  if (count > SIZE_T_CEILING || count > SSIZE_MAX)
+  if (count > SIZE_T_CEILING || count > SSIZE_MAX) {
+    errno = EINVAL;
     return -1;
+  }
 
   while (numread != count) {
     if (isSocket)
@@ -2562,8 +2566,10 @@ read_file_to_str_until_eof(int fd, size_t max_bytes_to_read, size_t *sz_out)
   char *string = NULL;
   size_t string_max = 0;
 
-  if (max_bytes_to_read+1 >= SIZE_T_CEILING)
+  if (max_bytes_to_read+1 >= SIZE_T_CEILING) {
+    errno = EINVAL;
     return NULL;
+  }
 
   do {
     /* XXXX This "add 1K" approach is a little goofy; if we care about
@@ -2575,7 +2581,9 @@ read_file_to_str_until_eof(int fd, size_t max_bytes_to_read, size_t *sz_out)
     string = tor_realloc(string, string_max);
     r = read(fd, string + pos, string_max - pos - 1);
     if (r < 0) {
+      int save_errno = errno;
       tor_free(string);
+      errno = save_errno;
       return NULL;
     }
 
@@ -2643,17 +2651,21 @@ read_file_to_str(const char *filename, int flags, struct stat *stat_out)
   if (S_ISFIFO(statbuf.st_mode)) {
     size_t sz = 0;
     string = read_file_to_str_until_eof(fd, FIFO_READ_MAX, &sz);
+    int save_errno = errno;
     if (string && stat_out) {
       statbuf.st_size = sz;
       memcpy(stat_out, &statbuf, sizeof(struct stat));
     }
     close(fd);
+    if (!string)
+      errno = save_errno;
     return string;
   }
 #endif
 
   if ((uint64_t)(statbuf.st_size)+1 >= SIZE_T_CEILING) {
     close(fd);
+    errno = EINVAL;
     return NULL;
   }
 
@@ -2823,38 +2835,9 @@ parse_config_line_from_str_verbose(const char *line, char **key_out,
                                    char **value_out,
                                    const char **err_out)
 {
-  /* I believe the file format here is supposed to be:
-     FILE = (EMPTYLINE | LINE)* (EMPTYLASTLINE | LASTLINE)?
-
-     EMPTYLASTLINE = SPACE* | COMMENT
-     EMPTYLINE = EMPTYLASTLINE NL
-     SPACE = ' ' | '\r' | '\t'
-     COMMENT = '#' NOT-NL*
-     NOT-NL = Any character except '\n'
-     NL = '\n'
-
-     LASTLINE = SPACE* KEY SPACE* VALUES
-     LINE = LASTLINE NL
-     KEY = KEYCHAR+
-     KEYCHAR = Any character except ' ', '\r', '\n', '\t', '#', "\"
-
-     VALUES = QUOTEDVALUE | NORMALVALUE
-     QUOTEDVALUE = QUOTE QVCHAR* QUOTE EOLSPACE?
-     QUOTE = '"'
-     QVCHAR = KEYCHAR | ESC ('n' | 't' | 'r' | '"' | ESC |'\'' | OCTAL | HEX)
-     ESC = "\\"
-     OCTAL = ODIGIT (ODIGIT ODIGIT?)?
-     HEX = ('x' | 'X') HEXDIGIT HEXDIGIT
-     ODIGIT = '0' .. '7'
-     HEXDIGIT = '0'..'9' | 'a' .. 'f' | 'A' .. 'F'
-     EOLSPACE = SPACE* COMMENT?
-
-     NORMALVALUE = (VALCHAR | ESC ESC_IGNORE | CONTINUATION)* EOLSPACE?
-     VALCHAR = Any character except ESC, '#', and '\n'
-     ESC_IGNORE = Any character except '#' or '\n'
-     CONTINUATION = ESC NL ( COMMENT NL )*
+  /*
+    See torrc_format.txt for a description of the (silly) format this parses.
    */
-
   const char *key, *val, *cp;
   int continuation = 0;
 
@@ -3562,7 +3545,7 @@ finish_daemon(const char *cp)
 /** Write the current process ID, followed by NL, into <b>filename</b>.
  */
 void
-write_pidfile(char *filename)
+write_pidfile(const char *filename)
 {
   FILE *pidfile;
 
@@ -3949,9 +3932,11 @@ process_handle_new(void)
   process_handle_t *out = tor_malloc_zero(sizeof(process_handle_t));
 
 #ifdef _WIN32
+  out->stdin_pipe = INVALID_HANDLE_VALUE;
   out->stdout_pipe = INVALID_HANDLE_VALUE;
   out->stderr_pipe = INVALID_HANDLE_VALUE;
 #else
+  out->stdin_pipe = -1;
   out->stdout_pipe = -1;
   out->stderr_pipe = -1;
 #endif
@@ -3991,7 +3976,7 @@ process_handle_waitpid_cb(int status, void *arg)
 #define CHILD_STATE_FORK 3
 #define CHILD_STATE_DUPOUT 4
 #define CHILD_STATE_DUPERR 5
-#define CHILD_STATE_REDIRECT 6
+#define CHILD_STATE_DUPIN 6
 #define CHILD_STATE_CLOSEFD 7
 #define CHILD_STATE_EXEC 8
 #define CHILD_STATE_FAILEXEC 9
@@ -4025,6 +4010,8 @@ tor_spawn_background(const char *const filename, const char **argv,
   HANDLE stdout_pipe_write = NULL;
   HANDLE stderr_pipe_read = NULL;
   HANDLE stderr_pipe_write = NULL;
+  HANDLE stdin_pipe_read = NULL;
+  HANDLE stdin_pipe_write = NULL;
   process_handle_t *process_handle;
   int status;
 
@@ -4070,6 +4057,20 @@ tor_spawn_background(const char *const filename, const char **argv,
     return status;
   }
 
+  /* Set up pipe for stdin */
+  if (!CreatePipe(&stdin_pipe_read, &stdin_pipe_write, &saAttr, 0)) {
+    log_warn(LD_GENERAL,
+      "Failed to create pipe for stdin communication with child process: %s",
+      format_win32_error(GetLastError()));
+    return status;
+  }
+  if (!SetHandleInformation(stdin_pipe_write, HANDLE_FLAG_INHERIT, 0)) {
+    log_warn(LD_GENERAL,
+      "Failed to configure pipe for stdin communication with child "
+      "process: %s", format_win32_error(GetLastError()));
+    return status;
+  }
+
   /* Create the child process */
 
   /* Windows expects argv to be a whitespace delimited string, so join argv up
@@ -4084,7 +4085,7 @@ tor_spawn_background(const char *const filename, const char **argv,
   siStartInfo.cb = sizeof(STARTUPINFO);
   siStartInfo.hStdError = stderr_pipe_write;
   siStartInfo.hStdOutput = stdout_pipe_write;
-  siStartInfo.hStdInput = NULL;
+  siStartInfo.hStdInput = stdin_pipe_read;
   siStartInfo.dwFlags |= STARTF_USESTDHANDLES;
 
   /* Create the child process */
@@ -4114,6 +4115,7 @@ tor_spawn_background(const char *const filename, const char **argv,
     /* TODO: Close hProcess and hThread in process_handle->pid? */
     process_handle->stdout_pipe = stdout_pipe_read;
     process_handle->stderr_pipe = stderr_pipe_read;
+    process_handle->stdin_pipe = stdin_pipe_write;
     status = process_handle->status = PROCESS_STATUS_RUNNING;
   }
 
@@ -4124,6 +4126,7 @@ tor_spawn_background(const char *const filename, const char **argv,
   pid_t pid;
   int stdout_pipe[2];
   int stderr_pipe[2];
+  int stdin_pipe[2];
   int fd, retval;
   ssize_t nbytes;
   process_handle_t *process_handle;
@@ -4148,7 +4151,7 @@ tor_spawn_background(const char *const filename, const char **argv,
 
   child_state = CHILD_STATE_PIPE;
 
-  /* Set up pipe for redirecting stdout and stderr of child */
+  /* Set up pipe for redirecting stdout, stderr, and stdin of child */
   retval = pipe(stdout_pipe);
   if (-1 == retval) {
     log_warn(LD_GENERAL,
@@ -4165,6 +4168,20 @@ tor_spawn_background(const char *const filename, const char **argv,
 
     close(stdout_pipe[0]);
     close(stdout_pipe[1]);
+
+    return status;
+  }
+
+  retval = pipe(stdin_pipe);
+  if (-1 == retval) {
+    log_warn(LD_GENERAL,
+      "Failed to set up pipe for stdin communication with child process: %s",
+       strerror(errno));
+
+    close(stdout_pipe[0]);
+    close(stdout_pipe[1]);
+    close(stderr_pipe[0]);
+    close(stderr_pipe[1]);
 
     return status;
   }
@@ -4190,6 +4207,15 @@ tor_spawn_background(const char *const filename, const char **argv,
   if (0 == pid) {
     /* In child */
 
+#if defined(HAVE_SYS_PRCTL_H) && defined(__linux__)
+    /* Attempt to have the kernel issue a SIGTERM if the parent
+     * goes away. Certain attributes of the binary being execve()ed
+     * will clear this during the execve() call, but it's better
+     * than nothing.
+     */
+    prctl(PR_SET_PDEATHSIG, SIGTERM);
+#endif
+
     child_state = CHILD_STATE_DUPOUT;
 
     /* Link child stdout to the write end of the pipe */
@@ -4204,13 +4230,11 @@ tor_spawn_background(const char *const filename, const char **argv,
     if (-1 == retval)
         goto error;
 
-    child_state = CHILD_STATE_REDIRECT;
+    child_state = CHILD_STATE_DUPIN;
 
-    /* Link stdin to /dev/null */
-    fd = open("/dev/null", O_RDONLY); /* NOT cloexec, obviously. */
-    if (fd != -1)
-      dup2(fd, STDIN_FILENO);
-    else
+    /* Link child stdin to the read end of the pipe */
+    retval = dup2(stdin_pipe[0], STDIN_FILENO);
+    if (-1 == retval)
       goto error;
 
     child_state = CHILD_STATE_CLOSEFD;
@@ -4219,7 +4243,8 @@ tor_spawn_background(const char *const filename, const char **argv,
     close(stderr_pipe[1]);
     close(stdout_pipe[0]);
     close(stdout_pipe[1]);
-    close(fd);
+    close(stdin_pipe[0]);
+    close(stdin_pipe[1]);
 
     /* Close all other fds, including the read end of the pipe */
     /* XXX: We should now be doing enough FD_CLOEXEC setting to make
@@ -4235,8 +4260,10 @@ tor_spawn_background(const char *const filename, const char **argv,
        does not modify the arguments */
     if (env)
       execve(filename, (char *const *) argv, env->unixoid_environment_block);
-    else
-      execvp(filename, (char *const *) argv);
+    else {
+      static char *new_env[] = { NULL };
+      execve(filename, (char *const *) argv, new_env);
+    }
 
     /* If we got here, the exec or open(/dev/null) failed */
 
@@ -4269,6 +4296,8 @@ tor_spawn_background(const char *const filename, const char **argv,
 
   if (-1 == pid) {
     log_warn(LD_GENERAL, "Failed to fork child process: %s", strerror(errno));
+    close(stdin_pipe[0]);
+    close(stdin_pipe[1]);
     close(stdout_pipe[0]);
     close(stdout_pipe[1]);
     close(stderr_pipe[0]);
@@ -4305,16 +4334,28 @@ tor_spawn_background(const char *const filename, const char **argv,
             strerror(errno));
   }
 
+  /* Return write end of the stdin pipe to caller, and close the read end */
+  process_handle->stdin_pipe = stdin_pipe[1];
+  retval = close(stdin_pipe[0]);
+
+  if (-1 == retval) {
+    log_warn(LD_GENERAL,
+            "Failed to close read end of stdin pipe in parent process: %s",
+            strerror(errno));
+  }
+
   status = process_handle->status = PROCESS_STATUS_RUNNING;
-  /* Set stdout/stderr pipes to be non-blocking */
+  /* Set stdin/stdout/stderr pipes to be non-blocking */
   if (fcntl(process_handle->stdout_pipe, F_SETFL, O_NONBLOCK) < 0 ||
-      fcntl(process_handle->stderr_pipe, F_SETFL, O_NONBLOCK) < 0) {
-    log_warn(LD_GENERAL, "Failed to set stderror/stdout pipes nonblocking "
-             "in parent process: %s", strerror(errno));
+      fcntl(process_handle->stderr_pipe, F_SETFL, O_NONBLOCK) < 0 ||
+      fcntl(process_handle->stdin_pipe, F_SETFL, O_NONBLOCK) < 0) {
+    log_warn(LD_GENERAL, "Failed to set stderror/stdout/stdin pipes "
+             "nonblocking in parent process: %s", strerror(errno));
   }
   /* Open the buffered IO streams */
   process_handle->stdout_handle = fdopen(process_handle->stdout_pipe, "r");
   process_handle->stderr_handle = fdopen(process_handle->stderr_pipe, "r");
+  process_handle->stdin_handle = fdopen(process_handle->stdin_pipe, "r");
 
   *process_handle_out = process_handle;
   return process_handle->status;
@@ -4357,12 +4398,18 @@ tor_process_handle_destroy,(process_handle_t *process_handle,
 
   if (process_handle->stderr_pipe)
     CloseHandle(process_handle->stderr_pipe);
+
+  if (process_handle->stdin_pipe)
+    CloseHandle(process_handle->stdin_pipe);
 #else
   if (process_handle->stdout_handle)
     fclose(process_handle->stdout_handle);
 
   if (process_handle->stderr_handle)
     fclose(process_handle->stderr_handle);
+
+  if (process_handle->stdin_handle)
+    fclose(process_handle->stdin_handle);
 
   clear_waitpid_callback(process_handle->waitpid_cb);
 #endif

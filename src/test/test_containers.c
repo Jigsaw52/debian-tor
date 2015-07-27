@@ -496,6 +496,43 @@ test_container_smartlist_join(void *arg)
 }
 
 static void
+test_container_smartlist_pos(void *arg)
+{
+  (void) arg;
+  smartlist_t *sl = smartlist_new();
+
+  smartlist_add(sl, tor_strdup("This"));
+  smartlist_add(sl, tor_strdup("is"));
+  smartlist_add(sl, tor_strdup("a"));
+  smartlist_add(sl, tor_strdup("test"));
+  smartlist_add(sl, tor_strdup("for"));
+  smartlist_add(sl, tor_strdup("a"));
+  smartlist_add(sl, tor_strdup("function"));
+
+  /* Test string_pos */
+  tt_int_op(smartlist_string_pos(NULL, "Fred"), ==, -1);
+  tt_int_op(smartlist_string_pos(sl, "Fred"), ==, -1);
+  tt_int_op(smartlist_string_pos(sl, "This"), ==, 0);
+  tt_int_op(smartlist_string_pos(sl, "a"), ==, 2);
+  tt_int_op(smartlist_string_pos(sl, "function"), ==, 6);
+
+  /* Test pos */
+  tt_int_op(smartlist_pos(NULL, "Fred"), ==, -1);
+  tt_int_op(smartlist_pos(sl, "Fred"), ==, -1);
+  tt_int_op(smartlist_pos(sl, "This"), ==, -1);
+  tt_int_op(smartlist_pos(sl, "a"), ==, -1);
+  tt_int_op(smartlist_pos(sl, "function"), ==, -1);
+  tt_int_op(smartlist_pos(sl, smartlist_get(sl,0)), ==, 0);
+  tt_int_op(smartlist_pos(sl, smartlist_get(sl,2)), ==, 2);
+  tt_int_op(smartlist_pos(sl, smartlist_get(sl,5)), ==, 5);
+  tt_int_op(smartlist_pos(sl, smartlist_get(sl,6)), ==, 6);
+
+ done:
+  SMARTLIST_FOREACH(sl, char *, cp, tor_free(cp));
+  smartlist_free(sl);
+}
+
+static void
 test_container_smartlist_ints_eq(void *arg)
 {
   smartlist_t *sl1 = NULL, *sl2 = NULL;
@@ -850,7 +887,7 @@ static void
 test_container_order_functions(void *arg)
 {
   int lst[25], n = 0;
-  unsigned int lst2[25];
+  unsigned int lst_2[25];
   //  int a=12,b=24,c=25,d=60,e=77;
 
 #define median() median_int(lst, n)
@@ -873,24 +910,24 @@ test_container_order_functions(void *arg)
   tt_int_op(25,OP_EQ, median()); /* 12,12,24,25,60,77,77 */
 #undef median
 
-#define third_quartile() third_quartile_uint32(lst2, n)
+#define third_quartile() third_quartile_uint32(lst_2, n)
 
   n = 0;
-  lst2[n++] = 1;
+  lst_2[n++] = 1;
   tt_int_op(1,OP_EQ, third_quartile()); /* ~1~ */
-  lst2[n++] = 2;
+  lst_2[n++] = 2;
   tt_int_op(2,OP_EQ, third_quartile()); /* 1, ~2~ */
-  lst2[n++] = 3;
-  lst2[n++] = 4;
-  lst2[n++] = 5;
+  lst_2[n++] = 3;
+  lst_2[n++] = 4;
+  lst_2[n++] = 5;
   tt_int_op(4,OP_EQ, third_quartile()); /* 1, 2, 3, ~4~, 5 */
-  lst2[n++] = 6;
-  lst2[n++] = 7;
-  lst2[n++] = 8;
-  lst2[n++] = 9;
+  lst_2[n++] = 6;
+  lst_2[n++] = 7;
+  lst_2[n++] = 8;
+  lst_2[n++] = 9;
   tt_int_op(7,OP_EQ, third_quartile()); /* 1, 2, 3, 4, 5, 6, ~7~, 8, 9 */
-  lst2[n++] = 10;
-  lst2[n++] = 11;
+  lst_2[n++] = 10;
+  lst_2[n++] = 11;
   /* 1, 2, 3, 4, 5, 6, 7, 8, ~9~, 10, 11 */
   tt_int_op(9,OP_EQ, third_quartile());
 
@@ -1053,6 +1090,7 @@ struct testcase_t container_tests[] = {
   CONTAINER_LEGACY(smartlist_overlap),
   CONTAINER_LEGACY(smartlist_digests),
   CONTAINER_LEGACY(smartlist_join),
+  CONTAINER_LEGACY(smartlist_pos),
   CONTAINER(smartlist_ints_eq, 0),
   CONTAINER_LEGACY(bitarray),
   CONTAINER_LEGACY(digestset),

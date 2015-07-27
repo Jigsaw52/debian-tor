@@ -7,20 +7,12 @@
 #define TOR_COMPAT_H
 
 #include "orconfig.h"
-#include "torint.h"
-#include "testsupport.h"
 #ifdef _WIN32
-#ifndef _WIN32_WINNT
-#define _WIN32_WINNT 0x0501
-#endif
-#define WIN32_LEAN_AND_MEAN
-#if defined(_MSC_VER) && (_MSC_VER < 1300)
-#include <winsock.h>
-#else
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #endif
-#endif
+#include "torint.h"
+#include "testsupport.h"
 #ifdef HAVE_SYS_PARAM_H
 #include <sys/param.h>
 #endif
@@ -90,13 +82,8 @@
 
 /* Try to get a reasonable __func__ substitute in place. */
 #if defined(_MSC_VER)
-/* MSVC compilers before VC7 don't have __func__ at all; later ones call it
- * __FUNCTION__. */
-#if _MSC_VER < 1300
-#define __func__ "???"
-#else
+
 #define __func__ __FUNCTION__
-#endif
 
 #else
 /* For platforms where autoconf works, make sure __func__ is defined
@@ -112,18 +99,8 @@
 #endif /* ifndef MAVE_MACRO__func__ */
 #endif /* if not windows */
 
-#if defined(_MSC_VER) && (_MSC_VER < 1300)
-/* MSVC versions before 7 apparently don't believe that you can cast uint64_t
- * to double and really mean it. */
-extern INLINE double U64_TO_DBL(uint64_t x) {
-  int64_t i = (int64_t) x;
-  return (i < 0) ? ((double) INT64_MAX) : (double) i;
-}
-#define DBL_TO_U64(x) ((uint64_t)(int64_t) (x))
-#else
 #define U64_TO_DBL(x) ((double) (x))
 #define DBL_TO_U64(x) ((uint64_t) (x))
-#endif
 
 #ifdef ENUM_VALS_ARE_SIGNED
 #define ENUM_BF(t) unsigned
@@ -463,7 +440,8 @@ int tor_close_socket(tor_socket_t s);
 tor_socket_t tor_open_socket_with_extensions(
                                            int domain, int type, int protocol,
                                            int cloexec, int nonblock);
-tor_socket_t tor_open_socket(int domain, int type, int protocol);
+MOCK_DECL(tor_socket_t,
+tor_open_socket,(int domain, int type, int protocol));
 tor_socket_t tor_open_socket_nonblocking(int domain, int type, int protocol);
 tor_socket_t tor_accept_socket(tor_socket_t sockfd, struct sockaddr *addr,
                                   socklen_t *len);
@@ -474,7 +452,14 @@ tor_socket_t tor_accept_socket_with_extensions(tor_socket_t sockfd,
                                                struct sockaddr *addr,
                                                socklen_t *len,
                                                int cloexec, int nonblock);
+MOCK_DECL(tor_socket_t,
+tor_connect_socket,(tor_socket_t socket,const struct sockaddr *address,
+                    socklen_t address_len));
 int get_n_open_sockets(void);
+
+MOCK_DECL(int,
+tor_getsockname,(tor_socket_t socket, struct sockaddr *address,
+                 socklen_t *address_len));
 
 #define tor_socket_send(s, buf, len, flags) send(s, buf, len, flags)
 #define tor_socket_recv(s, buf, len, flags) recv(s, buf, len, flags)
@@ -572,7 +557,7 @@ int network_init(void);
 #define ERRNO_IS_ACCEPT_EAGAIN(e)    ERRNO_IS_EAGAIN(e)
 /** Return true if e is EMFILE or another error indicating that a call to
  * accept() has failed because we're out of fds or something. */
-#define ERRNO_IS_ACCEPT_RESOURCE_LIMIT(e) \
+#define ERRNO_IS_RESOURCE_LIMIT(e) \
   ((e) == WSAEMFILE || (e) == WSAENOBUFS)
 /** Return true if e is EADDRINUSE or the local equivalent. */
 #define ERRNO_IS_EADDRINUSE(e)      ((e) == WSAEADDRINUSE)
@@ -590,7 +575,7 @@ const char *tor_socket_strerror(int e);
 #define ERRNO_IS_CONN_EINPROGRESS(e) ((e) == EINPROGRESS || 0)
 #define ERRNO_IS_ACCEPT_EAGAIN(e) \
   (ERRNO_IS_EAGAIN(e) || (e) == ECONNABORTED)
-#define ERRNO_IS_ACCEPT_RESOURCE_LIMIT(e) \
+#define ERRNO_IS_RESOURCE_LIMIT(e) \
   ((e) == EMFILE || (e) == ENFILE || (e) == ENOBUFS || (e) == ENOMEM)
 #define ERRNO_IS_EADDRINUSE(e)       (((e) == EADDRINUSE) || 0)
 #define tor_socket_errno(sock)       (errno)
@@ -699,6 +684,8 @@ STATIC int tor_ersatz_socketpair(int family, int type, int protocol,
                                    tor_socket_t fd[2]);
 #endif
 #endif
+
+ssize_t tor_getpass(const char *prompt, char *output, size_t buflen);
 
 /* This needs some of the declarations above so we include it here. */
 #include "compat_threads.h"

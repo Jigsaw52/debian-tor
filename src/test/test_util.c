@@ -4111,26 +4111,6 @@ test_util_laplace(void *arg)
   ;
 }
 
-static void
-test_util_strclear(void *arg)
-{
-  static const char *vals[] = { "", "a", "abcdef", "abcdefgh", NULL };
-  int i;
-  char *v = NULL;
-  (void)arg;
-
-  for (i = 0; vals[i]; ++i) {
-    size_t n;
-    v = tor_strdup(vals[i]);
-    n = strlen(v);
-    tor_strclear(v);
-    tt_assert(tor_mem_is_zero(v, n+1));
-    tor_free(v);
-  }
- done:
-  tor_free(v);
-}
-
 #define UTIL_LEGACY(name)                                               \
   { #name, test_util_ ## name , 0, NULL, NULL }
 
@@ -4288,19 +4268,36 @@ test_util_hostname_validation(void *arg)
   tt_assert(string_is_valid_hostname("stanford.edu"));
   tt_assert(string_is_valid_hostname("multiple-words-with-hypens.jp"));
 
-  // Subdomain name cannot start with '-'.
+  // Subdomain name cannot start with '-' or '_'.
   tt_assert(!string_is_valid_hostname("-torproject.org"));
   tt_assert(!string_is_valid_hostname("subdomain.-domain.org"));
   tt_assert(!string_is_valid_hostname("-subdomain.domain.org"));
+  tt_assert(!string_is_valid_hostname("___abc.org"));
 
   // Hostnames cannot contain non-alphanumeric characters.
   tt_assert(!string_is_valid_hostname("%%domain.\\org."));
   tt_assert(!string_is_valid_hostname("***x.net"));
-  tt_assert(!string_is_valid_hostname("___abc.org"));
   tt_assert(!string_is_valid_hostname("\xff\xffxyz.org"));
   tt_assert(!string_is_valid_hostname("word1 word2.net"));
 
+  // Test workaround for nytimes.com stupidity, technically invalid,
+  // but we allow it since they are big, even though they are failing to
+  // comply with a ~30 year old standard.
+  tt_assert(string_is_valid_hostname("core3_euw1.fabrik.nytimes.com"));
+
+  // Firefox passes FQDNs with trailing '.'s  directly to the SOCKS proxy,
+  // which is redundant since the spec states DOMAINNAME addresses are fully
+  // qualified.  While unusual, this should be tollerated.
+  tt_assert(string_is_valid_hostname("core9_euw1.fabrik.nytimes.com."));
+  tt_assert(!string_is_valid_hostname("..washingtonpost.is.better.com"));
+  tt_assert(!string_is_valid_hostname("so.is..ft.com"));
+  tt_assert(!string_is_valid_hostname("..."));
+
   // XXX: do we allow single-label DNS names?
+  // We shouldn't for SOCKS (spec says "contains a fully-qualified domain name"
+  // but only test pathologically malformed traling '.' cases for now.
+  tt_assert(!string_is_valid_hostname("."));
+  tt_assert(!string_is_valid_hostname(".."));
 
   done:
   return;
@@ -4320,6 +4317,34 @@ test_util_ipv4_validation(void *arg)
 
   done:
   return;
+}
+
+static void
+test_util_writepid(void *arg)
+{
+  (void) arg;
+
+  char *contents = NULL;
+  const char *fname = get_fname("tmp_pid");
+  unsigned long pid;
+  char c;
+
+  write_pidfile(fname);
+
+  contents = read_file_to_str(fname, 0, NULL);
+  tt_assert(contents);
+
+  int n = sscanf(contents, "%lu\n%c", &pid, &c);
+  tt_int_op(n, OP_EQ, 1);
+
+#ifdef _WIN32
+  tt_uint_op(pid, OP_EQ, _getpid());
+#else
+  tt_uint_op(pid, OP_EQ, getpid());
+#endif
+
+ done:
+  tor_free(contents);
 }
 
 struct testcase_t util_tests[] = {
@@ -4348,7 +4373,6 @@ struct testcase_t util_tests[] = {
   UTIL_LEGACY(di_ops),
   UTIL_TEST(round_to_next_multiple_of, 0),
   UTIL_TEST(laplace, 0),
-  UTIL_TEST(strclear, 0),
   UTIL_TEST(find_str_at_start_of_line, 0),
   UTIL_TEST(string_is_C_identifier, 0),
   UTIL_TEST(asprintf, 0),
@@ -4389,6 +4413,7 @@ struct testcase_t util_tests[] = {
   UTIL_TEST(max_mem, 0),
   UTIL_TEST(hostname_validation, 0),
   UTIL_TEST(ipv4_validation, 0),
+  UTIL_TEST(writepid, 0),
   END_OF_TESTCASES
 };
 

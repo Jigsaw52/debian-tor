@@ -50,7 +50,8 @@ static pthread_attr_t attr_detached;
 static int threads_initialized = 0;
 
 /** Minimalist interface to run a void function in the background.  On
- * Unix calls fork, on win32 calls beginthread.  Returns -1 on failure.
+ * Unix calls pthread_create, on win32 calls beginthread.  Returns -1 on
+ * failure.
  * func should not return, but rather should call spawn_exit.
  *
  * NOTE: if <b>data</b> is used, it should not be allocated on the stack,
@@ -63,13 +64,17 @@ spawn_func(void (*func)(void *), void *data)
 {
   pthread_t thread;
   tor_pthread_data_t *d;
-  if (PREDICT_UNLIKELY(!threads_initialized))
+  if (PREDICT_UNLIKELY(!threads_initialized)) {
     tor_threads_init();
+  }
   d = tor_malloc(sizeof(tor_pthread_data_t));
   d->data = data;
   d->func = func;
-  if (pthread_create(&thread,&attr_detached,tor_pthread_helper_fn,d))
+  if (pthread_create(&thread, &attr_detached, tor_pthread_helper_fn, d)) {
+    tor_free(d);
     return -1;
+  }
+
   return 0;
 }
 
@@ -91,10 +96,9 @@ static pthread_mutexattr_t attr_recursive;
 void
 tor_mutex_init(tor_mutex_t *mutex)
 {
-  int err;
   if (PREDICT_UNLIKELY(!threads_initialized))
     tor_threads_init();
-  err = pthread_mutex_init(&mutex->mutex, &attr_recursive);
+  const int err = pthread_mutex_init(&mutex->mutex, &attr_recursive);
   if (PREDICT_UNLIKELY(err)) {
     log_err(LD_GENERAL, "Error %d creating a mutex.", err);
     tor_fragile_assert();
@@ -278,12 +282,14 @@ tor_threads_init(void)
   if (!threads_initialized) {
     pthread_mutexattr_init(&attr_recursive);
     pthread_mutexattr_settype(&attr_recursive, PTHREAD_MUTEX_RECURSIVE);
-    tor_assert(0==pthread_attr_init(&attr_detached));
+    const int ret1 = pthread_attr_init(&attr_detached);
+    tor_assert(ret1 == 0);
 #ifndef PTHREAD_CREATE_DETACHED
 #define PTHREAD_CREATE_DETACHED 1
 #endif
-    tor_assert(0==pthread_attr_setdetachstate(&attr_detached,
-                                              PTHREAD_CREATE_DETACHED));
+    const int ret2 =
+      pthread_attr_setdetachstate(&attr_detached, PTHREAD_CREATE_DETACHED);
+    tor_assert(ret2 == 0);
     threads_initialized = 1;
     set_main_thread();
   }

@@ -18,6 +18,7 @@
 #include "dirserv.h"
 #include "dirvote.h"
 #include "hibernate.h"
+#include "keypin.h"
 #include "microdesc.h"
 #include "networkstatus.h"
 #include "nodelist.h"
@@ -27,6 +28,7 @@
 #include "routerlist.h"
 #include "routerparse.h"
 #include "routerset.h"
+#include "torcert.h"
 
 /**
  * \file dirserv.c
@@ -225,6 +227,16 @@ dirserv_load_fingerprint_file(void)
   return 0;
 }
 
+/* If this is set, then we don't allow routers that have advertised an Ed25519
+ * identity to stop doing so.  This is going to be essential for good identity
+ * security: otherwise anybody who can attack RSA-1024 but not Ed25519 could
+ * just sign fake descriptors missing the Ed25519 key.  But we won't actually
+ * be able to prevent that kind of thing until we're confident that there
+ * isn't actually a legit reason to downgrade to 0.2.5.  So for now, we have
+ * to leave this #undef.
+ */
+#undef DISABLE_DISABLING_ED25519
+
 /** Check whether <b>router</b> has a nickname/identity key combination that
  * we recognize from the fingerprint list, or an IP we automatically act on
  * according to our configuration.  Return the appropriate router status.
@@ -241,6 +253,36 @@ dirserv_router_get_status(const routerinfo_t *router, const char **msg)
     if (msg)
       *msg = "Bug: Error computing fingerprint";
     return FP_REJECT;
+  }
+
+  if (router->signing_key_cert) {
+    /* This has an ed25519 identity key. */
+    if (KEYPIN_MISMATCH ==
+        keypin_check((const uint8_t*)router->cache_info.identity_digest,
+                     router->signing_key_cert->signing_key.pubkey)) {
+      if (msg) {
+        *msg = "Ed25519 identity key or RSA identity key has changed.";
+      }
+      log_warn(LD_DIR, "Router %s uploaded a descriptor with a Ed25519 key "
+               "but the <rsa,ed25519> keys don't match what they were before.",
+               router_describe(router));
+      return FP_REJECT;
+    }
+  } else {
+    /* No ed25519 key */
+    if (KEYPIN_MISMATCH == keypin_check_lone_rsa(
+                        (const uint8_t*)router->cache_info.identity_digest)) {
+      log_warn(LD_DIR, "Router %s uploaded a descriptor with no Ed25519 key, "
+               "when we previously knew an Ed25519 for it. Ignoring for now, "
+               "since Tor 0.2.6 is under development.",
+               router_describe(router));
+#ifdef DISABLE_DISABLING_ED25519
+      if (msg) {
+        *msg = "Ed25519 identity key has disappeared.";
+      }
+      return FP_REJECT;
+#endif
+    }
   }
 
   return dirserv_get_status_impl(d, router->nickname,
@@ -576,6 +618,28 @@ dirserv_add_descriptor(routerinfo_t *ri, const char **msg, const char *source)
                                             desclen, *msg);
     routerinfo_free(ri);
     return ROUTER_IS_ALREADY_KNOWN;
+  }
+
+  /* Do keypinning again ... this time, to add the pin if appropriate */
+  int keypin_status;
+  if (ri->signing_key_cert) {
+    keypin_status = keypin_check_and_add(
+      (const uint8_t*)ri->cache_info.identity_digest,
+      ri->signing_key_cert->signing_key.pubkey);
+  } else {
+    keypin_status = keypin_check_lone_rsa(
+      (const uint8_t*)ri->cache_info.identity_digest);
+#ifndef DISABLE_DISABLING_ED25519
+    if (keypin_status == KEYPIN_MISMATCH)
+      keypin_status = KEYPIN_NOT_FOUND;
+#endif
+  }
+  if (keypin_status == KEYPIN_MISMATCH) {
+    log_info(LD_DIRSERV, "Dropping descriptor from %s (source: %s) because "
+             "its key did not match an older RSA/Ed25519 keypair",
+             router_describe(ri), source);
+    *msg = "Looks like your keypair does not match its older value.";
+    return ROUTER_AUTHDIR_REJECTS;
   }
 
   /* Make a copy of desc, since router_add_to_routerlist might free
@@ -1308,8 +1372,7 @@ dirserv_thinks_router_is_hs_dir(const routerinfo_t *router,
 
   return (router->wants_to_be_hs_dir && router->dir_port &&
           node->is_stable &&
-          uptime >= get_options()->MinUptimeHidServDirectoryV2 &&
-          router_is_active(router, node, now));
+          uptime >= get_options()->MinUptimeHidServDirectoryV2);
 }
 
 /** Don't consider routers with less bandwidth than this when computing
@@ -1931,6 +1994,16 @@ routerstatus_format_entry(const routerstatus_t *rs, const char *version,
       smartlist_add_asprintf(chunks, "p %s\n", summary);
       tor_free(summary);
     }
+
+    if (format == NS_V3_VOTE && vrs) {
+      if (tor_mem_is_zero((char*)vrs->ed25519_id, ED25519_PUBKEY_LEN)) {
+        smartlist_add(chunks, tor_strdup("id ed25519 none\n"));
+      } else {
+        char ed_b64[BASE64_DIGEST256_LEN+1];
+        digest256_to_base64(ed_b64, (const char*)vrs->ed25519_id);
+        smartlist_add_asprintf(chunks, "id ed25519 %s\n", ed_b64);
+      }
+    }
   }
 
  done:
@@ -2055,8 +2128,7 @@ set_routerstatus_from_routerinfo(routerstatus_t *rs,
                                  node_t *node,
                                  routerinfo_t *ri,
                                  time_t now,
-                                 int listbadexits,
-                                 int vote_on_hsdirs)
+                                 int listbadexits)
 {
   const or_options_t *options = get_options();
   uint32_t routerbw_kb = dirserv_get_credible_bandwidth_kb(ri);
@@ -2069,10 +2141,8 @@ set_routerstatus_from_routerinfo(routerstatus_t *rs,
   /* Already set by compute_performance_thresholds. */
   rs->is_exit = node->is_exit;
   rs->is_stable = node->is_stable =
-    router_is_active(ri, node, now) &&
     !dirserv_thinks_router_is_unreliable(now, ri, 1, 0);
   rs->is_fast = node->is_fast =
-    router_is_active(ri, node, now) &&
     !dirserv_thinks_router_is_unreliable(now, ri, 0, 1);
   rs->is_flagged_running = node->is_running; /* computed above */
 
@@ -2093,8 +2163,8 @@ set_routerstatus_from_routerinfo(routerstatus_t *rs,
   }
 
   rs->is_bad_exit = listbadexits && node->is_bad_exit;
-  node->is_hs_dir = dirserv_thinks_router_is_hs_dir(ri, node, now);
-  rs->is_hs_dir = vote_on_hsdirs && node->is_hs_dir;
+  rs->is_hs_dir = node->is_hs_dir =
+    dirserv_thinks_router_is_hs_dir(ri, node, now);
 
   rs->is_named = rs->is_unnamed = 0;
 
@@ -2132,8 +2202,7 @@ set_routerstatus_from_routerinfo(routerstatus_t *rs,
 
     if (routerset_contains_routerstatus(options->TestingDirAuthVoteHSDir,
                                         rs, 0)) {
-      /* TestingDirAuthVoteHSDir respects VoteOnHidServDirectoriesV2 */
-      rs->is_hs_dir = vote_on_hsdirs;
+      rs->is_hs_dir = 1;
     }
   }
 }
@@ -2659,7 +2728,6 @@ dirserv_generate_networkstatus_vote_obj(crypto_pk_t *private_key,
   char identity_digest[DIGEST_LEN];
   char signing_key_digest[DIGEST_LEN];
   int listbadexits = options->AuthDirListBadExits;
-  int vote_on_hsdirs = options->VoteOnHidServDirectoriesV2;
   routerlist_t *rl = router_get_routerlist();
   time_t now = time(NULL);
   time_t cutoff = now - ROUTER_MAX_AGE_TO_PUBLISH;
@@ -2750,8 +2818,12 @@ dirserv_generate_networkstatus_vote_obj(crypto_pk_t *private_key,
       vrs = tor_malloc_zero(sizeof(vote_routerstatus_t));
       rs = &vrs->status;
       set_routerstatus_from_routerinfo(rs, node, ri, now,
-                                       listbadexits,
-                                       vote_on_hsdirs);
+                                       listbadexits);
+
+      if (ri->signing_key_cert) {
+        memcpy(vrs->ed25519_id, ri->signing_key_cert->signing_key.pubkey,
+               ED25519_PUBKEY_LEN);
+      }
 
       if (digestmap_get(omit_as_sybil, ri->cache_info.identity_digest))
         clear_status_flags_on_sybil(rs);
@@ -2843,14 +2915,12 @@ dirserv_generate_networkstatus_vote_obj(crypto_pk_t *private_key,
 
   v3_out->known_flags = smartlist_new();
   smartlist_split_string(v3_out->known_flags,
-                "Authority Exit Fast Guard Stable V2Dir Valid",
+                "Authority Exit Fast Guard Stable V2Dir Valid HSDir",
                 0, SPLIT_SKIP_SPACE|SPLIT_IGNORE_BLANK, 0);
   if (vote_on_reachability)
     smartlist_add(v3_out->known_flags, tor_strdup("Running"));
   if (listbadexits)
     smartlist_add(v3_out->known_flags, tor_strdup("BadExit"));
-  if (vote_on_hsdirs)
-    smartlist_add(v3_out->known_flags, tor_strdup("HSDir"));
   smartlist_sort_strings(v3_out->known_flags);
 
   if (options->ConsensusParams) {

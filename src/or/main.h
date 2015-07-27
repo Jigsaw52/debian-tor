@@ -52,6 +52,7 @@ void directory_info_has_arrived(time_t now, int from_cache);
 
 void ip_address_changed(int at_interface);
 void dns_servers_relaunch_checks(void);
+void reset_all_main_loop_timers(void);
 void reschedule_descriptor_update_check(void);
 
 MOCK_DECL(long,get_uptime,(void));
@@ -59,7 +60,7 @@ MOCK_DECL(long,get_uptime,(void));
 unsigned get_signewnym_epoch(void);
 
 void handle_signals(int is_parent);
-void process_signal(uintptr_t sig);
+void process_signal(int sig);
 
 int try_locking(const or_options_t *options, int err_if_locked);
 int have_lockfile(void);

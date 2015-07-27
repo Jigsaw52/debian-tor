@@ -13,15 +13,23 @@
 #include "orconfig.h"
 
 #ifdef _WIN32
-#ifndef _WIN32_WINNT
-#define _WIN32_WINNT 0x0501
-#endif
-#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
 #include <windows.h>
 #include <wincrypt.h>
 /* Windows defines this; so does OpenSSL 0.9.8h and later. We don't actually
  * use either definition. */
 #undef OCSP_RESPONSE
+#endif
+
+#include <openssl/opensslv.h>
+
+#define CRYPTO_PRIVATE
+#include "crypto.h"
+#include "crypto_curve25519.h"
+#include "crypto_ed25519.h"
+
+#if OPENSSL_VERSION_NUMBER < OPENSSL_V_SERIES(1,0,0)
+#error "We require OpenSSL >= 1.0.0"
 #endif
 
 #include <openssl/err.h>
@@ -30,7 +38,6 @@
 #include <openssl/evp.h>
 #include <openssl/engine.h>
 #include <openssl/rand.h>
-#include <openssl/opensslv.h>
 #include <openssl/bn.h>
 #include <openssl/dh.h>
 #include <openssl/conf.h>
@@ -49,18 +56,12 @@
 #include <sys/fcntl.h>
 #endif
 
-#define CRYPTO_PRIVATE
-#include "crypto.h"
-#include "../common/torlog.h"
+#include "torlog.h"
 #include "aes.h"
-#include "../common/util.h"
+#include "util.h"
 #include "container.h"
 #include "compat.h"
 #include "sandbox.h"
-
-#if OPENSSL_VERSION_NUMBER < OPENSSL_V_SERIES(0,9,8)
-#error "We require OpenSSL >= 0.9.8"
-#endif
 
 #ifdef ANDROID
 /* Android's OpenSSL seems to have removed all of its Engine support. */
@@ -300,19 +301,15 @@ crypto_early_init(void)
                SSLeay(), SSLeay_version(SSLEAY_VERSION));
     }
 
-    if (SSLeay() < OPENSSL_V_SERIES(1,0,0)) {
-      log_notice(LD_CRYPTO,
-                 "Your OpenSSL version seems to be %s. We recommend 1.0.0 "
-                 "or later.",
-                 crypto_openssl_get_version_str());
-    }
-
     crypto_force_rand_ssleay();
 
-    if (crypto_seed_rng(1) < 0)
+    if (crypto_seed_rng() < 0)
       return -1;
     if (crypto_init_siphash_key() < 0)
       return -1;
+
+    curve25519_init();
+    ed25519_init();
   }
   return 0;
 }
@@ -391,7 +388,7 @@ crypto_global_init(int useAccel, const char *accelName, const char *accelDir)
     }
 
     if (crypto_force_rand_ssleay()) {
-      if (crypto_seed_rng(1) < 0)
+      if (crypto_seed_rng() < 0)
         return -1;
     }
 
@@ -405,7 +402,11 @@ crypto_global_init(int useAccel, const char *accelName, const char *accelDir)
 void
 crypto_thread_cleanup(void)
 {
+#if OPENSSL_VERSION_NUMBER >= OPENSSL_V_SERIES(1,1,0)
+  ERR_remove_thread_state(NULL);
+#else
   ERR_remove_state(0);
+#endif
 }
 
 /** used by tortls.c: wrap an RSA* in a crypto_pk_t. */
@@ -830,7 +831,7 @@ crypto_pk_public_exponent_ok(crypto_pk_t *env)
  * Note that this may leak information about the keys through timing.
  */
 int
-crypto_pk_cmp_keys(crypto_pk_t *a, crypto_pk_t *b)
+crypto_pk_cmp_keys(const crypto_pk_t *a, const crypto_pk_t *b)
 {
   int result;
   char a_is_non_null = (a != NULL) && (a->key != NULL);
@@ -856,19 +857,19 @@ crypto_pk_cmp_keys(crypto_pk_t *a, crypto_pk_t *b)
  *  Note that this may leak information about the keys through timing.
  */
 int
-crypto_pk_eq_keys(crypto_pk_t *a, crypto_pk_t *b)
+crypto_pk_eq_keys(const crypto_pk_t *a, const crypto_pk_t *b)
 {
   return (crypto_pk_cmp_keys(a, b) == 0);
 }
 
 /** Return the size of the public key modulus in <b>env</b>, in bytes. */
 size_t
-crypto_pk_keysize(crypto_pk_t *env)
+crypto_pk_keysize(const crypto_pk_t *env)
 {
   tor_assert(env);
   tor_assert(env->key);
 
-  return (size_t) RSA_size(env->key);
+  return (size_t) RSA_size((RSA*)env->key);
 }
 
 /** Return the size of the public key modulus of <b>env</b>, in bits. */
@@ -997,7 +998,7 @@ crypto_pk_private_decrypt(crypto_pk_t *env, char *to,
  * at least the length of the modulus of <b>env</b>.
  */
 int
-crypto_pk_public_checksig(crypto_pk_t *env, char *to,
+crypto_pk_public_checksig(const crypto_pk_t *env, char *to,
                           size_t tolen,
                           const char *from, size_t fromlen)
 {
@@ -1069,7 +1070,7 @@ crypto_pk_public_checksig_digest(crypto_pk_t *env, const char *data,
  * at least the length of the modulus of <b>env</b>.
  */
 int
-crypto_pk_private_sign(crypto_pk_t *env, char *to, size_t tolen,
+crypto_pk_private_sign(const crypto_pk_t *env, char *to, size_t tolen,
                        const char *from, size_t fromlen)
 {
   int r;
@@ -1084,7 +1085,7 @@ crypto_pk_private_sign(crypto_pk_t *env, char *to, size_t tolen,
 
   r = RSA_private_encrypt((int)fromlen,
                           (unsigned char*)from, (unsigned char*)to,
-                          env->key, RSA_PKCS1_PADDING);
+                          (RSA*)env->key, RSA_PKCS1_PADDING);
   if (r<0) {
     crypto_log_errors(LOG_WARN, "generating RSA signature");
     return -1;
@@ -1298,7 +1299,7 @@ crypto_pk_get_digest(const crypto_pk_t *pk, char *digest_out)
   unsigned char *buf = NULL;
   int len;
 
-  len = i2d_RSAPublicKey(pk->key, &buf);
+  len = i2d_RSAPublicKey((RSA*)pk->key, &buf);
   if (len < 0 || buf == NULL)
     return -1;
   if (crypto_digest(digest_out, (char*)buf, len) < 0) {
@@ -1395,6 +1396,78 @@ crypto_pk_get_hashed_fingerprint(crypto_pk_t *pk, char *fp_out)
   }
   base16_encode(fp_out, FINGERPRINT_LEN + 1, hashed_digest, DIGEST_LEN);
   return 0;
+}
+
+/** Given a crypto_pk_t <b>pk</b>, allocate a new buffer containing the
+ * Base64 encoding of the DER representation of the private key as a NUL
+ * terminated string, and return it via <b>priv_out</b>.  Return 0 on
+ * sucess, -1 on failure.
+ *
+ * It is the caller's responsibility to sanitize and free the resulting buffer.
+ */
+int
+crypto_pk_base64_encode(const crypto_pk_t *pk, char **priv_out)
+{
+  unsigned char *der = NULL;
+  int der_len;
+  int ret = -1;
+
+  *priv_out = NULL;
+
+  der_len = i2d_RSAPrivateKey(pk->key, &der);
+  if (der_len < 0 || der == NULL)
+    return ret;
+
+  size_t priv_len = base64_encode_size(der_len, 0) + 1;
+  char *priv = tor_malloc_zero(priv_len);
+  if (base64_encode(priv, priv_len, (char *)der, der_len, 0) >= 0) {
+    *priv_out = priv;
+    ret = 0;
+  } else {
+    tor_free(priv);
+  }
+
+  memwipe(der, 0, der_len);
+  OPENSSL_free(der);
+  return ret;
+}
+
+/** Given a string containing the Base64 encoded DER representation of the
+ * private key <b>str</b>, decode and return the result on success, or NULL
+ * on failure.
+ */
+crypto_pk_t *
+crypto_pk_base64_decode(const char *str, size_t len)
+{
+  crypto_pk_t *pk = NULL;
+
+  char *der = tor_malloc_zero(len + 1);
+  int der_len = base64_decode(der, len, str, len);
+  if (der_len <= 0) {
+    log_warn(LD_CRYPTO, "Stored RSA private key seems corrupted (base64).");
+    goto out;
+  }
+
+  const unsigned char *dp = (unsigned char*)der; /* Shut the compiler up. */
+  RSA *rsa = d2i_RSAPrivateKey(NULL, &dp, der_len);
+  if (!rsa) {
+    crypto_log_errors(LOG_WARN, "decoding private key");
+    goto out;
+  }
+
+  pk = crypto_new_pk_from_rsa_(rsa);
+
+  /* Make sure it's valid. */
+  if (crypto_pk_check_key(pk) <= 0) {
+    crypto_pk_free(pk);
+    pk = NULL;
+    goto out;
+  }
+
+ out:
+  memwipe(der, 0, len + 1);
+  tor_free(der);
+  return pk;
 }
 
 /* symmetric crypto */
@@ -1724,7 +1797,24 @@ crypto_digest_assign(crypto_digest_t *into,
  * <b>out_len</b> must be \<= DIGEST256_LEN. */
 void
 crypto_digest_smartlist(char *digest_out, size_t len_out,
-                        const smartlist_t *lst, const char *append,
+                        const smartlist_t *lst,
+                        const char *append,
+                        digest_algorithm_t alg)
+{
+  crypto_digest_smartlist_prefix(digest_out, len_out, NULL, lst, append, alg);
+}
+
+/** Given a list of strings in <b>lst</b>, set the <b>len_out</b>-byte digest
+ * at <b>digest_out</b> to the hash of the concatenation of: the
+ * optional string <b>prepend</b>, those strings,
+ * and the optional string <b>append</b>, computed with the algorithm
+ * <b>alg</b>.
+ * <b>out_len</b> must be \<= DIGEST256_LEN. */
+void
+crypto_digest_smartlist_prefix(char *digest_out, size_t len_out,
+                        const char *prepend,
+                        const smartlist_t *lst,
+                        const char *append,
                         digest_algorithm_t alg)
 {
   crypto_digest_t *d;
@@ -1732,6 +1822,8 @@ crypto_digest_smartlist(char *digest_out, size_t len_out,
     d = crypto_digest_new();
   else
     d = crypto_digest256_new(alg);
+  if (prepend)
+    crypto_digest_add_bytes(d, prepend, strlen(prepend));
   SMARTLIST_FOREACH(lst, const char *, cp,
                     crypto_digest_add_bytes(d, cp, strlen(cp)));
   if (append)
@@ -1768,235 +1860,12 @@ static BIGNUM *dh_param_p_tls = NULL;
 /** Shared G parameter for our DH key exchanges. */
 static BIGNUM *dh_param_g = NULL;
 
-/** Generate and return a reasonable and safe DH parameter p. */
-static BIGNUM *
-crypto_generate_dynamic_dh_modulus(void)
-{
-  BIGNUM *dynamic_dh_modulus;
-  DH *dh_parameters;
-  int r, dh_codes;
-  char *s;
-
-  dynamic_dh_modulus = BN_new();
-  tor_assert(dynamic_dh_modulus);
-
-  dh_parameters = DH_new();
-  tor_assert(dh_parameters);
-
-  r = DH_generate_parameters_ex(dh_parameters,
-                                DH_BYTES*8, DH_GENERATOR, NULL);
-  tor_assert(r == 0);
-
-  r = DH_check(dh_parameters, &dh_codes);
-  tor_assert(r && !dh_codes);
-
-  BN_copy(dynamic_dh_modulus, dh_parameters->p);
-  tor_assert(dynamic_dh_modulus);
-
-  DH_free(dh_parameters);
-
-  { /* log the dynamic DH modulus: */
-    s = BN_bn2hex(dynamic_dh_modulus);
-    tor_assert(s);
-    log_info(LD_OR, "Dynamic DH modulus generated: [%s]", s);
-    OPENSSL_free(s);
-  }
-
-  return dynamic_dh_modulus;
-}
-
-/** Store our dynamic DH modulus (and its group parameters) to
-    <b>fname</b> for future use. */
-static int
-crypto_store_dynamic_dh_modulus(const char *fname)
-{
-  int len, new_len;
-  DH *dh = NULL;
-  unsigned char *dh_string_repr = NULL;
-  char *base64_encoded_dh = NULL;
-  char *file_string = NULL;
-  int retval = -1;
-  static const char file_header[] = "# This file contains stored Diffie-"
-    "Hellman parameters for future use.\n# You *do not* need to edit this "
-    "file.\n\n";
-
-  tor_assert(fname);
-
-  if (!dh_param_p_tls) {
-    log_info(LD_CRYPTO, "Tried to store a DH modulus that does not exist.");
-    goto done;
-  }
-
-  if (!(dh = DH_new()))
-    goto done;
-  if (!(dh->p = BN_dup(dh_param_p_tls)))
-    goto done;
-  if (!(dh->g = BN_new()))
-    goto done;
-  if (!BN_set_word(dh->g, DH_GENERATOR))
-    goto done;
-
-  len = i2d_DHparams(dh, &dh_string_repr);
-  if ((len < 0) || (dh_string_repr == NULL)) {
-    log_warn(LD_CRYPTO, "Error occured while DER encoding DH modulus (2).");
-    goto done;
-  }
-
-  base64_encoded_dh = tor_calloc(len, 2); /* should be enough */
-  new_len = base64_encode(base64_encoded_dh, len * 2,
-                          (char *)dh_string_repr, len);
-  if (new_len < 0) {
-    log_warn(LD_CRYPTO, "Error occured while base64-encoding DH modulus.");
-    goto done;
-  }
-
-  /* concatenate file header and the dh parameters blob */
-  new_len = tor_asprintf(&file_string, "%s%s", file_header, base64_encoded_dh);
-
-  /* write to file */
-  if (write_bytes_to_new_file(fname, file_string, new_len, 0) < 0) {
-    log_info(LD_CRYPTO, "'%s' was already occupied.", fname);
-    goto done;
-  }
-
-  retval = 0;
-
- done:
-  if (dh)
-    DH_free(dh);
-  if (dh_string_repr)
-    OPENSSL_free(dh_string_repr);
-  tor_free(base64_encoded_dh);
-  tor_free(file_string);
-
-  return retval;
-}
-
-/** Return the dynamic DH modulus stored in <b>fname</b>. If there is no
-    dynamic DH modulus stored in <b>fname</b>, return NULL. */
-static BIGNUM *
-crypto_get_stored_dynamic_dh_modulus(const char *fname)
-{
-  int retval;
-  char *contents = NULL;
-  const char *contents_tmp = NULL;
-  int dh_codes;
-  DH *stored_dh = NULL;
-  BIGNUM *dynamic_dh_modulus = NULL;
-  int length = 0;
-  unsigned char *base64_decoded_dh = NULL;
-  const unsigned char *cp = NULL;
-
-  tor_assert(fname);
-
-  contents = read_file_to_str(fname, RFTS_IGNORE_MISSING, NULL);
-  if (!contents) {
-    log_info(LD_CRYPTO, "Could not open file '%s'", fname);
-    goto done; /*usually means that ENOENT. don't try to move file to broken.*/
-  }
-
-  /* skip the file header */
-  contents_tmp = eat_whitespace(contents);
-  if (!*contents_tmp) {
-    log_warn(LD_CRYPTO, "Stored dynamic DH modulus file "
-             "seems corrupted (eat_whitespace).");
-    goto err;
-  }
-
-  /* 'fname' contains the DH parameters stored in base64-ed DER
-   *  format. We are only interested in the DH modulus.
-   *  NOTE: We allocate more storage here than we need. Since we're already
-   *  doing that, we can also add 1 byte extra to appease Coverity's
-   *  scanner. */
-
-  cp = base64_decoded_dh = tor_malloc_zero(strlen(contents_tmp) + 1);
-  length = base64_decode((char *)base64_decoded_dh, strlen(contents_tmp),
-                         contents_tmp, strlen(contents_tmp));
-  if (length < 0) {
-    log_warn(LD_CRYPTO, "Stored dynamic DH modulus seems corrupted (base64).");
-    goto err;
-  }
-
-  stored_dh = d2i_DHparams(NULL, &cp, length);
-  if ((!stored_dh) || (cp - base64_decoded_dh != length)) {
-    log_warn(LD_CRYPTO, "Stored dynamic DH modulus seems corrupted (d2i).");
-    goto err;
-  }
-
-  { /* check the cryptographic qualities of the stored dynamic DH modulus: */
-    retval = DH_check(stored_dh, &dh_codes);
-    if (!retval || dh_codes) {
-      log_warn(LD_CRYPTO, "Stored dynamic DH modulus is not a safe prime.");
-      goto err;
-    }
-
-    retval = DH_size(stored_dh);
-    if (retval < DH_BYTES) {
-      log_warn(LD_CRYPTO, "Stored dynamic DH modulus is smaller "
-               "than '%d' bits.", DH_BYTES*8);
-      goto err;
-    }
-
-    if (!BN_is_word(stored_dh->g, 2)) {
-      log_warn(LD_CRYPTO, "Stored dynamic DH parameters do not use '2' "
-               "as the group generator.");
-      goto err;
-    }
-  }
-
-  { /* log the dynamic DH modulus: */
-    char *s = BN_bn2hex(stored_dh->p);
-    tor_assert(s);
-    log_info(LD_OR, "Found stored dynamic DH modulus: [%s]", s);
-    OPENSSL_free(s);
-  }
-
-  goto done;
-
- err:
-
-  {
-    /* move broken prime to $filename.broken */
-    char *fname_new=NULL;
-    tor_asprintf(&fname_new, "%s.broken", fname);
-
-    log_warn(LD_CRYPTO, "Moving broken dynamic DH prime to '%s'.", fname_new);
-
-    if (replace_file(fname, fname_new))
-      log_notice(LD_CRYPTO, "Error while moving '%s' to '%s'.",
-                 fname, fname_new);
-
-    tor_free(fname_new);
-  }
-
-  if (stored_dh) {
-    DH_free(stored_dh);
-    stored_dh = NULL;
-  }
-
- done:
-  tor_free(contents);
-  tor_free(base64_decoded_dh);
-
-  if (stored_dh) {
-    dynamic_dh_modulus = BN_dup(stored_dh->p);
-    DH_free(stored_dh);
-  }
-
-  return dynamic_dh_modulus;
-}
-
-/** Set the global TLS Diffie-Hellman modulus.
- * If <b>dynamic_dh_modulus_fname</b> is set, try to read a dynamic DH modulus
- * off it and use it as the DH modulus. If that's not possible,
- * generate a new dynamic DH modulus.
- * If <b>dynamic_dh_modulus_fname</b> is NULL, use the Apache mod_ssl DH
+/** Set the global TLS Diffie-Hellman modulus.  Use the Apache mod_ssl DH
  * modulus. */
 void
-crypto_set_tls_dh_prime(const char *dynamic_dh_modulus_fname)
+crypto_set_tls_dh_prime(void)
 {
   BIGNUM *tls_prime = NULL;
-  int store_dh_prime_afterwards = 0;
   int r;
 
   /* If the space is occupied, free the previous TLS DH prime */
@@ -2005,44 +1874,24 @@ crypto_set_tls_dh_prime(const char *dynamic_dh_modulus_fname)
     dh_param_p_tls = NULL;
   }
 
-  if (dynamic_dh_modulus_fname) { /* use dynamic DH modulus: */
-    log_info(LD_OR, "Using stored dynamic DH modulus.");
-    tls_prime = crypto_get_stored_dynamic_dh_modulus(dynamic_dh_modulus_fname);
+  tls_prime = BN_new();
+  tor_assert(tls_prime);
 
-    if (!tls_prime) {
-      log_notice(LD_OR, "Generating fresh dynamic DH modulus. "
-                 "This might take a while...");
-      tls_prime = crypto_generate_dynamic_dh_modulus();
-
-      store_dh_prime_afterwards++;
-    }
-  } else { /* use the static DH prime modulus used by Apache in mod_ssl: */
-    tls_prime = BN_new();
-    tor_assert(tls_prime);
-
-    /* This is the 1024-bit safe prime that Apache uses for its DH stuff; see
-     * modules/ssl/ssl_engine_dh.c; Apache also uses a generator of 2 with this
-     * prime.
-     */
-    r =BN_hex2bn(&tls_prime,
-                 "D67DE440CBBBDC1936D693D34AFD0AD50C84D239A45F520BB88174CB98"
-                 "BCE951849F912E639C72FB13B4B4D7177E16D55AC179BA420B2A29FE324A"
-                 "467A635E81FF5901377BEDDCFD33168A461AAD3B72DAE8860078045B07A7"
-                 "DBCA7874087D1510EA9FCC9DDD330507DD62DB88AEAA747DE0F4D6E2BD68"
-                 "B0E7393E0F24218EB3");
-    tor_assert(r);
-  }
+  /* This is the 1024-bit safe prime that Apache uses for its DH stuff; see
+   * modules/ssl/ssl_engine_dh.c; Apache also uses a generator of 2 with this
+   * prime.
+   */
+  r = BN_hex2bn(&tls_prime,
+               "D67DE440CBBBDC1936D693D34AFD0AD50C84D239A45F520BB88174CB98"
+               "BCE951849F912E639C72FB13B4B4D7177E16D55AC179BA420B2A29FE324A"
+               "467A635E81FF5901377BEDDCFD33168A461AAD3B72DAE8860078045B07A7"
+               "DBCA7874087D1510EA9FCC9DDD330507DD62DB88AEAA747DE0F4D6E2BD68"
+               "B0E7393E0F24218EB3");
+  tor_assert(r);
 
   tor_assert(tls_prime);
 
   dh_param_p_tls = tls_prime;
-
-  if (store_dh_prime_afterwards)
-    /* save the new dynamic DH modulus to disk. */
-    if (crypto_store_dynamic_dh_modulus(dynamic_dh_modulus_fname)) {
-      log_notice(LD_CRYPTO, "Failed while storing dynamic DH modulus. "
-                 "Make sure your data directory is sane.");
-    }
 }
 
 /** Initialize dh_param_p and dh_param_g if they are not already
@@ -2079,10 +1928,8 @@ init_dh_param(void)
   dh_param_p = circuit_dh_prime;
   dh_param_g = generator;
 
-  /* Ensure that we have TLS DH parameters set up, too, even if we're
-     going to change them soon. */
   if (!dh_param_p_tls) {
-    crypto_set_tls_dh_prime(NULL);
+    crypto_set_tls_dh_prime();
   }
 }
 
@@ -2134,6 +1981,8 @@ crypto_dh_t *
 crypto_dh_dup(const crypto_dh_t *dh)
 {
   crypto_dh_t *dh_new = tor_malloc_zero(sizeof(crypto_dh_t));
+  tor_assert(dh);
+  tor_assert(dh->dh);
   dh_new->dh = dh->dh;
   DH_up_ref(dh->dh);
   return dh_new;
@@ -2419,15 +2268,6 @@ crypto_dh_free(crypto_dh_t *dh)
  * work for us too. */
 #define ADD_ENTROPY 32
 
-/** True iff it's safe to use RAND_poll after setup.
- *
- * Versions of OpenSSL prior to 0.9.7k and 0.9.8c had a bug where RAND_poll
- * would allocate an fd_set on the stack, open a new file, and try to FD_SET
- * that fd without checking whether it fit in the fd_set.  Thus, if the
- * system has not just been started up, it is unsafe to call */
-#define RAND_POLL_IS_SAFE                       \
-  (OPENSSL_VERSION_NUMBER >= OPENSSL_V(0,9,8,'c'))
-
 /** Set the seed of the weak RNG to a random value. */
 void
 crypto_seed_weak_rng(tor_weak_rng_t *rng)
@@ -2497,7 +2337,7 @@ crypto_strongest_rand(uint8_t *out, size_t out_len)
  * have not yet allocated a bunch of fds.  Return 0 on success, -1 on failure.
  */
 int
-crypto_seed_rng(int startup)
+crypto_seed_rng(void)
 {
   int rand_poll_ok = 0, load_entropy_ok = 0;
   uint8_t buf[ADD_ENTROPY];
@@ -2505,11 +2345,9 @@ crypto_seed_rng(int startup)
   /* OpenSSL has a RAND_poll function that knows about more kinds of
    * entropy than we do.  We'll try calling that, *and* calling our own entropy
    * functions.  If one succeeds, we'll accept the RNG as seeded. */
-  if (startup || RAND_POLL_IS_SAFE) {
-    rand_poll_ok = RAND_poll();
-    if (rand_poll_ok == 0)
-      log_warn(LD_CRYPTO, "RAND_poll() failed.");
-  }
+  rand_poll_ok = RAND_poll();
+  if (rand_poll_ok == 0)
+    log_warn(LD_CRYPTO, "RAND_poll() failed.");
 
   load_entropy_ok = !crypto_strongest_rand(buf, sizeof(buf));
   if (load_entropy_ok) {
@@ -2562,8 +2400,40 @@ crypto_rand_int(unsigned int max)
   }
 }
 
+/** Return a pseudorandom integer, chosen uniformly from the values <i>i</i>
+ * such that <b>min</b> &lt;= <i>i</i> &lt <b>max</b>.
+ *
+ * <b>min</b> MUST be in range [0, <b>max</b>).
+ * <b>max</b> MUST be in range (min, INT_MAX].
+ */
+int
+crypto_rand_int_range(unsigned int min, unsigned int max)
+{
+  tor_assert(min < max);
+  tor_assert(max <= INT_MAX);
+
+  /* The overflow is avoided here because crypto_rand_int() returns a value
+   * between 0 and (max - min) inclusive. */
+  return min + crypto_rand_int(max - min);
+}
+
+/** As crypto_rand_int_range, but supports uint64_t. */
+uint64_t
+crypto_rand_uint64_range(uint64_t min, uint64_t max)
+{
+  tor_assert(min < max);
+  return min + crypto_rand_uint64(max - min);
+}
+
+/** As crypto_rand_int_range, but supports time_t. */
+time_t
+crypto_rand_time_range(time_t min, time_t max)
+{
+  return (time_t) crypto_rand_uint64_range(min, max);
+}
+
 /** Return a pseudorandom 64-bit integer, chosen uniformly from the values
- * between 0 and <b>max</b>-1. */
+ * between 0 and <b>max</b>-1 inclusive. */
 uint64_t
 crypto_rand_uint64(uint64_t max)
 {
@@ -2624,7 +2494,7 @@ crypto_random_hostname(int min_rand_len, int max_rand_len, const char *prefix,
   if (min_rand_len > max_rand_len)
     min_rand_len = max_rand_len;
 
-  randlen = min_rand_len + crypto_rand_int(max_rand_len - min_rand_len + 1);
+  randlen = crypto_rand_int_range(min_rand_len, max_rand_len+1);
 
   prefixlen = strlen(prefix);
   resultlen = prefixlen + strlen(suffix) + randlen + 16;
@@ -2671,35 +2541,221 @@ smartlist_shuffle(smartlist_t *sl)
   }
 }
 
-/** Base64 encode <b>srclen</b> bytes of data from <b>src</b>.  Write
- * the result into <b>dest</b>, if it will fit within <b>destlen</b>
- * bytes.  Return the number of bytes written on success; -1 if
- * destlen is too short, or other failure.
+#define BASE64_OPENSSL_LINELEN 64
+
+/** Return the Base64 encoded size of <b>srclen</b> bytes of data in
+ * bytes.
+ *
+ * If <b>flags</b>&amp;BASE64_ENCODE_MULTILINE is true, return the size
+ * of the encoded output as multiline output (64 character, `\n' terminated
+ * lines).
  */
-int
-base64_encode(char *dest, size_t destlen, const char *src, size_t srclen)
+size_t
+base64_encode_size(size_t srclen, int flags)
 {
-  /* FFFF we might want to rewrite this along the lines of base64_decode, if
-   * it ever shows up in the profile. */
-  EVP_ENCODE_CTX ctx;
-  int len, ret;
+  size_t enclen;
   tor_assert(srclen < INT_MAX);
 
-  /* 48 bytes of input -> 64 bytes of output plus newline.
-     Plus one more byte, in case I'm wrong.
-  */
-  if (destlen < ((srclen/48)+1)*66)
+  if (srclen == 0)
+    return 0;
+
+  enclen = ((srclen - 1) / 3) * 4 + 4;
+  if (flags & BASE64_ENCODE_MULTILINE) {
+    size_t remainder = enclen % BASE64_OPENSSL_LINELEN;
+    enclen += enclen / BASE64_OPENSSL_LINELEN;
+    if (remainder)
+      enclen++;
+  }
+  tor_assert(enclen < INT_MAX && enclen > srclen);
+  return enclen;
+}
+
+/** Internal table mapping 6 bit values to the Base64 alphabet. */
+static const char base64_encode_table[64] = {
+  'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
+  'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P',
+  'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X',
+  'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f',
+  'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
+  'o', 'p', 'q', 'r', 's', 't', 'u', 'v',
+  'w', 'x', 'y', 'z', '0', '1', '2', '3',
+  '4', '5', '6', '7', '8', '9', '+', '/'
+};
+
+/** Base64 encode <b>srclen</b> bytes of data from <b>src</b>.  Write
+ * the result into <b>dest</b>, if it will fit within <b>destlen</b>
+ * bytes. Return the number of bytes written on success; -1 if
+ * destlen is too short, or other failure.
+ *
+ * If <b>flags</b>&amp;BASE64_ENCODE_MULTILINE is true, return encoded
+ * output in multiline format (64 character, `\n' terminated lines).
+ */
+int
+base64_encode(char *dest, size_t destlen, const char *src, size_t srclen,
+              int flags)
+{
+  const unsigned char *usrc = (unsigned char *)src;
+  const unsigned char *eous = usrc + srclen;
+  char *d = dest;
+  uint32_t n = 0;
+  size_t linelen = 0;
+  size_t enclen;
+  int n_idx = 0;
+
+  if (!src || !dest)
+    return -1;
+
+  /* Ensure that there is sufficient space, including the NUL. */
+  enclen = base64_encode_size(srclen, flags);
+  if (destlen < enclen + 1)
     return -1;
   if (destlen > SIZE_T_CEILING)
     return -1;
+  if (enclen > INT_MAX)
+    return -1;
 
-  EVP_EncodeInit(&ctx);
-  EVP_EncodeUpdate(&ctx, (unsigned char*)dest, &len,
-                   (unsigned char*)src, (int)srclen);
-  EVP_EncodeFinal(&ctx, (unsigned char*)(dest+len), &ret);
-  ret += len;
-  return ret;
+  memset(dest, 0, enclen);
+
+  /* XXX/Yawning: If this ends up being too slow, this can be sped up
+   * by separating the multiline format case and the normal case, and
+   * processing 48 bytes of input at a time when newlines are desired.
+   */
+#define ENCODE_CHAR(ch) \
+  STMT_BEGIN                                                    \
+    *d++ = ch;                                                  \
+    if (flags & BASE64_ENCODE_MULTILINE) {                      \
+      if (++linelen % BASE64_OPENSSL_LINELEN == 0) {            \
+        linelen = 0;                                            \
+        *d++ = '\n';                                            \
+      }                                                         \
+    }                                                           \
+  STMT_END
+
+#define ENCODE_N(idx) \
+  ENCODE_CHAR(base64_encode_table[(n >> ((3 - idx) * 6)) & 0x3f])
+
+#define ENCODE_PAD() ENCODE_CHAR('=')
+
+  /* Iterate over all the bytes in src.  Each one will add 8 bits to the
+   * value we're encoding.  Accumulate bits in <b>n</b>, and whenever we
+   * have 24 bits, batch them into 4 bytes and flush those bytes to dest.
+   */
+  for ( ; usrc < eous; ++usrc) {
+    n = (n << 8) | *usrc;
+    if ((++n_idx) == 3) {
+      ENCODE_N(0);
+      ENCODE_N(1);
+      ENCODE_N(2);
+      ENCODE_N(3);
+      n_idx = 0;
+      n = 0;
+    }
+  }
+  switch (n_idx) {
+  case 0:
+    /* 0 leftover bits, no pading to add. */
+    break;
+  case 1:
+    /* 8 leftover bits, pad to 12 bits, write the 2 6-bit values followed
+     * by 2 padding characters.
+     */
+    n <<= 4;
+    ENCODE_N(2);
+    ENCODE_N(3);
+    ENCODE_PAD();
+    ENCODE_PAD();
+    break;
+  case 2:
+    /* 16 leftover bits, pad to 18 bits, write the 3 6-bit values followed
+     * by 1 padding character.
+     */
+    n <<= 2;
+    ENCODE_N(1);
+    ENCODE_N(2);
+    ENCODE_N(3);
+    ENCODE_PAD();
+    break;
+  default:
+    /* Something went catastrophically wrong. */
+    tor_fragile_assert();
+    return -1;
+  }
+
+#undef ENCODE_N
+#undef ENCODE_PAD
+#undef ENCODE_CHAR
+
+  /* Multiline output always includes at least one newline. */
+  if (flags & BASE64_ENCODE_MULTILINE && linelen != 0)
+    *d++ = '\n';
+
+  tor_assert(d - dest == (ptrdiff_t)enclen);
+
+  *d++ = '\0'; /* NUL terminate the output. */
+
+  return (int) enclen;
 }
+
+/** As base64_encode, but do not add any internal spaces or external padding
+ * to the output stream. */
+int
+base64_encode_nopad(char *dest, size_t destlen,
+                    const uint8_t *src, size_t srclen)
+{
+  int n = base64_encode(dest, destlen, (const char*) src, srclen, 0);
+  if (n <= 0)
+    return n;
+  tor_assert((size_t)n < destlen && dest[n] == 0);
+  char *in, *out;
+  in = out = dest;
+  while (*in) {
+    if (*in == '=' || *in == '\n') {
+      ++in;
+    } else {
+      *out++ = *in++;
+    }
+  }
+  *out = 0;
+
+  tor_assert(out - dest <= INT_MAX);
+
+  return (int)(out - dest);
+}
+
+/** As base64_decode, but do not require any padding on the input */
+int
+base64_decode_nopad(uint8_t *dest, size_t destlen,
+                    const char *src, size_t srclen)
+{
+  if (srclen > SIZE_T_CEILING - 4)
+    return -1;
+  char *buf = tor_malloc(srclen + 4);
+  memcpy(buf, src, srclen+1);
+  size_t buflen;
+  switch (srclen % 4)
+    {
+    case 0:
+    default:
+      buflen = srclen;
+      break;
+    case 1:
+      tor_free(buf);
+      return -1;
+    case 2:
+      memcpy(buf+srclen, "==", 3);
+      buflen = srclen + 2;
+      break;
+    case 3:
+      memcpy(buf+srclen, "=", 2);
+      buflen = srclen + 1;
+      break;
+  }
+  int n = base64_decode((char*)dest, destlen, buf, buflen);
+  tor_free(buf);
+  return n;
+}
+
+#undef BASE64_OPENSSL_LINELEN
 
 /** @{ */
 /** Special values used for the base64_decode_table */
@@ -2745,26 +2801,6 @@ static const uint8_t base64_decode_table[256] = {
 int
 base64_decode(char *dest, size_t destlen, const char *src, size_t srclen)
 {
-#ifdef USE_OPENSSL_BASE64
-  EVP_ENCODE_CTX ctx;
-  int len, ret;
-  /* 64 bytes of input -> *up to* 48 bytes of output.
-     Plus one more byte, in case I'm wrong.
-  */
-  if (destlen < ((srclen/64)+1)*49)
-    return -1;
-  if (destlen > SIZE_T_CEILING)
-    return -1;
-
-  memset(dest, 0, destlen);
-
-  EVP_DecodeInit(&ctx);
-  EVP_DecodeUpdate(&ctx, (unsigned char*)dest, &len,
-                   (unsigned char*)src, srclen);
-  EVP_DecodeFinal(&ctx, (unsigned char*)dest, &ret);
-  ret += len;
-  return ret;
-#else
   const char *eos = src+srclen;
   uint32_t n=0;
   int n_idx=0;
@@ -2835,20 +2871,20 @@ base64_decode(char *dest, size_t destlen, const char *src, size_t srclen)
   tor_assert((dest-dest_orig) <= INT_MAX);
 
   return (int)(dest-dest_orig);
-#endif
 }
 #undef X
 #undef SP
 #undef PAD
 
 /** Base64 encode DIGEST_LINE bytes from <b>digest</b>, remove the trailing =
- * and newline characters, and store the nul-terminated result in the first
+ * characters, and store the nul-terminated result in the first
  * BASE64_DIGEST_LEN+1 bytes of <b>d64</b>.  */
+/* XXXX unify with crypto_format.c code */
 int
 digest_to_base64(char *d64, const char *digest)
 {
   char buf[256];
-  base64_encode(buf, sizeof(buf), digest, DIGEST_LEN);
+  base64_encode(buf, sizeof(buf), digest, DIGEST_LEN, 0);
   buf[BASE64_DIGEST_LEN] = '\0';
   memcpy(d64, buf, BASE64_DIGEST_LEN+1);
   return 0;
@@ -2857,36 +2893,25 @@ digest_to_base64(char *d64, const char *digest)
 /** Given a base64 encoded, nul-terminated digest in <b>d64</b> (without
  * trailing newline or = characters), decode it and store the result in the
  * first DIGEST_LEN bytes at <b>digest</b>. */
+/* XXXX unify with crypto_format.c code */
 int
 digest_from_base64(char *digest, const char *d64)
 {
-#ifdef USE_OPENSSL_BASE64
-  char buf_in[BASE64_DIGEST_LEN+3];
-  char buf[256];
-  if (strlen(d64) != BASE64_DIGEST_LEN)
-    return -1;
-  memcpy(buf_in, d64, BASE64_DIGEST_LEN);
-  memcpy(buf_in+BASE64_DIGEST_LEN, "=\n\0", 3);
-  if (base64_decode(buf, sizeof(buf), buf_in, strlen(buf_in)) != DIGEST_LEN)
-    return -1;
-  memcpy(digest, buf, DIGEST_LEN);
-  return 0;
-#else
   if (base64_decode(digest, DIGEST_LEN, d64, strlen(d64)) == DIGEST_LEN)
     return 0;
   else
     return -1;
-#endif
 }
 
 /** Base64 encode DIGEST256_LINE bytes from <b>digest</b>, remove the
- * trailing = and newline characters, and store the nul-terminated result in
- * the first BASE64_DIGEST256_LEN+1 bytes of <b>d64</b>.  */
+ * trailing = characters, and store the nul-terminated result in the first
+ * BASE64_DIGEST256_LEN+1 bytes of <b>d64</b>. */
+ /* XXXX unify with crypto_format.c code */
 int
 digest256_to_base64(char *d64, const char *digest)
 {
   char buf[256];
-  base64_encode(buf, sizeof(buf), digest, DIGEST256_LEN);
+  base64_encode(buf, sizeof(buf), digest, DIGEST256_LEN, 0);
   buf[BASE64_DIGEST256_LEN] = '\0';
   memcpy(d64, buf, BASE64_DIGEST256_LEN+1);
   return 0;
@@ -2895,26 +2920,14 @@ digest256_to_base64(char *d64, const char *digest)
 /** Given a base64 encoded, nul-terminated digest in <b>d64</b> (without
  * trailing newline or = characters), decode it and store the result in the
  * first DIGEST256_LEN bytes at <b>digest</b>. */
+/* XXXX unify with crypto_format.c code */
 int
 digest256_from_base64(char *digest, const char *d64)
 {
-#ifdef USE_OPENSSL_BASE64
-  char buf_in[BASE64_DIGEST256_LEN+3];
-  char buf[256];
-  if (strlen(d64) != BASE64_DIGEST256_LEN)
-    return -1;
-  memcpy(buf_in, d64, BASE64_DIGEST256_LEN);
-  memcpy(buf_in+BASE64_DIGEST256_LEN, "=\n\0", 3);
-  if (base64_decode(buf, sizeof(buf), buf_in, strlen(buf_in)) != DIGEST256_LEN)
-    return -1;
-  memcpy(digest, buf, DIGEST256_LEN);
-  return 0;
-#else
   if (base64_decode(digest, DIGEST256_LEN, d64, strlen(d64)) == DIGEST256_LEN)
     return 0;
   else
     return -1;
-#endif
 }
 
 /** Implements base32 encoding as in RFC 4648.  Limitation: Requires
@@ -3119,13 +3132,11 @@ openssl_dynlock_destroy_cb_(struct CRYPTO_dynlock_value *v,
   tor_free(v);
 }
 
-#if OPENSSL_VERSION_NUMBER >= OPENSSL_V_SERIES(1,0,0)
 static void
 tor_set_openssl_thread_id(CRYPTO_THREADID *threadid)
 {
   CRYPTO_THREADID_set_numeric(threadid, tor_get_thread_id());
 }
-#endif
 
 /** @{ */
 /** Helper: Construct mutexes, and set callbacks to help OpenSSL handle being
@@ -3140,11 +3151,7 @@ setup_openssl_threading(void)
   for (i=0; i < n; ++i)
     openssl_mutexes_[i] = tor_mutex_new();
   CRYPTO_set_locking_callback(openssl_locking_cb_);
-#if OPENSSL_VERSION_NUMBER < OPENSSL_V_SERIES(1,0,0)
-  CRYPTO_set_id_callback(tor_get_thread_id);
-#else
   CRYPTO_THREADID_set_callback(tor_set_openssl_thread_id);
-#endif
   CRYPTO_set_dynlock_create_callback(openssl_dynlock_create_cb_);
   CRYPTO_set_dynlock_lock_callback(openssl_dynlock_lock_cb_);
   CRYPTO_set_dynlock_destroy_callback(openssl_dynlock_destroy_cb_);
@@ -3157,7 +3164,11 @@ int
 crypto_global_cleanup(void)
 {
   EVP_cleanup();
+#if OPENSSL_VERSION_NUMBER >= OPENSSL_V_SERIES(1,1,0)
+  ERR_remove_thread_state(NULL);
+#else
   ERR_remove_state(0);
+#endif
   ERR_free_strings();
 
   if (dh_param_p)

@@ -27,6 +27,7 @@
 #include "compat.h"
 
 #ifdef _WIN32
+#include <winsock2.h>
 #include <windows.h>
 #include <sys/locking.h>
 #endif
@@ -66,6 +67,31 @@
 #endif
 #ifdef HAVE_CRT_EXTERNS_H
 #include <crt_externs.h>
+#endif
+
+#ifdef _WIN32
+#include <conio.h>
+#include <wchar.h>
+/* Some mingw headers lack these. :p */
+#if defined(HAVE_DECL__GETWCH) && !HAVE_DECL__GETWCH
+wint_t _getwch(void);
+#endif
+#ifndef WEOF
+#define WEOF (wchar_t)(0xFFFF)
+#endif
+#if defined(HAVE_DECL_SECUREZEROMEMORY) && !HAVE_DECL_SECUREZEROMEMORY
+static inline void
+SecureZeroMemory(PVOID ptr, SIZE_T cnt)
+{
+  volatile char *vcptr = (volatile char*)ptr;
+  while (cnt--)
+    *vcptr++ = 0;
+}
+#endif
+#elif defined(HAVE_READPASSPHRASE_H)
+#include <readpassphrase.h>
+#else
+#include "tor_readpassphrase.h"
 #endif
 
 #ifndef HAVE_GETTIMEOFDAY
@@ -131,15 +157,19 @@
 #include "strlcat.c"
 #endif
 
+/* When set_max_file_descriptors() is called, update this with the max file
+ * descriptor value so we can use it to check the limit when opening a new
+ * socket. Default value is what Debian sets as the default hard limit. */
+static int max_sockets = 1024;
+
 /** As open(path, flags, mode), but return an fd with the close-on-exec mode
  * set. */
 int
 tor_open_cloexec(const char *path, int flags, unsigned mode)
 {
   int fd;
-  const char *p = path;
+  const char *p = sandbox_intern_string(path);
 #ifdef O_CLOEXEC
-  p = sandbox_intern_string(path);
   fd = open(p, flags|O_CLOEXEC, mode);
   if (fd >= 0)
     return fd;
@@ -1156,10 +1186,18 @@ mark_socket_open(tor_socket_t s)
 /** @} */
 
 /** As socket(), but counts the number of open sockets. */
-tor_socket_t
-tor_open_socket(int domain, int type, int protocol)
+MOCK_IMPL(tor_socket_t,
+tor_open_socket,(int domain, int type, int protocol))
 {
   return tor_open_socket_with_extensions(domain, type, protocol, 1, 0);
+}
+
+/** Mockable wrapper for connect(). */
+MOCK_IMPL(tor_socket_t,
+tor_connect_socket,(tor_socket_t socket,const struct sockaddr *address,
+                     socklen_t address_len))
+{
+  return connect(socket,address,address_len);
 }
 
 /** As socket(), but creates a nonblocking socket and
@@ -1179,6 +1217,18 @@ tor_open_socket_with_extensions(int domain, int type, int protocol,
                                 int cloexec, int nonblock)
 {
   tor_socket_t s;
+
+  /* We are about to create a new file descriptor so make sure we have
+   * enough of them. */
+  if (get_n_open_sockets() >= max_sockets - 1) {
+#ifdef _WIN32
+    WSASetLastError(WSAEMFILE);
+#else
+    errno = EMFILE;
+#endif
+    return TOR_INVALID_SOCKET;
+  }
+
 #if defined(SOCK_CLOEXEC) && defined(SOCK_NONBLOCK)
   int ext_flags = (cloexec ? SOCK_CLOEXEC : 0) |
                   (nonblock ? SOCK_NONBLOCK : 0);
@@ -1250,6 +1300,18 @@ tor_accept_socket_with_extensions(tor_socket_t sockfd, struct sockaddr *addr,
                                  socklen_t *len, int cloexec, int nonblock)
 {
   tor_socket_t s;
+
+  /* We are about to create a new file descriptor so make sure we have
+   * enough of them. */
+  if (get_n_open_sockets() >= max_sockets - 1) {
+#ifdef _WIN32
+    WSASetLastError(WSAEMFILE);
+#else
+    errno = EMFILE;
+#endif
+    return TOR_INVALID_SOCKET;
+  }
+
 #if defined(HAVE_ACCEPT4) && defined(SOCK_CLOEXEC) && defined(SOCK_NONBLOCK)
   int ext_flags = (cloexec ? SOCK_CLOEXEC : 0) |
                   (nonblock ? SOCK_NONBLOCK : 0);
@@ -1306,6 +1368,14 @@ get_n_open_sockets(void)
   n = n_sockets_open;
   socket_accounting_unlock();
   return n;
+}
+
+/** Mockable wrapper for getsockname(). */
+MOCK_IMPL(int,
+tor_getsockname,(tor_socket_t socket, struct sockaddr *address,
+                 socklen_t *address_len))
+{
+   return getsockname(socket, address, address_len);
 }
 
 /** Turn <b>socket</b> into a nonblocking socket. Return 0 on success, -1
@@ -1537,6 +1607,12 @@ tor_ersatz_socketpair(int family, int type, int protocol, tor_socket_t fd[2])
 int
 set_max_file_descriptors(rlim_t limit, int *max_out)
 {
+  if (limit < ULIMIT_BUFFER) {
+    log_warn(LD_CONFIG,
+             "ConnLimit must be at least %d. Failing.", ULIMIT_BUFFER);
+    return -1;
+  }
+
   /* Define some maximum connections values for systems where we cannot
    * automatically determine a limit. Re Cygwin, see
    * http://archives.seul.org/or/talk/Aug-2006/msg00210.html
@@ -1572,11 +1648,14 @@ set_max_file_descriptors(rlim_t limit, int *max_out)
     return -1;
   }
   if (limit == 0) {
+    /* XXXX DEAD CODE We can't reach this point, since the first "if" in this
+     * function increases limit if it started out less than ULIMIT_BUFFER */
+
     /* If limit == 0, return the maximum value without setting it. */
     limit = rlim.rlim_max;
     if (limit > INT_MAX)
       limit = INT_MAX;
-    *max_out = (int)limit - ULIMIT_BUFFER;
+    *max_out = max_sockets = (int)limit - ULIMIT_BUFFER;
     return 0;
   }
   if (rlim.rlim_max < limit) {
@@ -1590,6 +1669,9 @@ set_max_file_descriptors(rlim_t limit, int *max_out)
     log_info(LD_NET,"Raising max file descriptors from %lu to %lu.",
              (unsigned long)rlim.rlim_cur, (unsigned long)rlim.rlim_max);
   }
+  /* Set the current limit value so if the attempt to set the limit to the
+   * max fails at least we'll have a valid value of maximum sockets. */
+  max_sockets = (int)rlim.rlim_cur - ULIMIT_BUFFER;
   rlim.rlim_cur = rlim.rlim_max;
 
   if (setrlimit(RLIMIT_NOFILE, &rlim) != 0) {
@@ -1623,15 +1705,10 @@ set_max_file_descriptors(rlim_t limit, int *max_out)
   limit = rlim.rlim_cur;
 #endif /* HAVE_GETRLIMIT */
 
-  if (limit < ULIMIT_BUFFER) {
-    log_warn(LD_CONFIG,
-             "ConnLimit must be at least %d. Failing.", ULIMIT_BUFFER);
-    return -1;
-  }
   if (limit > INT_MAX)
     limit = INT_MAX;
   tor_assert(max_out);
-  *max_out = (int)limit - ULIMIT_BUFFER;
+  *max_out = max_sockets = (int)limit - ULIMIT_BUFFER;
   return 0;
 }
 
@@ -3225,4 +3302,81 @@ tor_sleep_msec(int msec)
 #endif
 }
 #endif
+
+/** Emit the password prompt <b>prompt</b>, then read up to <b>buflen</b>
+ * bytes of passphrase into <b>output</b>. Return the number of bytes in
+ * the passphrase, excluding terminating NUL.
+ */
+ssize_t
+tor_getpass(const char *prompt, char *output, size_t buflen)
+{
+  tor_assert(buflen <= SSIZE_MAX);
+  tor_assert(buflen >= 1);
+#if defined(HAVE_READPASSPHRASE)
+  char *pwd = readpassphrase(prompt, output, buflen, RPP_ECHO_OFF);
+  if (pwd == NULL)
+    return -1;
+  return strlen(pwd);
+#elif defined(_WIN32)
+  int r = -1;
+  while (*prompt) {
+    _putch(*prompt++);
+  }
+
+  tor_assert(buflen <= INT_MAX);
+  wchar_t *buf = tor_calloc(buflen, sizeof(wchar_t));
+
+  wchar_t *ptr = buf, *lastch = buf + buflen - 1;
+  while (ptr < lastch) {
+    wint_t ch = _getwch();
+    switch (ch) {
+      case '\r':
+      case '\n':
+      case WEOF:
+        goto done_reading;
+      case 3:
+        goto done; /* Can't actually read ctrl-c this way. */
+      case '\b':
+        if (ptr > buf)
+          --ptr;
+        continue;
+      case 0:
+      case 0xe0:
+        ch = _getwch(); /* Ignore; this is a function or arrow key */
+        break;
+      default:
+        *ptr++ = ch;
+        break;
+    }
+  }
+ done_reading:
+  ;
+
+#ifndef WC_ERR_INVALID_CHARS
+#define WC_ERR_INVALID_CHARS 0x80
+#endif
+
+  /* Now convert it to UTF-8 */
+  r = WideCharToMultiByte(CP_UTF8,
+                          WC_NO_BEST_FIT_CHARS|WC_ERR_INVALID_CHARS,
+                          buf, (int)(ptr-buf),
+                          output, (int)(buflen-1),
+                          NULL, NULL);
+  if (r <= 0) {
+    r = -1;
+    goto done;
+  }
+
+  tor_assert(r < (int)buflen);
+
+  output[r] = 0;
+
+ done:
+  SecureZeroMemory(buf, sizeof(wchar_t)*buflen);
+  tor_free(buf);
+  return r;
+#else
+#error "No implementation for tor_getpass found!"
+#endif
+}
 
