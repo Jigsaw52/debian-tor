@@ -162,6 +162,7 @@ static config_var_t option_vars_[] = {
   V(AuthDirInvalidCCs,           CSV,      ""),
   V(AuthDirFastGuarantee,        MEMUNIT,  "100 KB"),
   V(AuthDirGuardBWGuarantee,     MEMUNIT,  "2 MB"),
+  V(AuthDirPinKeys,              BOOL,     "0"),
   V(AuthDirReject,               LINELIST, NULL),
   V(AuthDirRejectCCs,            CSV,      ""),
   OBSOLETE("AuthDirRejectUnlisted"),
@@ -289,7 +290,7 @@ static config_var_t option_vars_[] = {
   VAR("HiddenServiceMaxStreams",LINELIST_S, RendConfigLines, NULL),
   VAR("HiddenServiceMaxStreamsCloseCircuit",LINELIST_S, RendConfigLines, NULL),
   VAR("HiddenServiceNumIntroductionPoints", LINELIST_S, RendConfigLines, NULL),
-  V(HiddenServiceStatistics,     BOOL,     "0"),
+  V(HiddenServiceStatistics,     BOOL,     "1"),
   V(HidServAuth,                 LINELIST, NULL),
   V(CloseHSClientCircuitsImmediatelyOnTimeout, BOOL, "0"),
   V(CloseHSServiceRendCircuitsImmediatelyOnTimeout, BOOL, "0"),
@@ -333,6 +334,7 @@ static config_var_t option_vars_[] = {
   V(NumCPUs,                     UINT,     "0"),
   V(NumDirectoryGuards,          UINT,     "0"),
   V(NumEntryGuards,              UINT,     "0"),
+  V(OfflineMasterKey,            BOOL,     "0"),
   V(ORListenAddress,             LINELIST, NULL),
   VPORT(ORPort,                      LINELIST, NULL),
   V(OutboundBindAddress,         LINELIST,   NULL),
@@ -479,8 +481,11 @@ static config_var_t option_vars_[] = {
   V(TestingMicrodescMaxDownloadTries, UINT, "8"),
   V(TestingCertMaxDownloadTries, UINT, "8"),
   V(TestingDirAuthVoteExit, ROUTERSET, NULL),
+  V(TestingDirAuthVoteExitIsStrict,  BOOL,     "0"),
   V(TestingDirAuthVoteGuard, ROUTERSET, NULL),
+  V(TestingDirAuthVoteGuardIsStrict,  BOOL,     "0"),
   V(TestingDirAuthVoteHSDir, ROUTERSET, NULL),
+  V(TestingDirAuthVoteHSDirIsStrict,  BOOL,     "0"),
   VAR("___UsingTestNetworkDefaults", BOOL, UsingTestNetworkDefaults_, "0"),
 
   { NULL, CONFIG_TYPE_OBSOLETE, 0, NULL }
@@ -759,6 +764,7 @@ or_options_free(or_options_t *options)
   }
   tor_free(options->BridgePassword_AuthDigest_);
   tor_free(options->command_arg);
+  tor_free(options->master_key_fname);
   config_free(&options_format, options);
 }
 
@@ -1105,6 +1111,9 @@ options_act_reversible(const or_options_t *old_options, char **msg)
     if (running_tor && !libevent_initialized) {
       init_libevent(options);
       libevent_initialized = 1;
+
+      /* This has to come up after libevent is initialized. */
+      control_initialize_event_queue();
 
       /*
        * Initialize the scheduler - this has to come after
@@ -1912,6 +1921,14 @@ static const struct {
   { "--dump-config",          ARGUMENT_OPTIONAL },
   { "--list-fingerprint",     TAKES_NO_ARGUMENT },
   { "--keygen",               TAKES_NO_ARGUMENT },
+  { "--newpass",              TAKES_NO_ARGUMENT },
+#if 0
+/* XXXX028: This is not working yet in 0.2.7, so disabling with the
+ * minimal code modification. */
+  { "--master-key",           ARGUMENT_NECESSARY },
+#endif
+  { "--no-passphrase",        TAKES_NO_ARGUMENT },
+  { "--passphrase-fd",        ARGUMENT_NECESSARY },
   { "--verify-config",        TAKES_NO_ARGUMENT },
   { "--ignore-missing-torrc", TAKES_NO_ARGUMENT },
   { "--quiet",                TAKES_NO_ARGUMENT },
@@ -3163,6 +3180,21 @@ options_validate(or_options_t *old_options, or_options_t *options,
              "hidden services on this Tor instance.  Your hidden services "
              "will be very easy to locate using a well-known attack -- see "
              "http://freehaven.net/anonbib/#hs-attack06 for details.");
+  }
+
+  if (options->EntryNodes &&
+      routerset_is_list(options->EntryNodes) &&
+      (routerset_len(options->EntryNodes) == 1) &&
+      (options->RendConfigLines != NULL)) {
+    tor_asprintf(msg,
+             "You have one single EntryNodes and at least one hidden service "
+             "configured. This is bad because it's very easy to locate your "
+             "entry guard which can then lead to the deanonymization of your "
+             "hidden service -- for more details, see "
+             "https://trac.torproject.org/projects/tor/ticket/14917. "
+             "For this reason, the use of one EntryNodes with an hidden "
+             "service is prohibited until a better solution is found.");
+    return -1;
   }
 
   if (!options->LearnCircuitBuildTimeout && options->CircuitBuildTimeout &&
@@ -4492,6 +4524,65 @@ options_init_from_torrc(int argc, char **argv)
   retval = options_init_from_string(cf_defaults, cf, command, command_arg,
                                     &errmsg);
 
+  if (retval < 0)
+    goto err;
+
+  if (config_line_find(cmdline_only_options, "--no-passphrase")) {
+    if (command == CMD_KEYGEN) {
+      get_options_mutable()->keygen_force_passphrase = FORCE_PASSPHRASE_OFF;
+    } else {
+      log_err(LD_CONFIG, "--no-passphrase specified without --keygen!");
+      exit(1);
+    }
+  }
+
+  if (config_line_find(cmdline_only_options, "--newpass")) {
+    if (command == CMD_KEYGEN) {
+      get_options_mutable()->change_key_passphrase = 1;
+    } else {
+      log_err(LD_CONFIG, "--newpass specified without --keygen!");
+      exit(1);
+    }
+  }
+
+  {
+    const config_line_t *fd_line = config_line_find(cmdline_only_options,
+                                                    "--passphrase-fd");
+    if (fd_line) {
+      if (get_options()->keygen_force_passphrase == FORCE_PASSPHRASE_OFF) {
+        log_err(LD_CONFIG, "--no-passphrase specified with --passphrase-fd!");
+        exit(1);
+      } else if (command != CMD_KEYGEN) {
+        log_err(LD_CONFIG, "--passphrase-fd specified without --keygen!");
+        exit(1);
+      } else {
+        const char *v = fd_line->value;
+        int ok = 1;
+        long fd = tor_parse_long(v, 10, 0, INT_MAX, &ok, NULL);
+        if (fd < 0 || ok == 0) {
+          log_err(LD_CONFIG, "Invalid --passphrase-fd value %s", escaped(v));
+          exit(1);
+        }
+        get_options_mutable()->keygen_passphrase_fd = (int)fd;
+        get_options_mutable()->use_keygen_passphrase_fd = 1;
+        get_options_mutable()->keygen_force_passphrase = FORCE_PASSPHRASE_ON;
+      }
+    }
+  }
+
+  {
+    const config_line_t *key_line = config_line_find(cmdline_only_options,
+                                                     "--master-key");
+    if (key_line) {
+      if (command != CMD_KEYGEN) {
+        log_err(LD_CONFIG, "--master-key without --keygen!");
+        exit(1);
+      } else {
+        get_options_mutable()->master_key_fname = tor_strdup(key_line->value);
+      }
+    }
+  }
+
  err:
 
   tor_free(cf);
@@ -5706,8 +5797,8 @@ warn_nonlocal_ext_orports(const smartlist_t *ports, const char *portname)
 }
 
 /** Given a list of port_cfg_t in <b>ports</b>, warn any controller port there
- * is listening on any non-loopback address.  If <b>forbid_nonlocal</b> is true,
- * then emit a stronger warning and remove the port from the list.
+ * is listening on any non-loopback address.  If <b>forbid_nonlocal</b> is
+ * true, then emit a stronger warning and remove the port from the list.
  */
 static void
 warn_nonlocal_controller_ports(smartlist_t *ports, unsigned forbid_nonlocal)
@@ -5977,6 +6068,7 @@ parse_port_config(smartlist_t *out,
     int sessiongroup = SESSION_GROUP_UNSET;
     unsigned isolation = ISO_DEFAULT;
     int prefer_no_auth = 0;
+    int socks_iso_keep_alive = 0;
 
     char *addrport;
     uint16_t ptmp=0;
@@ -6186,6 +6278,9 @@ parse_port_config(smartlist_t *out,
         } else if (!strcasecmp(elt, "PreferSOCKSNoAuth")) {
           prefer_no_auth = ! no;
           continue;
+        } else if (!strcasecmp(elt, "KeepAliveIsolateSOCKSAuth")) {
+          socks_iso_keep_alive = ! no;
+          continue;
         }
 
         if (!strcasecmpend(elt, "s"))
@@ -6231,6 +6326,13 @@ parse_port_config(smartlist_t *out,
       goto err;
     }
 
+    if (!(isolation & ISO_SOCKSAUTH) && socks_iso_keep_alive) {
+      log_warn(LD_CONFIG, "You have a %sPort entry with both "
+               "NoIsolateSOCKSAuth and KeepAliveIsolateSOCKSAuth set.",
+               portname);
+      goto err;
+    }
+
     if (out && port) {
       size_t namelen = unix_socket_path ? strlen(unix_socket_path) : 0;
       port_cfg_t *cfg = port_cfg_new(namelen);
@@ -6264,6 +6366,7 @@ parse_port_config(smartlist_t *out,
       cfg->entry_cfg.socks_prefer_no_auth = prefer_no_auth;
       if (! (isolation & ISO_SOCKSAUTH))
         cfg->entry_cfg.socks_prefer_no_auth = 1;
+      cfg->entry_cfg.socks_iso_keep_alive = socks_iso_keep_alive;
 
       smartlist_add(out, cfg);
     }

@@ -81,6 +81,7 @@
 #endif
 
 #include "crypto.h"
+#include "crypto_format.h"
 #include "tortls.h"
 #include "torlog.h"
 #include "container.h"
@@ -92,6 +93,7 @@
 #include "crypto_curve25519.h"
 #include "crypto_ed25519.h"
 #include "tor_queue.h"
+#include "util_format.h"
 
 /* These signals are defined to help handle_control_signal work.
  */
@@ -1153,6 +1155,8 @@ typedef struct entry_port_cfg_t {
   /** When both no-auth and user/pass are advertised by a SOCKS client, select
    * no-auth. */
   unsigned int socks_prefer_no_auth : 1;
+  /** When ISO_SOCKSAUTH is in use, Keep-Alive circuits indefinitely. */
+  unsigned int socks_iso_keep_alive : 1;
 
   /* Client port types only: */
   unsigned int ipv4_traffic : 1;
@@ -2875,6 +2879,11 @@ typedef struct circuit_t {
    * circuits entered certain states.  This usage probably won't
    * interfere with this field's primary purpose, but we should
    * document it more thoroughly to make sure of that.
+   *
+   * XXX027 The SocksPort option KeepaliveIsolateSOCKSAuth will artificially
+   * adjust this value forward each time a suitable stream is attached to an
+   * already constructed circuit, potentially keeping the circuit alive
+   * indefinitely.
    */
   time_t timestamp_dirty;
 
@@ -3781,6 +3790,7 @@ typedef struct {
                                      * number of servers per IP address shared
                                      * with an authority. */
   int AuthDirHasIPv6Connectivity; /**< Boolean: are we on IPv6?  */
+  int AuthDirPinKeys; /**< Boolean: Do we enforce key-pinning? */
 
   /** If non-zero, always vote the Fast flag for any relay advertising
    * this amount of capacity or more. */
@@ -4092,15 +4102,18 @@ typedef struct {
   /** Relays in a testing network which should be voted Exit
    * regardless of exit policy. */
   routerset_t *TestingDirAuthVoteExit;
+  int TestingDirAuthVoteExitIsStrict;
 
   /** Relays in a testing network which should be voted Guard
    * regardless of uptime and bandwidth. */
   routerset_t *TestingDirAuthVoteGuard;
+  int TestingDirAuthVoteGuardIsStrict;
 
   /** Relays in a testing network which should be voted HSDir
-   * regardless of uptime and ORPort connectivity.
+   * regardless of uptime and DirPort.
    * Respects VoteOnHidServDirectoriesV2. */
   routerset_t *TestingDirAuthVoteHSDir;
+  int TestingDirAuthVoteHSDirIsStrict;
 
   /** Enable CONN_BW events.  Only altered on testing networks. */
   int TestingEnableConnBwEvent;
@@ -4290,6 +4303,19 @@ typedef struct {
   /** How long before auth keys expire will we try to make a new one? */
   int TestingAuthKeySlop;
 
+  /** Force use of offline master key features: never generate a master
+   * ed25519 identity key except from tor --keygen */
+  int OfflineMasterKey;
+
+  enum {
+    FORCE_PASSPHRASE_AUTO=0,
+    FORCE_PASSPHRASE_ON,
+    FORCE_PASSPHRASE_OFF
+  } keygen_force_passphrase;
+  int use_keygen_passphrase_fd;
+  int keygen_passphrase_fd;
+  int change_key_passphrase;
+  char *master_key_fname;
 } or_options_t;
 
 /** Persistent state for an onion router, as saved to disk. */

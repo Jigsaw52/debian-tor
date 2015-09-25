@@ -49,7 +49,7 @@ LIBTOR_A_SOURCES = \
 	src/or/dirvote.c				\
 	src/or/dns.c					\
 	src/or/dnsserv.c				\
-        src/or/fp_pair.c				\
+	src/or/fp_pair.c				\
 	src/or/geoip.c					\
 	src/or/entrynodes.c				\
 	src/or/ext_orport.c				\
@@ -94,9 +94,9 @@ AM_CPPFLAGS += -I$(srcdir)/src/or -Isrc/or
 
 src/or/tor_main.o: micro-revision.i
 
-AM_CPPFLAGS += -DSHARE_DATADIR="\"$(datadir)\"" \
-        -DLOCALSTATEDIR="\"$(localstatedir)\"" \
-        -DBINDIR="\"$(bindir)\""
+AM_CPPFLAGS += -DSHARE_DATADIR="\"$(datadir)\""		\
+		-DLOCALSTATEDIR="\"$(localstatedir)\""	\
+		-DBINDIR="\"$(bindir)\""
 
 src_or_libtor_testing_a_CPPFLAGS = $(AM_CPPFLAGS) $(TEST_CPPFLAGS)
 src_or_libtor_testing_a_CFLAGS = $(AM_CFLAGS) $(TEST_CFLAGS)
@@ -123,9 +123,9 @@ src_or_tor_cov_LDADD = src/or/libtor-testing.a src/common/libor-testing.a \
 	src/common/libor-event-testing.a src/trunnel/libor-trunnel-testing.a \
 	@TOR_ZLIB_LIBS@ @TOR_LIB_MATH@ @TOR_LIBEVENT_LIBS@ @TOR_OPENSSL_LIBS@ \
 	@TOR_LIB_WS32@ @TOR_LIB_GDI@ @CURVE25519_LIBS@ @TOR_SYSTEMD_LIBS@
-TESTING_TOR_BINARY = $(top_builddir)/src/or/tor-cov
+export TESTING_TOR_BINARY = $(top_builddir)/src/or/tor-cov
 else
-TESTING_TOR_BINARY = $(top_builddir)/src/or/tor
+export TESTING_TOR_BINARY = $(top_builddir)/src/or/tor
 endif
 
 ORHEADERS = \
@@ -153,6 +153,7 @@ ORHEADERS = \
 	src/or/dirserv.h				\
 	src/or/dirvote.h				\
 	src/or/dns.h					\
+	src/or/dns_structs.h				\
 	src/or/dnsserv.h				\
 	src/or/eventdns_tor.h				\
 	src/or/ext_orport.h				\

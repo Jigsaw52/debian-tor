@@ -100,6 +100,7 @@ static int conn_close_if_marked(int i);
 static void connection_start_reading_from_linked_conn(connection_t *conn);
 static int connection_should_read_from_linked_conn(connection_t *conn);
 static int run_main_loop_until_done(void);
+static void process_signal(int sig);
 
 /********* START VARIABLES **********/
 
@@ -982,19 +983,18 @@ conn_close_if_marked(int i)
   return 1;
 }
 
-/** We've just tried every dirserver we know about, and none of
- * them were reachable. Assume the network is down. Change state
- * so next time an application connection arrives we'll delay it
- * and try another directory fetch. Kill off all the circuit_wait
- * streams that are waiting now, since they will all timeout anyway.
+/** Implementation for directory_all_unreachable.  This is done in a callback,
+ * since otherwise it would complicate Tor's control-flow graph beyond all
+ * reason.
  */
-void
-directory_all_unreachable(time_t now)
+static void
+directory_all_unreachable_cb(evutil_socket_t fd, short event, void *arg)
 {
-  connection_t *conn;
-  (void)now;
+  (void)fd;
+  (void)event;
+  (void)arg;
 
-  stats_n_seconds_working=0; /* reset it */
+  connection_t *conn;
 
   while ((conn = connection_get_by_type_state(CONN_TYPE_AP,
                                               AP_CONN_STATE_CIRCUIT_WAIT))) {
@@ -1007,7 +1007,32 @@ directory_all_unreachable(time_t now)
     connection_mark_unattached_ap(entry_conn,
                                   END_STREAM_REASON_NET_UNREACHABLE);
   }
-  control_event_general_status(LOG_ERR, "DIR_ALL_UNREACHABLE");
+  control_event_general_error("DIR_ALL_UNREACHABLE");
+}
+
+static struct event *directory_all_unreachable_cb_event = NULL;
+
+/** We've just tried every dirserver we know about, and none of
+ * them were reachable. Assume the network is down. Change state
+ * so next time an application connection arrives we'll delay it
+ * and try another directory fetch. Kill off all the circuit_wait
+ * streams that are waiting now, since they will all timeout anyway.
+ */
+void
+directory_all_unreachable(time_t now)
+{
+  (void)now;
+
+  stats_n_seconds_working=0; /* reset it */
+
+  if (!directory_all_unreachable_cb_event) {
+    directory_all_unreachable_cb_event =
+      tor_event_new(tor_libevent_get_base(),
+                    -1, EV_READ, directory_all_unreachable_cb, NULL);
+    tor_assert(directory_all_unreachable_cb_event);
+  }
+
+  event_active(directory_all_unreachable_cb_event, EV_READ, 1);
 }
 
 /** This function is called whenever we successfully pull down some new
@@ -1256,6 +1281,17 @@ reschedule_descriptor_update_check(void)
   time_to.check_descriptor = 0;
 }
 
+/**
+ * Update our schedule so that we'll check whether we need to fetch directory
+ * info immediately.
+ */
+void
+reschedule_directory_downloads(void)
+{
+  time_to.download_networkstatus = 0;
+  time_to.try_getting_descriptors = 0;
+}
+
 /** Perform regular maintenance tasks.  This function gets run once per
  * second by second_elapsed_callback().
  */
@@ -1488,6 +1524,10 @@ run_scheduled_events(time_t now)
 #define CLEAN_CACHES_INTERVAL (30*60)
     time_to.clean_caches = now + CLEAN_CACHES_INTERVAL;
   }
+  /* We don't keep entries that are more than five minutes old so we try to
+   * clean it as soon as we can since we want to make sure the client waits
+   * as little as possible for reachability reasons. */
+  rend_cache_failure_clean(now);
 
 #define RETRY_DNS_INTERVAL (10*60)
   /* If we're a server and initializing dns failed, retry periodically. */
@@ -1884,7 +1924,7 @@ ip_address_changed(int at_interface)
   if (at_interface) {
     if (! server) {
       /* Okay, change our keys. */
-      if (init_keys()<0)
+      if (init_keys_client() < 0)
         log_warn(LD_GENERAL, "Unable to rotate keys after IP change!");
     }
   } else {
@@ -1979,6 +2019,14 @@ do_hup(void)
    * force a retry there. */
 
   if (server_mode(options)) {
+    /* Maybe we've been given a new ed25519 key or certificate?
+     */
+    time_t now = approx_time();
+    if (load_ed_keys(options, now) < 0 ||
+         generate_ed_link_cert(options, now)) {
+      log_warn(LD_OR, "Problem reloading Ed25519 keys; still using old keys.");
+    }
+
     /* Update cpuworker and dnsworker processes, so they get up-to-date
      * configuration options. */
     cpuworkers_rotate_keyinfo();
@@ -2017,7 +2065,7 @@ do_main_loop(void)
    * TLS context. */
   if (! client_identity_key_is_set()) {
     if (init_keys() < 0) {
-      log_err(LD_BUG,"Error initializing keys; exiting");
+      log_err(LD_OR, "Error initializing keys; exiting");
       return -1;
     }
   }
@@ -2221,11 +2269,10 @@ run_main_loop_until_done(void)
   return loop_result;
 }
 
-#ifndef _WIN32 /* Only called when we're willing to use signals */
 /** Libevent callback: invoked when we get a signal.
  */
 static void
-signal_callback(int fd, short events, void *arg)
+signal_callback(evutil_socket_t fd, short events, void *arg)
 {
   const int *sigptr = arg;
   const int sig = *sigptr;
@@ -2234,10 +2281,9 @@ signal_callback(int fd, short events, void *arg)
 
   process_signal(sig);
 }
-#endif
 
 /** Do the work of acting on a signal received in <b>sig</b> */
-void
+static void
 process_signal(int sig)
 {
   switch (sig)
@@ -2462,36 +2508,73 @@ exit_function(void)
 #endif
 }
 
-/** Set up the signal handlers for either parent or child. */
+#ifdef _WIN32
+#define UNIX_ONLY 0
+#else
+#define UNIX_ONLY 1
+#endif
+static struct {
+  int signal_value;
+  int try_to_register;
+  struct event *signal_event;
+} signal_handlers[] = {
+#ifdef SIGINT
+  { SIGINT, UNIX_ONLY, NULL }, /* do a controlled slow shutdown */
+#endif
+#ifdef SIGTERM
+  { SIGTERM, UNIX_ONLY, NULL }, /* to terminate now */
+#endif
+#ifdef SIGPIPE
+  { SIGPIPE, UNIX_ONLY, NULL }, /* otherwise SIGPIPE kills us */
+#endif
+#ifdef SIGUSR1
+  { SIGUSR1, UNIX_ONLY, NULL }, /* dump stats */
+#endif
+#ifdef SIGUSR2
+  { SIGUSR2, UNIX_ONLY, NULL }, /* go to loglevel debug */
+#endif
+#ifdef SIGHUP
+  { SIGHUP, UNIX_ONLY, NULL }, /* to reload config, retry conns, etc */
+#endif
+#ifdef SIGXFSZ
+  { SIGXFSZ, UNIX_ONLY, NULL }, /* handle file-too-big resource exhaustion */
+#endif
+#ifdef SIGCHLD
+  { SIGCHLD, UNIX_ONLY, NULL }, /* handle dns/cpu workers that exit */
+#endif
+  /* These are controller-only */
+  { SIGNEWNYM, 0, NULL },
+  { SIGCLEARDNSCACHE, 0, NULL },
+  { SIGHEARTBEAT, 0, NULL },
+  { -1, -1, NULL }
+};
+
+/** Set up the signal handlers for either parent or child process */
 void
 handle_signals(int is_parent)
 {
-#ifndef _WIN32 /* do signal stuff only on Unix */
   int i;
-  static const int signals[] = {
-    SIGINT,  /* do a controlled slow shutdown */
-    SIGTERM, /* to terminate now */
-    SIGPIPE, /* otherwise SIGPIPE kills us */
-    SIGUSR1, /* dump stats */
-    SIGUSR2, /* go to loglevel debug */
-    SIGHUP,  /* to reload config, retry conns, etc */
-#ifdef SIGXFSZ
-    SIGXFSZ, /* handle file-too-big resource exhaustion */
-#endif
-    SIGCHLD, /* handle dns/cpu workers that exit */
-    -1 };
-  static struct event *signal_events[16]; /* bigger than it has to be. */
   if (is_parent) {
-    for (i = 0; signals[i] >= 0; ++i) {
-      signal_events[i] = tor_evsignal_new(tor_libevent_get_base(), signals[i],
-                                          signal_callback,
-                                          /* Cast away const */
-                                          (int*)&signals[i]);
-      if (event_add(signal_events[i], NULL))
-        log_warn(LD_BUG, "Error from libevent when adding event for signal %d",
-                 signals[i]);
+    for (i = 0; signal_handlers[i].signal_value >= 0; ++i) {
+      if (signal_handlers[i].try_to_register) {
+        signal_handlers[i].signal_event =
+          tor_evsignal_new(tor_libevent_get_base(),
+                           signal_handlers[i].signal_value,
+                           signal_callback,
+                           &signal_handlers[i].signal_value);
+        if (event_add(signal_handlers[i].signal_event, NULL))
+          log_warn(LD_BUG, "Error from libevent when adding "
+                   "event for signal %d",
+                   signal_handlers[i].signal_value);
+      } else {
+        signal_handlers[i].signal_event =
+          tor_event_new(tor_libevent_get_base(), -1,
+                        EV_SIGNAL, signal_callback,
+                        &signal_handlers[i].signal_value);
+      }
     }
   } else {
+#ifndef _WIN32
     struct sigaction action;
     action.sa_flags = 0;
     sigemptyset(&action.sa_mask);
@@ -2505,10 +2588,21 @@ handle_signals(int is_parent)
 #ifdef SIGXFSZ
     sigaction(SIGXFSZ, &action, NULL);
 #endif
+#endif
   }
-#else /* MS windows */
-  (void)is_parent;
-#endif /* signal stuff */
+}
+
+/* Make sure the signal handler for signal_num will be called. */
+void
+activate_signal(int signal_num)
+{
+  int i;
+  for (i = 0; signal_handlers[i].signal_value >= 0; ++i) {
+    if (signal_handlers[i].signal_value == signal_num) {
+      event_active(signal_handlers[i].signal_event, EV_SIGNAL, 1);
+      return;
+    }
+  }
 }
 
 /** Main entry point for the Tor command-line client.
@@ -2830,7 +2924,7 @@ do_list_fingerprint(void)
   }
   tor_assert(nickname);
   if (init_keys() < 0) {
-    log_err(LD_BUG,"Error initializing keys; can't display fingerprint");
+    log_err(LD_GENERAL,"Error initializing keys; exiting.");
     return -1;
   }
   if (!(k = get_server_identity_key())) {
@@ -2948,11 +3042,18 @@ sandbox_init_filter(void)
   OPEN_DATADIR_SUFFIX("state", ".tmp");
   OPEN_DATADIR_SUFFIX("unparseable-desc", ".tmp");
   OPEN_DATADIR_SUFFIX("v3-status-votes", ".tmp");
+  OPEN_DATADIR("key-pinning-journal");
   OPEN("/dev/srandom");
   OPEN("/dev/urandom");
   OPEN("/dev/random");
   OPEN("/etc/hosts");
   OPEN("/proc/meminfo");
+
+  if (options->BridgeAuthoritativeDir)
+    OPEN_DATADIR_SUFFIX("networkstatus-bridges", ".tmp");
+
+  if (authdir_mode_handles_descs(options, -1))
+    OPEN_DATADIR("approved-routers");
 
   if (options->ServerDNSResolvConfFile)
     sandbox_cfg_allow_open_filename(&cfg,
@@ -2993,6 +3094,9 @@ sandbox_init_filter(void)
   RENAME_SUFFIX("state", ".tmp");
   RENAME_SUFFIX("unparseable-desc", ".tmp");
   RENAME_SUFFIX("v3-status-votes", ".tmp");
+
+  if (options->BridgeAuthoritativeDir)
+    RENAME_SUFFIX("networkstatus-bridges", ".tmp");
 
 #define STAT_DATADIR(name)                      \
   sandbox_cfg_allow_stat_filename(&cfg, get_datadir_fname(name))
@@ -3062,6 +3166,13 @@ sandbox_init_filter(void)
     OPEN_DATADIR2("keys", "secret_onion_key.old");
     OPEN_DATADIR2("keys", "secret_onion_key_ntor.old");
 
+    OPEN_DATADIR2_SUFFIX("keys", "ed25519_master_id_secret_key", ".tmp");
+    OPEN_DATADIR2_SUFFIX("keys", "ed25519_master_id_secret_key_encrypted",
+                         ".tmp");
+    OPEN_DATADIR2_SUFFIX("keys", "ed25519_master_id_public_key", ".tmp");
+    OPEN_DATADIR2_SUFFIX("keys", "ed25519_signing_secret_key", ".tmp");
+    OPEN_DATADIR2_SUFFIX("keys", "ed25519_signing_cert", ".tmp");
+
     OPEN_DATADIR2_SUFFIX("stats", "bridge-stats", ".tmp");
     OPEN_DATADIR2_SUFFIX("stats", "dirreq-stats", ".tmp");
 
@@ -3091,6 +3202,12 @@ sandbox_init_filter(void)
     RENAME_SUFFIX2("stats", "conn-stats", ".tmp");
     RENAME_SUFFIX("hashed-fingerprint", ".tmp");
     RENAME_SUFFIX("router-stability", ".tmp");
+
+    RENAME_SUFFIX2("keys", "ed25519_master_id_secret_key", ".tmp");
+    RENAME_SUFFIX2("keys", "ed25519_master_id_secret_key_encrypted", ".tmp");
+    RENAME_SUFFIX2("keys", "ed25519_master_id_public_key", ".tmp");
+    RENAME_SUFFIX2("keys", "ed25519_signing_secret_key", ".tmp");
+    RENAME_SUFFIX2("keys", "ed25519_signing_cert", ".tmp");
 
     sandbox_cfg_allow_rename(&cfg,
              get_datadir_fname2("keys", "secret_onion_key"),

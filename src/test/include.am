@@ -1,4 +1,9 @@
 
+export PYTHON=@PYTHON@
+export SHELL=@SHELL@
+export abs_top_srcdir=@abs_top_srcdir@
+export builddir=@builddir@
+
 TESTSCRIPTS = src/test/test_zero_length_keys.sh
 
 if USEPYTHON
@@ -6,20 +11,20 @@ TESTSCRIPTS += src/test/test_ntor.sh src/test/test_bt.sh
 endif
 
 TESTS += src/test/test src/test/test-slow src/test/test-memwipe \
-	src/test/test_workqueue $(TESTSCRIPTS)
+	src/test/test_workqueue src/test/test_keygen.sh $(TESTSCRIPTS)
+
+# These flavors are run using automake's test-driver and test-network.sh
+TEST_CHUTNEY_FLAVORS = basic-min bridges-min hs-min bridges+hs
+# only run if we can ping6 ::1 (localhost)
+TEST_CHUTNEY_FLAVORS_IPV6 = bridges+ipv6-min ipv6-exit-min
+# only run if we can find a stable (or simply another) version of tor
+TEST_CHUTNEY_FLAVORS_MIXED = mixed
 
 ### This is a lovely feature, but it requires automake >= 1.12, and Tor
-###  doesn't require that yet.  Below is a kludge to work around.
+###  doesn't require that yet.
 ###
 # TEST_EXTENSIONS = .sh
 # SH_LOG_COMPILER = $(SHELL)
-
-check-am: set-test-permissions
-
-.PHONY: set-test-permissions
-set-test-permissions: $(TESTSCRIPTS)
-	$(AM_V_at)chmod u+x $(TESTSCRIPTS)
-
 
 noinst_PROGRAMS+= src/test/bench
 if UNITTESTS_ENABLED
@@ -90,6 +95,7 @@ src_test_test_SOURCES = \
 	src/test/test_threads.c \
 	src/test/test_util.c \
 	src/test/test_helpers.c \
+        src/test/test_dns.c \
 	src/test/testing_common.c \
 	src/ext/tinytest.c
 
@@ -185,4 +191,8 @@ EXTRA_DIST += \
 	src/test/bt_test.py \
 	src/test/ntor_ref.py \
 	src/test/slownacl_curve25519.py \
-	src/test/zero_length_keys.sh
+	src/test/zero_length_keys.sh \
+	src/test/test_keygen.sh \
+        src/test/test_zero_length_keys.sh \
+        src/test/test_ntor.sh src/test/test_bt.sh \
+	src/test/test-network.sh

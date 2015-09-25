@@ -3295,6 +3295,8 @@ router_add_to_routerlist(routerinfo_t *router, const char **msg,
 
   /* Make sure that it isn't expired. */
   if (router->cert_expiration_time < approx_time()) {
+    routerinfo_free(router);
+    *msg = "Some certs on this router are expired.";
     return ROUTER_CERTS_EXPIRED;
   }
 
@@ -4011,12 +4013,10 @@ update_all_descriptor_downloads(time_t now)
 void
 routerlist_retry_directory_downloads(time_t now)
 {
+  (void)now;
   router_reset_status_download_failures();
   router_reset_descriptor_download_failures();
-  if (get_options()->DisableNetwork)
-    return;
-  update_networkstatus_downloads(now);
-  update_all_descriptor_downloads(now);
+  reschedule_directory_downloads();
 }
 
 /** Return true iff <b>router</b> does not permit exit streams.
@@ -4961,6 +4961,12 @@ routerinfo_incompatible_with_extrainfo(const routerinfo_t *ri,
   } else if (ei->cache_info.published_on > sd->published_on) {
     if (msg) *msg = "Extrainfo published time did not match routerdesc";
     r = -1;
+    goto err;
+  }
+
+  if (!digest256_matches && !digest_matches) {
+    if (msg) *msg = "Neither digest256 or digest matched "
+               "digest from routerdesc";
     goto err;
   }
 

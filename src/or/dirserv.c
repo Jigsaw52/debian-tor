@@ -62,7 +62,7 @@ static uint32_t
 dirserv_get_status_impl(const char *fp, const char *nickname,
                         uint32_t addr, uint16_t or_port,
                         const char *platform, const char **msg,
-                        int should_log);
+                        int severity);
 static void clear_cached_dir(cached_dir_t *d);
 static const signed_descriptor_t *get_signed_descriptor_by_fp(
                                                         const char *fp,
@@ -244,9 +244,11 @@ dirserv_load_fingerprint_file(void)
  * If the status is 'FP_REJECT' and <b>msg</b> is provided, set
  * *<b>msg</b> to an explanation of why. */
 uint32_t
-dirserv_router_get_status(const routerinfo_t *router, const char **msg)
+dirserv_router_get_status(const routerinfo_t *router, const char **msg,
+                          int severity)
 {
   char d[DIGEST_LEN];
+  const int key_pinning = get_options()->AuthDirPinKeys;
 
   if (crypto_pk_get_digest(router->identity_pkey, d)) {
     log_warn(LD_BUG,"Error computing fingerprint");
@@ -260,34 +262,40 @@ dirserv_router_get_status(const routerinfo_t *router, const char **msg)
     if (KEYPIN_MISMATCH ==
         keypin_check((const uint8_t*)router->cache_info.identity_digest,
                      router->signing_key_cert->signing_key.pubkey)) {
-      if (msg) {
-        *msg = "Ed25519 identity key or RSA identity key has changed.";
-      }
-      log_warn(LD_DIR, "Router %s uploaded a descriptor with a Ed25519 key "
+      log_fn(severity, LD_DIR,
+             "Descriptor from router %s has an Ed25519 key, "
                "but the <rsa,ed25519> keys don't match what they were before.",
                router_describe(router));
-      return FP_REJECT;
+      if (key_pinning) {
+        if (msg) {
+          *msg = "Ed25519 identity key or RSA identity key has changed.";
+        }
+        return FP_REJECT;
+      }
     }
   } else {
     /* No ed25519 key */
     if (KEYPIN_MISMATCH == keypin_check_lone_rsa(
                         (const uint8_t*)router->cache_info.identity_digest)) {
-      log_warn(LD_DIR, "Router %s uploaded a descriptor with no Ed25519 key, "
+      log_fn(severity, LD_DIR,
+               "Descriptor from router %s has no Ed25519 key, "
                "when we previously knew an Ed25519 for it. Ignoring for now, "
-               "since Tor 0.2.6 is under development.",
+               "since Ed25519 keys are fairly new.",
                router_describe(router));
 #ifdef DISABLE_DISABLING_ED25519
-      if (msg) {
-        *msg = "Ed25519 identity key has disappeared.";
+      if (key_pinning) {
+        if (msg) {
+          *msg = "Ed25519 identity key has disappeared.";
+        }
+        return FP_REJECT;
       }
-      return FP_REJECT;
 #endif
     }
   }
 
   return dirserv_get_status_impl(d, router->nickname,
                                  router->addr, router->or_port,
-                                 router->platform, msg, 1);
+                                 router->platform, msg, severity);
 }
 
 /** Return true if there is no point in downloading the router described by
@@ -299,7 +307,7 @@ dirserv_would_reject_router(const routerstatus_t *rs)
 
   res = dirserv_get_status_impl(rs->identity_digest, rs->nickname,
                                 rs->addr, rs->or_port,
-                                NULL, NULL, 0);
+                                NULL, NULL, LOG_DEBUG);
 
   return (res & FP_REJECT) != 0;
 }
@@ -308,13 +316,13 @@ dirserv_would_reject_router(const routerstatus_t *rs)
  * (hex, no spaces), nickname, address (used for logging only), IP address, OR
  * port and platform (logging only) as arguments.
  *
- * If should_log is false, do not log messages.  (There's not much point in
+ * Log messages at 'severity'. (There's not much point in
  * logging that we're rejecting servers we'll not download.)
  */
 static uint32_t
 dirserv_get_status_impl(const char *id_digest, const char *nickname,
                         uint32_t addr, uint16_t or_port,
-                        const char *platform, const char **msg, int should_log)
+                        const char *platform, const char **msg, int severity)
 {
   uint32_t result = 0;
   router_status_t *status_by_digest;
@@ -322,10 +330,9 @@ dirserv_get_status_impl(const char *id_digest, const char *nickname,
   if (!fingerprint_list)
     fingerprint_list = authdir_config_new();
 
-  if (should_log)
-    log_debug(LD_DIRSERV, "%d fingerprints, %d digests known.",
-              strmap_size(fingerprint_list->fp_by_name),
-              digestmap_size(fingerprint_list->status_by_digest));
+  log_debug(LD_DIRSERV, "%d fingerprints, %d digests known.",
+            strmap_size(fingerprint_list->fp_by_name),
+            digestmap_size(fingerprint_list->status_by_digest));
 
   /* Versions before Tor 0.2.4.18-rc are too old to support, and are
    * missing some important security fixes too. Disable them. */
@@ -350,23 +357,22 @@ dirserv_get_status_impl(const char *id_digest, const char *nickname,
   }
 
   if (authdir_policy_badexit_address(addr, or_port)) {
-    if (should_log)
-      log_info(LD_DIRSERV, "Marking '%s' as bad exit because of address '%s'",
+    log_fn(severity, LD_DIRSERV,
+           "Marking '%s' as bad exit because of address '%s'",
                nickname, fmt_addr32(addr));
     result |= FP_BADEXIT;
   }
 
   if (!authdir_policy_permits_address(addr, or_port)) {
-    if (should_log)
-      log_info(LD_DIRSERV, "Rejecting '%s' because of address '%s'",
+    log_fn(severity, LD_DIRSERV, "Rejecting '%s' because of address '%s'",
                nickname, fmt_addr32(addr));
     if (msg)
       *msg = "Authdir is rejecting routers in this range.";
     return FP_REJECT;
   }
   if (!authdir_policy_valid_address(addr, or_port)) {
-    if (should_log)
-      log_info(LD_DIRSERV, "Not marking '%s' valid because of address '%s'",
+    log_fn(severity, LD_DIRSERV,
+           "Not marking '%s' valid because of address '%s'",
                nickname, fmt_addr32(addr));
     result |= FP_INVALID;
   }
@@ -422,9 +428,9 @@ authdir_wants_to_reject_router(routerinfo_t *ri, const char **msg,
                                int complain, int *valid_out)
 {
   /* Okay.  Now check whether the fingerprint is recognized. */
-  uint32_t status = dirserv_router_get_status(ri, msg);
   time_t now;
   int severity = (complain && ri->contact_info) ? LOG_NOTICE : LOG_INFO;
+  uint32_t status = dirserv_router_get_status(ri, msg, severity);
   tor_assert(msg);
   if (status & FP_REJECT)
     return -1; /* msg is already set. */
@@ -581,6 +587,7 @@ dirserv_add_descriptor(routerinfo_t *ri, const char **msg, const char *source)
   char *desc, *nickname;
   const size_t desclen = ri->cache_info.signed_descriptor_len +
       ri->cache_info.annotations_len;
+  const int key_pinning = get_options()->AuthDirPinKeys;
   *msg = NULL;
 
   /* If it's too big, refuse it now. Otherwise we'll cache it all over the
@@ -625,7 +632,8 @@ dirserv_add_descriptor(routerinfo_t *ri, const char **msg, const char *source)
   if (ri->signing_key_cert) {
     keypin_status = keypin_check_and_add(
       (const uint8_t*)ri->cache_info.identity_digest,
-      ri->signing_key_cert->signing_key.pubkey);
+      ri->signing_key_cert->signing_key.pubkey,
+      ! key_pinning);
   } else {
     keypin_status = keypin_check_lone_rsa(
       (const uint8_t*)ri->cache_info.identity_digest);
@@ -634,7 +642,7 @@ dirserv_add_descriptor(routerinfo_t *ri, const char **msg, const char *source)
       keypin_status = KEYPIN_NOT_FOUND;
 #endif
   }
-  if (keypin_status == KEYPIN_MISMATCH) {
+  if (keypin_status == KEYPIN_MISMATCH && key_pinning) {
     log_info(LD_DIRSERV, "Dropping descriptor from %s (source: %s) because "
              "its key did not match an older RSA/Ed25519 keypair",
              router_describe(ri), source);
@@ -734,7 +742,7 @@ directory_remove_invalid(void)
     uint32_t r;
     if (!ent)
       continue;
-    r = dirserv_router_get_status(ent, &msg);
+    r = dirserv_router_get_status(ent, &msg, LOG_INFO);
     router_get_description(description, ent);
     if (r & FP_REJECT) {
       log_info(LD_DIRSERV, "Router %s is now rejected: %s",
@@ -1343,7 +1351,7 @@ dirserv_thinks_router_is_unreliable(time_t now,
 
 /** Return true iff <b>router</b> should be assigned the "HSDir" flag.
  * Right now this means it advertises support for it, it has a high uptime,
- * it has a DirPort open, it has the Stable flag and it's currently
+ * it has a DirPort open, it has the Stable and Fast flag and it's currently
  * considered Running.
  *
  * This function needs to be called after router-\>is_running has
@@ -1371,8 +1379,9 @@ dirserv_thinks_router_is_hs_dir(const routerinfo_t *router,
     uptime = real_uptime(router, now);
 
   return (router->wants_to_be_hs_dir && router->dir_port &&
-          node->is_stable &&
-          uptime >= get_options()->MinUptimeHidServDirectoryV2);
+          node->is_stable && node->is_fast &&
+          uptime >= get_options()->MinUptimeHidServDirectoryV2 &&
+          router_is_active(router, node, now));
 }
 
 /** Don't consider routers with less bandwidth than this when computing
@@ -2185,25 +2194,41 @@ set_routerstatus_from_routerinfo(routerstatus_t *rs,
     rs->ipv6_orport = ri->ipv6_orport;
   }
 
-  /* Iff we are in a testing network, use TestingDirAuthVoteExit,
-     TestingDirAuthVoteGuard, and TestingDirAuthVoteHSDir to
-     give out the Exit, Guard, and HSDir flags, respectively.
-     But don't set the corresponding node flags. */
   if (options->TestingTorNetwork) {
-    if (routerset_contains_routerstatus(options->TestingDirAuthVoteExit,
-                                        rs, 0)) {
-      rs->is_exit = 1;
-    }
+    dirserv_set_routerstatus_testing(rs);
+  }
+}
 
-    if (routerset_contains_routerstatus(options->TestingDirAuthVoteGuard,
-                                        rs, 0)) {
-      rs->is_possible_guard = 1;
-    }
+/** Use TestingDirAuthVoteExit, TestingDirAuthVoteGuard, and
+ * TestingDirAuthVoteHSDir to give out the Exit, Guard, and HSDir flags,
+ * respectively. But don't set the corresponding node flags.
+ * Should only be called if TestingTorNetwork is set. */
+STATIC void
+dirserv_set_routerstatus_testing(routerstatus_t *rs)
+{
+  const or_options_t *options = get_options();
 
-    if (routerset_contains_routerstatus(options->TestingDirAuthVoteHSDir,
-                                        rs, 0)) {
-      rs->is_hs_dir = 1;
-    }
+  tor_assert(options->TestingTorNetwork);
+
+  if (routerset_contains_routerstatus(options->TestingDirAuthVoteExit,
+                                      rs, 0)) {
+    rs->is_exit = 1;
+  } else if (options->TestingDirAuthVoteExitIsStrict) {
+    rs->is_exit = 0;
+  }
+
+  if (routerset_contains_routerstatus(options->TestingDirAuthVoteGuard,
+                                      rs, 0)) {
+    rs->is_possible_guard = 1;
+  } else if (options->TestingDirAuthVoteGuardIsStrict) {
+    rs->is_possible_guard = 0;
+  }
+
+  if (routerset_contains_routerstatus(options->TestingDirAuthVoteHSDir,
+                                      rs, 0)) {
+    rs->is_hs_dir = 1;
+  } else if (options->TestingDirAuthVoteHSDirIsStrict) {
+    rs->is_hs_dir = 0;
   }
 }
 
@@ -3727,7 +3752,9 @@ validate_recommended_package_line(const char *line)
     cp = end_of_word + 1;
   }
 
-  return (n_entries == 0) ? 0 : 1;
+  /* If we reach this point, we have at least 1 entry. */
+  tor_assert(n_entries > 0);
+  return 1;
 }
 
 /** Release all storage used by the directory server. */
