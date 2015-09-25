@@ -3,7 +3,7 @@ dnl Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson
 dnl Copyright (c) 2007-2015, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
-AC_INIT([tor],[0.2.7.2-alpha])
+AC_INIT([tor],[0.2.7.3-rc])
 AC_CONFIG_SRCDIR([src/or/main.c])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE
@@ -80,24 +80,6 @@ AC_ARG_ENABLE(asciidoc,
         no)  asciidoc=false ;;
         *) AC_MSG_ERROR(bad value for --disable-asciidoc) ;;
       esac], [asciidoc=true])
-
-# By default, we're not ready to ship a NAT-PMP aware Tor
-AC_ARG_ENABLE(nat-pmp,
-     AS_HELP_STRING(--enable-nat-pmp, [enable NAT-PMP support]),
-     [case "${enableval}" in
-        yes) natpmp=true ;;
-        no)  natpmp=false ;;
-        * ) AC_MSG_ERROR(bad value for --enable-nat-pmp) ;;
-      esac], [natpmp=false])
-
-# By default, we're not ready to ship a UPnP aware Tor
-AC_ARG_ENABLE(upnp,
-     AS_HELP_STRING(--enable-upnp, [enable UPnP support]),
-     [case "${enableval}" in
-        yes) upnp=true ;;
-        no)  upnp=false ;;
-        * ) AC_MSG_ERROR(bad value for --enable-upnp) ;;
-      esac], [upnp=false])
 
 # systemd notify support
 AC_ARG_ENABLE(systemd,
@@ -424,6 +406,7 @@ AC_CHECK_FUNCS(
         rint \
         sigaction \
         socketpair \
+	statvfs \
         strlcat \
         strlcpy \
 	strnlen \
@@ -649,6 +632,29 @@ save_CPPFLAGS="$CPPFLAGS"
 LIBS="$TOR_OPENSSL_LIBS $LIBS"
 LDFLAGS="$TOR_LDFLAGS_openssl $LDFLAGS"
 CPPFLAGS="$TOR_CPPFLAGS_openssl $CPPFLAGS"
+
+AC_TRY_COMPILE([
+#include <openssl/opensslv.h>
+#if OPENSSL_VERSION_NUMBER < 0x1000000fL
+#error "too old"
+#endif
+   ], [],
+   [ : ],
+   [ AC_ERROR([OpenSSL is too old. We require 1.0.0 or later. You can specify a path to a newer one with --with-openssl-dir.]) ])
+
+AC_TRY_COMPILE([
+#include <openssl/opensslv.h>
+#include <openssl/evp.h>
+#if defined(OPENSSL_NO_EC) || defined(OPENSSL_NO_ECDH) || defined(OPENSSL_NO_ECDSA)
+#error "no ECC"
+#endif
+#if !defined(NID_X9_62_prime256v1) || !defined(NID_secp224r1)
+#error "curves unavailable"
+#endif
+   ], [],
+   [ : ],
+   [ AC_ERROR([OpenSSL is built without full ECC support, including curves P256 and P224. You can specify a path to one with ECC support with --with-openssl-dir.]) ])
+
 AC_CHECK_MEMBERS([struct ssl_method_st.get_cipher_by_char], , ,
 [#include <openssl/ssl.h>
 ])
@@ -767,65 +773,6 @@ dnl for us, as GCC 4.6 and later do at many optimization levels), then
 dnl we should try to add -fasynchronous-unwind-tables so that our backtrace
 dnl code will work.
 TOR_CHECK_CFLAGS(-fasynchronous-unwind-tables)
-
-dnl ------------------------------------------------------
-dnl Where do you live, libnatpmp?  And how do we call you?
-dnl There are no packages for Debian or Redhat as of this patch
-
-if test "$natpmp" = "true"; then
-    AC_DEFINE(NAT_PMP, 1, [Define to 1 if we are building with nat-pmp.])
-    TOR_SEARCH_LIBRARY(libnatpmp, $trylibnatpmpdir, [-lnatpmp $TOR_LIB_WS32 $TOR_LIB_IPHLPAPI],
-        [#include <natpmp.h>],
-        [#ifdef _WIN32
-         #define STATICLIB
-         #endif
-         #include <natpmp.h>],
-        [   int r;
-            natpmp_t natpmp;
-            natpmpresp_t response;
-            r = initnatpmp(&natpmp, 0, 0);],
-            [printf("initnatpmp() returned %d (%s)\n", r, r?"FAILED":"SUCCESS");
-            exit(0);],
-        [--with-libnatpmp-dir],
-        [/usr/lib/])
-fi
-
-
-dnl ------------------------------------------------------
-dnl Where do you live, libminiupnpc?  And how do we call you?
-dnl There are no packages for Debian or Redhat as of this patch
-
-if test "$upnp" = "true"; then
-    AC_DEFINE(MINIUPNPC, 1, [Define to 1 if we are building with UPnP.])
-
-    dnl Before we call TOR_SEARCH_LIBRARY we'll do a quick compile test
-    dnl to see if we have miniupnpc-1.5 or -1.6
-    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([#include <miniupnpc/miniupnpc.h>],
-        [upnpDiscover(1, 0, 0, 0);exit(0);])],[miniupnpc15="true"],[miniupnpc15="false"])
-
-    if test "$miniupnpc15" = "true" ; then
-        AC_DEFINE([MINIUPNPC15],[1],[libminiupnpc version 1.5 found])
-        TOR_SEARCH_LIBRARY(libminiupnpc, $trylibminiupnpcdir, [-lminiupnpc $TOR_LIB_WS32 $TOR_LIB_IPHLPAPI],
-            [#include <miniupnpc/miniwget.h>
-             #include <miniupnpc/miniupnpc.h>
-             #include <miniupnpc/upnpcommands.h>],
-            [void upnpDiscover(int delay, const char * multicastif,
-             const char * minissdpdsock, int sameport);],
-            [upnpDiscover(1, 0, 0, 0); exit(0);],
-            [--with-libminiupnpc-dir],
-            [/usr/lib/])
-    else
-        TOR_SEARCH_LIBRARY(libminiupnpc, $trylibminiupnpcdir, [-lminiupnpc $TOR_LIB_WS32 $TOR_LIB_IPHLPAPI],
-            [#include <miniupnpc/miniwget.h>
-             #include <miniupnpc/miniupnpc.h>
-             #include <miniupnpc/upnpcommands.h>],
-            [void upnpDiscover(int delay, const char * multicastif,
-             const char * minissdpdsock, int sameport, int ipv6, int * error);],
-            [upnpDiscover(1, 0, 0, 0, 0, 0); exit(0);],
-            [--with-libminiupnpc-dir],
-            [/usr/lib/])
-    fi
-fi
 
 dnl ============================================================
 dnl Check for libseccomp
@@ -993,6 +940,7 @@ AC_CHECK_HEADERS(
         sys/resource.h \
         sys/select.h \
         sys/socket.h \
+	sys/statvfs.h \
 	sys/sysctl.h \
         sys/syslimits.h \
         sys/time.h \
@@ -1135,7 +1083,7 @@ AC_CHECK_SIZEOF(pid_t)
 
 AC_CHECK_TYPES([uint, u_char, ssize_t])
 
-AC_PC_FROM_UCONTEXT([/bin/true])
+AC_PC_FROM_UCONTEXT([:])
 
 dnl used to include sockaddr_storage, but everybody has that.
 AC_CHECK_TYPES([struct in6_addr, struct sockaddr_in6, sa_family_t], , ,
@@ -1699,9 +1647,6 @@ AC_CONFIG_FILES([
         src/config/torrc.minimal
         scripts/maint/checkOptionDocs.pl
         scripts/maint/updateVersions.pl
-        src/test/test_zero_length_keys.sh
-        src/test/test_ntor.sh
-        src/test/test_bt.sh
 ])
 
 if test x$asciidoc = xtrue && test "$ASCIIDOC" = "none" ; then

@@ -164,12 +164,12 @@ investigated (as of July 2014).
 Running the unit tests
 ~~~~~~~~~~~~~~~~~~~~~~
 
-To quickly run all tests:
+To quickly run all the tests distributed with Tor:
 -----
    make check
 -----
 
-To run unit tests only:
+To run the fast unit tests only:
 -----
    make test
 -----
@@ -182,6 +182,17 @@ arbitrarily):
    ./src/test/test :<name_of_excluded_test> [:<name_of_excluded_test2]...
 -----
 
+To run all tests, including those based on Stem or Chutney:
+-----
+   make test-full
+-----
+
+To run all tests, including those basedd on Stem or Chutney that require a
+working connection to the internet:
+-----
+   make test-full-online
+-----
+
 Running gcov for unit test coverage
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -189,6 +200,7 @@ Running gcov for unit test coverage
    ./configure --enable-coverage
    make
    make check
+   # or--- make test-full ? make test-full-online?
    mkdir coverage-output
    ./scripts/test/coverage coverage-output
 -----
@@ -224,6 +236,9 @@ We have the beginnings of a set of scripts to run integration tests using
 Chutney. To try them, set CHUTNEY_PATH to your chutney source directory, and
 run "make test-network".
 
+We also have scripts to run integration tests using Stem.  To try them, set
+STEM_SOURCE_DIR to your Stem source directory, and run "test-stem".
+
 Profiling Tor with oprofile
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -250,6 +265,23 @@ Here are some basic instructions
    * "opreport -l that_dir/*"
  - Profit
 
+Generating and analyzing a callgraph
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+1. Run ./scripts/maint/generate_callgraph.sh .  This will generate a
+   bunch of files in a new ./callgraph directory.
+
+2. Run ./scripts/maint/analyze_callgraph.py callgraph/src/*/* .  This
+   will do a lot of graph operations and then dump out a new
+   "callgraph.pkl" file, containing data in Python's "pickle" format.
+
+3. Run ./scripts/maint/display_callgraph.py .  It will display:
+    - the number of functions reachable from each function.
+    - all strongly-connnected components in the Tor callgraph
+    - the largest bottlenecks in the largest SCC in the Tor callgraph.
+
+Note that currently the callgraph generator can't detect calls that pass
+through function pointers.
 
 Coding conventions
 ------------------

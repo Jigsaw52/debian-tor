@@ -1204,6 +1204,9 @@ circuit_detach_stream(circuit_t *circ, edge_connection_t *conn)
       }
     }
     if (removed) {
+      log_debug(LD_APP, "Removing stream %d from circ %u",
+                conn->stream_id, (unsigned)circ->n_circ_id);
+
       /* If the stream was removed, and it was a rend stream, decrement the
        * number of streams on the circuit associated with the rend service.
        */
@@ -2281,8 +2284,15 @@ connection_ap_handshake_attach_chosen_circuit(entry_connection_t *conn,
 
   base_conn->state = AP_CONN_STATE_CIRCUIT_WAIT;
 
-  if (!circ->base_.timestamp_dirty)
-    circ->base_.timestamp_dirty = time(NULL);
+  if (!circ->base_.timestamp_dirty ||
+      ((conn->entry_cfg.isolation_flags & ISO_SOCKSAUTH) &&
+       (conn->entry_cfg.socks_iso_keep_alive) &&
+       (conn->socks_request->usernamelen ||
+        conn->socks_request->passwordlen))) {
+    /* When stream isolation is in use and controlled by an application
+     * we are willing to keep using the stream. */
+    circ->base_.timestamp_dirty = approx_time();
+  }
 
   pathbias_count_use_attempt(circ);
 

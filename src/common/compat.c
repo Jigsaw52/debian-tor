@@ -68,6 +68,9 @@
 #ifdef HAVE_CRT_EXTERNS_H
 #include <crt_externs.h>
 #endif
+#ifdef HAVE_SYS_STATVFS_H
+#include <sys/statvfs.h>
+#endif
 
 #ifdef _WIN32
 #include <conio.h>
@@ -1589,21 +1592,34 @@ tor_ersatz_socketpair(int family, int type, int protocol, tor_socket_t fd[2])
 }
 #endif
 
+/* Return the maximum number of allowed sockets. */
+int
+get_max_sockets(void)
+{
+  return max_sockets;
+}
+
 /** Number of extra file descriptors to keep in reserve beyond those that we
  * tell Tor it's allowed to use. */
 #define ULIMIT_BUFFER 32 /* keep 32 extra fd's beyond ConnLimit_ */
 
-/** Learn the maximum allowed number of file descriptors, and tell the system
- * we want to use up to that number. (Some systems have a low soft limit, and
- * let us set it higher.)
+/** Learn the maximum allowed number of file descriptors, and tell the
+ * system we want to use up to that number. (Some systems have a low soft
+ * limit, and let us set it higher.)  We compute this by finding the largest
+ * number that we can use.
  *
- * We compute this by finding the largest number that we can use.
- * If we can't find a number greater than or equal to <b>limit</b>,
- * then we fail: return -1.
+ * If the limit is below the reserved file descriptor value (ULIMIT_BUFFER),
+ * return -1 and <b>max_out</b> is untouched.
  *
- * If <b>limit</b> is 0, then do not adjust the current maximum.
+ * If we can't find a number greater than or equal to <b>limit</b>, then we
+ * fail by returning -1 and <b>max_out</b> is untouched.
  *
- * Otherwise, return 0 and store the maximum we found inside <b>max_out</b>.*/
+ * If we are unable to set the limit value because of setrlimit() failing,
+ * return -1 and <b>max_out</b> is set to the current maximum value returned
+ * by getrlimit().
+ *
+ * Otherwise, return 0 and store the maximum we found inside <b>max_out</b>
+ * and set <b>max_sockets</b> with that value as well.*/
 int
 set_max_file_descriptors(rlim_t limit, int *max_out)
 {
@@ -1647,17 +1663,6 @@ set_max_file_descriptors(rlim_t limit, int *max_out)
              strerror(errno));
     return -1;
   }
-  if (limit == 0) {
-    /* XXXX DEAD CODE We can't reach this point, since the first "if" in this
-     * function increases limit if it started out less than ULIMIT_BUFFER */
-
-    /* If limit == 0, return the maximum value without setting it. */
-    limit = rlim.rlim_max;
-    if (limit > INT_MAX)
-      limit = INT_MAX;
-    *max_out = max_sockets = (int)limit - ULIMIT_BUFFER;
-    return 0;
-  }
   if (rlim.rlim_max < limit) {
     log_warn(LD_CONFIG,"We need %lu file descriptors available, and we're "
              "limited to %lu. Please change your ulimit -n.",
@@ -1671,7 +1676,7 @@ set_max_file_descriptors(rlim_t limit, int *max_out)
   }
   /* Set the current limit value so if the attempt to set the limit to the
    * max fails at least we'll have a valid value of maximum sockets. */
-  max_sockets = (int)rlim.rlim_cur - ULIMIT_BUFFER;
+  *max_out = max_sockets = (int)rlim.rlim_cur - ULIMIT_BUFFER;
   rlim.rlim_cur = rlim.rlim_max;
 
   if (setrlimit(RLIMIT_NOFILE, &rlim) != 0) {
@@ -3377,6 +3382,46 @@ tor_getpass(const char *prompt, char *output, size_t buflen)
   return r;
 #else
 #error "No implementation for tor_getpass found!"
+#endif
+}
+
+/** Return the amount of free disk space we have permission to use, in
+ * bytes. Return -1 if the amount of free space can't be determined. */
+int64_t
+tor_get_avail_disk_space(const char *path)
+{
+#ifdef HAVE_STATVFS
+  struct statvfs st;
+  int r;
+  memset(&st, 0, sizeof(st));
+
+  r = statvfs(path, &st);
+  if (r < 0)
+    return -1;
+
+  int64_t result = st.f_bavail;
+  if (st.f_frsize) {
+    result *= st.f_frsize;
+  } else if (st.f_bsize) {
+    result *= st.f_bsize;
+  } else {
+    return -1;
+  }
+
+  return result;
+#elif defined(_WIN32)
+  ULARGE_INTEGER freeBytesAvail;
+  BOOL ok;
+
+  ok = GetDiskFreeSpaceEx(path, &freeBytesAvail, NULL, NULL);
+  if (!ok) {
+    return -1;
+  }
+  return (int64_t)freeBytesAvail.QuadPart;
+#else
+  (void)path;
+  errno = ENOSYS;
+  return -1;
 #endif
 }
 
