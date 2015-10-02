@@ -5,4 +5,5 @@ etc/tor
 
 contrib/client-tools/torify usr/bin
 debian/tor-service-defaults-torrc usr/share/tor
+debian/tor-service-defaults-torrc-instances usr/share/tor
 debian/tor.service lib/systemd/system
