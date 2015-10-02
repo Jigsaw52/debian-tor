@@ -60,7 +60,8 @@ fi
 name="$1"; shift
 # XXX verify name is valid
 
-if echo "x$name" | grep -q '[^a-zA-Z0-9]' ; then
+if echo "x$name" | grep -q '[^a-zA-Z0-9]' ||
+  [ "$name" = "default" ] ; then
     echo >&2 "Invalid name: $name."
     exit 1
 fi

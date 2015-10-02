@@ -15,7 +15,8 @@ mkdir -p "$WANTDIR"
 
 [ -e "/etc/tor/torrc" ] && ln -s "$DEFAULTTOR" "$WANTDIR/"
 for name in $( find "$BASEETC" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' ); do
-    if echo "x$name" | grep -q '[^a-zA-Z0-9]' ; then
+    if echo "x$name" | grep -q '[^a-zA-Z0-9]' ||
+       [ "$name" = "default" ] ; then
         continue
     fi
     [ -e "$BASEETC/$name/torrc" ] && ln -s "$SERVICEFILE" "$WANTDIR/tor@$name.service"
