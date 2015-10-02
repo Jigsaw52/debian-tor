@@ -2,8 +2,9 @@ tor (0.2.7.3-rc-1.1) experimental; urgency=medium
 
   * Include identity tag for syslog logging feature from master.  This is
     bug#17194 upstream.
+  * Support multiple instances.
 
- -- Peter Palfrader <weasel@debian.org>  Fri, 02 Oct 2015 12:30:46 +0200
+ -- Peter Palfrader <weasel@debian.org>  Fri, 02 Oct 2015 17:23:44 +0200
 
 tor (0.2.7.3-rc-1) experimental; urgency=medium
 
