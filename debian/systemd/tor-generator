@@ -5,6 +5,11 @@
 
 set -eu
 
+if [ $# -lt 1 ]; then
+    echo >&2 "Usage: $0 <wantdir> [...]"
+    exit 1
+fi
+
 GENDIR="$1"
 WANTDIR="$1/tor.service.wants"
 SERVICEFILE="/lib/systemd/system/tor@.service"
