@@ -89,7 +89,7 @@ install -d "$etc"
 # This is the tor configuration file for tor instance $name.
 #
 # To start/reload/etc this instance, run "systemctl tor@$name start" (or reload, or..).
-# This instance will run as user $user, its data directory is $home.
+# This instance will run as user $user; its data directory is $home.
 #
 SocksPort auto
 EOF
