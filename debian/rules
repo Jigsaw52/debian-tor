@@ -57,6 +57,7 @@ override_dh_clean:
 override_dh_auto_build:
 	dh_auto_build
 	a2x -f manpage debian/tor-instance-create.8.txt
+	chmod +x debian/systemd/tor-generator
 
 override_dh_install:
 	dh_install --fail-missing
