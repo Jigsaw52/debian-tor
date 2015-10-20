@@ -20,12 +20,14 @@ Restart=on-failure
 LimitNOFILE=65536
 
 # Hardening
+AppArmorProfile=system_tor
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectHome=yes
 ProtectSystem=full
 ReadOnlyDirectories=/
+ReadWriteDirectories=-/proc
 ReadWriteDirectories=-/var/lib/tor
 ReadWriteDirectories=-/var/log/tor
 ReadWriteDirectories=-/var/run
