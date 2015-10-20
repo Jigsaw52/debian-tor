@@ -3,8 +3,10 @@ tor (0.2.7.3-rc-1.1) experimental; urgency=medium
   * Include identity tag for syslog logging feature from master.  This is
     bug#17194 upstream.
   * Support multiple instances (closes: #791393).
+  * Split systemd service timeout into start and stop timeout, and raise
+    them to 120 and 60 seconds from 45 (closes: tor#16398).
 
- -- Peter Palfrader <weasel@debian.org>  Mon, 19 Oct 2015 19:19:17 +0200
+ -- Peter Palfrader <weasel@debian.org>  Tue, 20 Oct 2015 17:09:01 +0200
 
 tor (0.2.7.3-rc-1) experimental; urgency=medium
 
