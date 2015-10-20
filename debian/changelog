@@ -1,3 +1,10 @@
+tor (0.2.8.0-unreleased-1) experimental; urgency=medium
+
+  * Drop 20-upstream-syslog-identity as it is included upstream
+    (cf. upstream bug #17194).
+
+ -- Peter Palfrader <weasel@debian.org>  Tue, 20 Oct 2015 16:29:05 +0200
+
 tor (0.2.7.3-rc-1.1) experimental; urgency=medium
 
   * Include identity tag for syslog logging feature from master.  This is
