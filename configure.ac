@@ -3,7 +3,7 @@ dnl Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson
 dnl Copyright (c) 2007-2015, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
-AC_INIT([tor],[0.2.7.3-rc])
+AC_INIT([tor],[0.2.7.4-rc])
 AC_CONFIG_SRCDIR([src/or/main.c])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE
@@ -360,6 +360,7 @@ AC_SEARCH_LIBS(socket, [socket network])
 AC_SEARCH_LIBS(gethostbyname, [nsl])
 AC_SEARCH_LIBS(dlopen, [dl])
 AC_SEARCH_LIBS(inet_aton, [resolv])
+AC_SEARCH_LIBS(backtrace, [execinfo])
 saved_LIBS="$LIBS"
 AC_SEARCH_LIBS([clock_gettime], [rt])
 if test "$LIBS" != "$saved_LIBS"; then
