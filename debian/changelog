@@ -1,5 +1,6 @@
-tor (0.2.7.3-rc-1.1) experimental; urgency=medium
+tor (0.2.7.4-rc-1) experimental; urgency=medium
 
+  * New upstream version.
   * Include identity tag for syslog logging feature from master.  This is
     bug#17194 upstream.
   * Support multiple instances (closes: #791393).
@@ -8,11 +9,11 @@ tor (0.2.7.3-rc-1.1) experimental; urgency=medium
   * Enable apparmor support for the default tor service (re: #761404).
     Apparmor is not yet being enabled for any other tor instance.
 
- -- Peter Palfrader <weasel@debian.org>  Tue, 20 Oct 2015 17:14:23 +0200
+ -- Peter Palfrader <weasel@debian.org>  Thu, 22 Oct 2015 16:09:01 +0200
 
 tor (0.2.7.3-rc-1) experimental; urgency=medium
 
-  * New upstream tree.
+  * New upstream version.
 
  -- Peter Palfrader <weasel@debian.org>  Fri, 25 Sep 2015 16:08:26 +0200
 
