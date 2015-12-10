@@ -6,8 +6,10 @@ tor (0.2.7.6-1) unstable; urgency=high
   * Actually install tor-instance-create.8 manpage.
   * Change the apparmor profile tor allow Tor to access the systemd
     notification socket.  Thanks for regar42.  Closes Tor#17693.
+  * tor-instance-create: Do systemctl daemon-reload *after* writing the
+    new torrc.
 
- -- Peter Palfrader <weasel@debian.org>  Thu, 10 Dec 2015 21:42:19 +0100
+ -- Peter Palfrader <weasel@debian.org>  Thu, 10 Dec 2015 21:48:34 +0100
 
 tor (0.2.7.5-1) unstable; urgency=medium
 
