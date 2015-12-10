@@ -1,7 +1,7 @@
 # vim:syntax=apparmor
 #include <tunables/global>
 
-profile system_tor {
+profile system_tor flags=(attach_disconnected) {
   #include <abstractions/tor>
 
   owner /var/lib/tor/** rwk,
@@ -11,6 +11,7 @@ profile system_tor {
   /{,var/}run/tor/tor.pid w,
   /{,var/}run/tor/control.authcookie w,
   /{,var/}run/tor/control.authcookie.tmp rw,
+  /{,var/}run/systemd/notify w,
 
   # Site-specific additions and overrides. See local/README for details.
   #include <local/system_tor>
