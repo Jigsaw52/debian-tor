@@ -59,7 +59,7 @@ override_dh_auto_build:
 	a2x -f manpage debian/tor-instance-create.8.txt
 	chmod +x debian/systemd/tor-generator
 
-override_dh_install:
+override_dh_install-arch:
 	dh_install --fail-missing
 
 	mv debian/tor/etc/tor/torrc.sample debian/tor/etc/tor/torrc
