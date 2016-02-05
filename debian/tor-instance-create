@@ -83,8 +83,6 @@ adduser --quiet \
 install -d -m 02700 -o "$user" -g "$user" "$home"
 install -d "$etc"
 
-[ -x /bin/systemctl ] && systemctl daemon-reload || true
-
 [ -e "$torrc" ] || cat > "$torrc" << EOF
 # This is the tor configuration file for tor instance $name.
 #
@@ -93,3 +91,5 @@ install -d "$etc"
 #
 SocksPort auto
 EOF
+
+[ -x /bin/systemctl ] && systemctl daemon-reload || true

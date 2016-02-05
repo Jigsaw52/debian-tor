@@ -5,17 +5,41 @@ tor (0.2.8.0-unreleased-1) experimental; urgency=medium
 
  -- Peter Palfrader <weasel@debian.org>  Tue, 20 Oct 2015 16:29:05 +0200
 
-tor (0.2.7.3-rc-1.1) experimental; urgency=medium
+tor (0.2.7.6-1) unstable; urgency=high
 
+  * New upstream version.
+    - Actually look at the Guard flag when selecting a new directory
+      guard.
+  * Actually install tor-instance-create.8 manpage.
+  * Change the apparmor profile tor allow Tor to access the systemd
+    notification socket.  Thanks to regar42.  Closes Tor#17693.
+  * tor-instance-create: Do systemctl daemon-reload *after* writing the
+    new torrc.
+
+ -- Peter Palfrader <weasel@debian.org>  Thu, 10 Dec 2015 21:48:34 +0100
+
+tor (0.2.7.5-1) unstable; urgency=medium
+
+  * New upstream version, upload 0.2.7.x tree to unstable.
+
+ -- Peter Palfrader <weasel@debian.org>  Fri, 20 Nov 2015 16:37:29 +0100
+
+tor (0.2.7.4-rc-1) experimental; urgency=medium
+
+  * New upstream version.
   * Include identity tag for syslog logging feature from master.  This is
     bug#17194 upstream.
   * Support multiple instances (closes: #791393).
+  * Split systemd service timeout into start and stop timeout, and raise
+    them to 120 and 60 seconds from 45 (closes: tor#16398).
+  * Enable apparmor support for the default tor service (re: #761404).
+    Apparmor is not yet being enabled for any other tor instance.
 
- -- Peter Palfrader <weasel@debian.org>  Mon, 19 Oct 2015 19:19:17 +0200
+ -- Peter Palfrader <weasel@debian.org>  Thu, 22 Oct 2015 16:09:01 +0200
 
 tor (0.2.7.3-rc-1) experimental; urgency=medium
 
-  * New upstream tree.
+  * New upstream version.
 
  -- Peter Palfrader <weasel@debian.org>  Fri, 25 Sep 2015 16:08:26 +0200
 

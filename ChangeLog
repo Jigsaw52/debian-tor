@@ -1,3 +1,134 @@
+Changes in version 0.2.7.6 - 2015-12-10
+  Tor version 0.2.7.6 fixes a major bug in entry guard selection, as
+  well as a minor bug in hidden service reliability.
+
+  o Major bugfixes (guard selection):
+    - Actually look at the Guard flag when selecting a new directory
+      guard. When we implemented the directory guard design, we
+      accidentally started treating all relays as if they have the Guard
+      flag during guard selection, leading to weaker anonymity and worse
+      performance. Fixes bug 17772; bugfix on 0.2.4.8-alpha. Discovered
+      by Mohsen Imani.
+
+  o Minor features (geoip):
+    - Update geoip and geoip6 to the December 1 2015 Maxmind GeoLite2
+      Country database.
+
+  o Minor bugfixes (compilation):
+    - When checking for net/pfvar.h, include netinet/in.h if possible.
+      This fixes transparent proxy detection on OpenBSD. Fixes bug
+      17551; bugfix on 0.1.2.1-alpha. Patch from "rubiate".
+    - Fix a compilation warning with Clang 3.6: Do not check the
+      presence of an address which can never be NULL. Fixes bug 17781.
+
+  o Minor bugfixes (correctness):
+    - When displaying an IPv6 exit policy, include the mask bits
+      correctly even when the number is greater than 31. Fixes bug
+      16056; bugfix on 0.2.4.7-alpha. Patch from "gturner".
+    - The wrong list was used when looking up expired intro points in a
+      rend service object, causing what we think could be reachability
+      issues for hidden services, and triggering a BUG log. Fixes bug
+      16702; bugfix on 0.2.7.2-alpha.
+    - Fix undefined behavior in the tor_cert_checksig function. Fixes
+      bug 17722; bugfix on 0.2.7.2-alpha.
+
+
+Changes in version 0.2.7.5 - 2015-11-20
+  The Tor 0.2.7 release series is dedicated to the memory of Tor user
+  and privacy advocate Caspar Bowden (1961-2015). Caspar worked
+  tirelessly to advocate human rights regardless of national borders,
+  and oppose the encroachments of mass surveillance. He opposed national
+  exceptionalism, he brought clarity to legal and policy debates, he
+  understood and predicted the impact of mass surveillance on the world,
+  and he laid the groundwork for resisting it. While serving on the Tor
+  Project's board of directors, he brought us his uncompromising focus
+  on technical excellence in the service of humankind. Caspar was an
+  inimitable force for good and a wonderful friend. He was kind,
+  humorous, generous, gallant, and believed we should protect one
+  another without exception. We honor him here for his ideals, his
+  efforts, and his accomplishments. Please honor his memory with works
+  that would make him proud.
+
+  Tor 0.2.7.5 is the first stable release in the Tor 0.2.7 series.
+
+  The 0.2.7 series adds a more secure identity key type for relays,
+  improves cryptography performance, resolves several longstanding
+  hidden-service performance issues, improves controller support for
+  hidden services, and includes small bugfixes and performance
+  improvements throughout the program. This release series also includes
+  more tests than before, and significant simplifications to which parts
+  of Tor invoke which others.
+
+  (This release contains no code changes since 0.2.7.4-rc.)
+
+
+Changes in version 0.2.7.4-rc - 2015-10-21
+  Tor 0.2.7.4-rc is the second release candidate in the 0.2.7 series. It
+  fixes some important memory leaks, and a scary-looking (but mostly
+  harmless in practice) invalid-read bug. It also has a few small
+  bugfixes, notably fixes for compilation and portability on different
+  platforms. If no further significant bounds are found, the next
+  release will the the official stable release.
+
+  o Major bugfixes (security, correctness):
+    - Fix an error that could cause us to read 4 bytes before the
+      beginning of an openssl string. This bug could be used to cause
+      Tor to crash on systems with unusual malloc implementations, or
+      systems with unusual hardening installed. Fixes bug 17404; bugfix
+      on 0.2.3.6-alpha.
+
+  o Major bugfixes (correctness):
+    - Fix a use-after-free bug in validate_intro_point_failure(). Fixes
+      bug 17401; bugfix on 0.2.7.3-rc.
+
+  o Major bugfixes (memory leaks):
+    - Fix a memory leak in ed25519 batch signature checking. Fixes bug
+      17398; bugfix on 0.2.6.1-alpha.
+    - Fix a memory leak in rend_cache_failure_entry_free(). Fixes bug
+      17402; bugfix on 0.2.7.3-rc.
+    - Fix a memory leak when reading an expired signing key from disk.
+      Fixes bug 17403; bugfix on 0.2.7.2-rc.
+
+  o Minor features (geoIP):
+    - Update geoip and geoip6 to the October 9 2015 Maxmind GeoLite2
+      Country database.
+
+  o Minor bugfixes (compilation):
+    - Repair compilation with the most recent (unreleased, alpha)
+      vesions of OpenSSL 1.1. Fixes part of ticket 17237.
+    - Fix an integer overflow warning in test_crypto_slow.c. Fixes bug
+      17251; bugfix on 0.2.7.2-alpha.
+    - Fix compilation of sandbox.c with musl-libc. Fixes bug 17347;
+      bugfix on 0.2.5.1-alpha. Patch from 'jamestk'.
+
+  o Minor bugfixes (portability):
+    - Use libexecinfo on FreeBSD to enable backtrace support. Fixes part
+      of bug 17151; bugfix on 0.2.5.2-alpha. Patch from Marcin Cieślak.
+
+  o Minor bugfixes (sandbox):
+    - Add the "hidserv-stats" filename to our sandbox filter for the
+      HiddenServiceStatistics option to work properly. Fixes bug 17354;
+      bugfix on tor-0.2.6.2-alpha. Patch from David Goulet.
+
+  o Minor bugfixes (testing):
+    - Add unit tests for get_interface_address* failure cases. Fixes bug
+      17173; bugfix on 0.2.7.3-rc. Patch by fk/teor.
+    - Fix breakage when running 'make check' with BSD make. Fixes bug
+      17154; bugfix on 0.2.7.3-rc. Patch by Marcin Cieślak.
+    - Make the get_ifaddrs_* unit tests more tolerant of different
+      network configurations. (Don't assume every test box has an IPv4
+      address, and don't assume every test box has a non-localhost
+      address.) Fixes bug 17255; bugfix on 0.2.7.3-rc. Patch by "teor".
+    - Skip backtrace tests when backtrace support is not compiled in.
+      Fixes part of bug 17151; bugfix on 0.2.7.1-alpha. Patch from
+      Marcin Cieślak.
+
+  o Documentation:
+    - Fix capitalization of SOCKS in sample torrc. Closes ticket 15609.
+    - Note that HiddenServicePorts can take a unix domain socket. Closes
+      ticket 17364.
+
+
 Changes in version 0.2.7.3-rc - 2015-09-25
   Tor 0.2.7.3-rc is the first release candidate in the 0.2.7 series. It
   contains numerous usability fixes for Ed25519 keys, safeguards against
@@ -61,7 +192,7 @@ Changes in version 0.2.7.3-rc - 2015-09-25
       Fixes bug 16685; bugfix on 0.2.7.2-alpha. Reported by "s7r".
 
   o Minor features (client-side privacy):
-    - New KeyAliveSOCKSAuth option to indefinitely extend circuit
+    - New KeepAliveIsolateSOCKSAuth option to indefinitely extend circuit
       lifespan when IsolateSOCKSAuth and streams with SOCKS
       authentication are attached to the circuit. This allows
       applications like TorBrowser to manage circuit lifetime on their

@@ -15,7 +15,8 @@ ExecStartPre=/usr/bin/tor --defaults-torrc /var/run/tor-instances/%i.defaults -f
 ExecStart=/usr/bin/tor --defaults-torrc /var/run/tor-instances/%i.defaults -f /etc/tor/instances/%i/torrc
 ExecReload=/bin/kill -HUP ${MAINPID}
 KillSignal=SIGINT
-TimeoutSec=45
+TimeoutStartSec=120
+TimeoutStopSec=60
 Restart=on-failure
 LimitNOFILE=65536
 

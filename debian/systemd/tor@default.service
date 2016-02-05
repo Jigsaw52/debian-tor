@@ -14,17 +14,20 @@ ExecStartPre=/usr/bin/tor --defaults-torrc /usr/share/tor/tor-service-defaults-t
 ExecStart=/usr/bin/tor --defaults-torrc /usr/share/tor/tor-service-defaults-torrc -f /etc/tor/torrc --RunAsDaemon 0
 ExecReload=/bin/kill -HUP ${MAINPID}
 KillSignal=SIGINT
-TimeoutSec=45
+TimeoutStartSec=120
+TimeoutStopSec=60
 Restart=on-failure
 LimitNOFILE=65536
 
 # Hardening
+AppArmorProfile=system_tor
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectHome=yes
 ProtectSystem=full
 ReadOnlyDirectories=/
+ReadWriteDirectories=-/proc
 ReadWriteDirectories=-/var/lib/tor
 ReadWriteDirectories=-/var/log/tor
 ReadWriteDirectories=-/var/run
