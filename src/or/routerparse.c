@@ -35,8 +35,9 @@
 /****************************************************************************/
 
 /** Enumeration of possible token types.  The ones starting with K_ correspond
- * to directory 'keywords'. ERR_ is an error in the tokenizing process, EOF_
- * is an end-of-file marker, and NIL_ is used to encode not-a-token.
+ * to directory 'keywords'. A_ is for an annotation, R or C is related to
+ * hidden services, ERR_ is an error in the tokenizing process, EOF_ is an
+ * end-of-file marker, and NIL_ is used to encode not-a-token.
  */
 typedef enum {
   K_ACCEPT = 0,
@@ -125,6 +126,7 @@ typedef enum {
   K_DIR_KEY_CERTIFICATION,
   K_DIR_KEY_CROSSCERT,
   K_DIR_ADDRESS,
+  K_DIR_TUNNELLED,
 
   K_VOTE_STATUS,
   K_VALID_AFTER,
@@ -318,6 +320,7 @@ static token_rule_t routerdesc_token_table[] = {
   T0N("opt",                 K_OPT,             CONCAT_ARGS, OBJ_OK ),
   T1( "bandwidth",           K_BANDWIDTH,           GE(3),   NO_OBJ ),
   A01("@purpose",            A_PURPOSE,             GE(1),   NO_OBJ ),
+  T01("tunnelled-dir-server",K_DIR_TUNNELLED,       NO_ARGS, NO_OBJ ),
 
   END_OF_TABLE
 };
@@ -1609,6 +1612,12 @@ router_parse_entry_from_string(const char *s, const char *end,
     router->wants_to_be_hs_dir = 1;
   }
 
+  /* This router accepts tunnelled directory requests via begindir if it has
+   * an open dirport or it included "tunnelled-dir-server". */
+  if (find_opt_by_keyword(tokens, K_DIR_TUNNELLED) || router->dir_port > 0) {
+    router->supports_tunnelled_dir_requests = 1;
+  }
+
   tok = find_by_keyword(tokens, K_ROUTER_SIGNATURE);
   note_crypto_pk_op(VERIFY_RTR);
 #ifdef COUNT_DISTINCT_DIGESTS
@@ -2061,7 +2070,7 @@ authority_cert_parse_from_string(const char *s, const char **end_of_string)
  * object (starting with "r " at the start of a line).  If none is found,
  * return the start of the directory footer, or the next directory signature.
  * If none is found, return the end of the string. */
-static INLINE const char *
+static inline const char *
 find_start_of_next_routerstatus(const char *s)
 {
   const char *eos, *footer, *sig;
@@ -2294,6 +2303,8 @@ routerstatus_parse_entry_from_string(memarea_t *area,
         rs->is_unnamed = 1;
       } else if (!strcmp(tok->args[i], "HSDir")) {
         rs->is_hs_dir = 1;
+      } else if (!strcmp(tok->args[i], "V2Dir")) {
+        rs->is_v2_dir = 1;
       }
     }
   }
@@ -3668,10 +3679,10 @@ networkstatus_parse_detached_signatures(const char *s, const char *eos)
  *
  * Returns NULL on policy errors.
  *
- * If there is a policy error, malformed_list is set to true if the entire
- * policy list should be discarded. Otherwise, it is set to false, and only
- * this item should be ignored - the rest of the policy list can continue to
- * be processed and used.
+ * Set *<b>malformed_list>/b> to true if the entire policy list should be
+ * discarded. Otherwise, set it to false, and only this item should be ignored
+ * on error - the rest of the policy list can continue to be processed and
+ * used.
  *
  * The addr_policy_t returned by this function can have its address set to
  * AF_UNSPEC for '*'.  Use policy_expand_unspec() to turn this into a pair
@@ -3684,8 +3695,8 @@ router_parse_addr_policy_item_from_string,(const char *s, int assume_action,
   directory_token_t *tok = NULL;
   const char *cp, *eos;
   /* Longest possible policy is
-   * "accept6 ffff:ffff:..255/128:10000-65535",
-   * which contains a max-length IPv6 address, plus 24 characters.
+   * "accept6 [ffff:ffff:..255]/128:10000-65535",
+   * which contains a max-length IPv6 address, plus 26 characters.
    * But note that there can be an arbitrary amount of space between the
    * accept and the address:mask/port element.
    * We don't need to multiply TOR_ADDR_BUF_LEN by 2, as there is only one
@@ -3697,9 +3708,12 @@ router_parse_addr_policy_item_from_string,(const char *s, int assume_action,
   memarea_t *area = NULL;
 
   tor_assert(malformed_list);
+  *malformed_list = 0;
 
   s = eat_whitespace(s);
-  if ((*s == '*' || TOR_ISDIGIT(*s)) && assume_action >= 0) {
+  /* We can only do assume_action on []-quoted IPv6, as "a" (accept)
+   * and ":" (port separator) are ambiguous */
+  if ((*s == '*' || *s == '[' || TOR_ISDIGIT(*s)) && assume_action >= 0) {
     if (tor_snprintf(line, sizeof(line), "%s %s",
                assume_action == ADDR_POLICY_ACCEPT?"accept":"reject", s)<0) {
       log_warn(LD_DIR, "Policy %s is too long.", escaped(s));
@@ -3930,7 +3944,7 @@ token_clear(directory_token_t *tok)
  * Return <b>tok</b> on success, or a new ERR_ token if the token didn't
  * conform to the syntax we wanted.
  **/
-static INLINE directory_token_t *
+static inline directory_token_t *
 token_check_object(memarea_t *area, const char *kwd,
                    directory_token_t *tok, obj_syntax o_syn)
 {
@@ -3995,7 +4009,7 @@ token_check_object(memarea_t *area, const char *kwd,
  * number of parsed elements into the n_args field of <b>tok</b>.  Allocate
  * all storage in <b>area</b>.  Return the number of arguments parsed, or
  * return -1 if there was an insanely high number of arguments. */
-static INLINE int
+static inline int
 get_token_arguments(memarea_t *area, directory_token_t *tok,
                     const char *s, const char *eol)
 {

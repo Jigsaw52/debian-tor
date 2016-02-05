@@ -199,6 +199,10 @@ static int filter_nopar_gen[] = {
     SCMP_SYS(stat64),
 #endif
 
+#ifdef __NR_getrandom
+    SCMP_SYS(getrandom),
+#endif
+
     /*
      * These socket syscalls are not required on x86_64 and not supported with
      * some libseccomp versions (eg: 1.0.1)
@@ -1598,7 +1602,7 @@ sigsys_debugging(int nr, siginfo_t *info, void *void_context)
   const char *syscall_name;
   int syscall;
 #ifdef USE_BACKTRACE
-  int depth;
+  size_t depth;
   int n_fds, i;
   const int *fds = NULL;
 #endif
@@ -1630,7 +1634,7 @@ sigsys_debugging(int nr, siginfo_t *info, void *void_context)
 #ifdef USE_BACKTRACE
   n_fds = tor_log_get_sigsafe_err_fds(&fds);
   for (i=0; i < n_fds; ++i)
-    backtrace_symbols_fd(syscall_cb_buf, depth, fds[i]);
+    backtrace_symbols_fd(syscall_cb_buf, (int)depth, fds[i]);
 #endif
 
 #if defined(DEBUGGING_CLOSE)

@@ -710,7 +710,6 @@ Changes in version 0.2.7.5 - 2015-11-20
       instead of triggering an assertion. Fixes bug 15759; bugfix on
       0.2.6.3-alpha. Reported by Nicolas Derive.
 
-
 Changes in version 0.2.6.10 - 2015-07-12
   Tor version 0.2.6.10 fixes some significant stability and hidden
   service client bugs, bulletproofs the cryptography init process, and

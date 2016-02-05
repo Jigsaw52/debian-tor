@@ -238,6 +238,11 @@ main(int c, const char **v)
   update_approx_time(time(NULL));
   options = options_new();
   tor_threads_init();
+
+  struct tor_libevent_cfg cfg;
+  memset(&cfg, 0, sizeof(cfg));
+  tor_libevent_initialize(&cfg);
+
   control_initialize_event_queue();
   init_logging(1);
   configure_backtrace_handler(get_version());
@@ -272,7 +277,10 @@ main(int c, const char **v)
     return 1;
   }
   crypto_set_tls_dh_prime();
-  crypto_seed_rng();
+  if (crypto_seed_rng() < 0) {
+    printf("Couldn't seed RNG; exiting.\n");
+    return 1;
+  }
   rep_hist_init();
   network_init();
   setup_directory();
@@ -294,6 +302,7 @@ main(int c, const char **v)
   tor_free_all(0);
   dmalloc_log_unfreed();
 #endif
+  crypto_global_cleanup();
 
   if (have_failed)
     return 1;
