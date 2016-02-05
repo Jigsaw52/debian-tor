@@ -92,7 +92,7 @@ circuit_is_acceptable(const origin_circuit_t *origin_circ,
   /* decide if this circ is suitable for this conn */
 
   /* for rend circs, circ->cpath->prev is not the last router in the
-   * circuit, it's the magical extra bob hop. so just check the nickname
+   * circuit, it's the magical extra service hop. so just check the nickname
    * of the one we meant to finish at.
    */
   build_state = origin_circ->build_state;
@@ -1123,7 +1123,7 @@ circuit_build_needed_circs(time_t now)
    * don't require an exit circuit, review in #13814.
    * This allows HSs to function in a consensus without exits. */
   if (router_have_consensus_path() != CONSENSUS_PATH_UNKNOWN)
-    connection_ap_attach_pending();
+    connection_ap_rescan_and_attach_pending();
 
   /* make sure any hidden services have enough intro points
    * HS intro point streams only require an internal circuit */
@@ -1475,7 +1475,7 @@ circuit_has_opened(origin_circuit_t *circ)
     case CIRCUIT_PURPOSE_C_ESTABLISH_REND:
       rend_client_rendcirc_has_opened(circ);
       /* Start building an intro circ if we don't have one yet. */
-      connection_ap_attach_pending();
+      connection_ap_attach_pending(1);
       /* This isn't a call to circuit_try_attaching_streams because a
        * circuit in _C_ESTABLISH_REND state isn't connected to its
        * hidden service yet, thus we can't attach streams to it yet,
@@ -1493,11 +1493,11 @@ circuit_has_opened(origin_circuit_t *circ)
       circuit_try_attaching_streams(circ);
       break;
     case CIRCUIT_PURPOSE_S_ESTABLISH_INTRO:
-      /* at Bob, waiting for introductions */
+      /* at the service, waiting for introductions */
       rend_service_intro_has_opened(circ);
       break;
     case CIRCUIT_PURPOSE_S_CONNECT_REND:
-      /* at Bob, connecting to rend point */
+      /* at the service, connecting to rend point */
       rend_service_rendezvous_has_opened(circ);
       break;
     case CIRCUIT_PURPOSE_TESTING:
@@ -1537,14 +1537,14 @@ void
 circuit_try_attaching_streams(origin_circuit_t *circ)
 {
   /* Attach streams to this circuit if we can. */
-  connection_ap_attach_pending();
+  connection_ap_attach_pending(1);
 
   /* The call to circuit_try_clearing_isolation_state here will do
    * nothing and return 0 if we didn't attach any streams to circ
    * above. */
   if (circuit_try_clearing_isolation_state(circ)) {
     /* Maybe *now* we can attach some streams to this circuit. */
-    connection_ap_attach_pending();
+    connection_ap_attach_pending(1);
   }
 }
 
@@ -1617,32 +1617,32 @@ circuit_build_failed(origin_circuit_t *circ)
       circuit_testing_failed(circ, failed_at_last_hop);
       break;
     case CIRCUIT_PURPOSE_S_ESTABLISH_INTRO:
-      /* at Bob, waiting for introductions */
+      /* at the service, waiting for introductions */
       if (circ->base_.state != CIRCUIT_STATE_OPEN) {
         circuit_increment_failure_count();
       }
-      /* no need to care here, because bob will rebuild intro
+      /* no need to care here, because the service will rebuild intro
        * points periodically. */
       break;
     case CIRCUIT_PURPOSE_C_INTRODUCING:
-      /* at Alice, connecting to intro point */
-      /* Don't increment failure count, since Bob may have picked
+      /* at the client, connecting to intro point */
+      /* Don't increment failure count, since the service may have picked
        * the introduction point maliciously */
-      /* Alice will pick a new intro point when this one dies, if
+      /* The client will pick a new intro point when this one dies, if
        * the stream in question still cares. No need to act here. */
       break;
     case CIRCUIT_PURPOSE_C_ESTABLISH_REND:
-      /* at Alice, waiting for Bob */
+      /* at the client, waiting for the service */
       circuit_increment_failure_count();
-      /* Alice will pick a new rend point when this one dies, if
+      /* the client will pick a new rend point when this one dies, if
        * the stream in question still cares. No need to act here. */
       break;
     case CIRCUIT_PURPOSE_S_CONNECT_REND:
-      /* at Bob, connecting to rend point */
-      /* Don't increment failure count, since Alice may have picked
+      /* at the service, connecting to rend point */
+      /* Don't increment failure count, since the client may have picked
        * the rendezvous point maliciously */
       log_info(LD_REND,
-               "Couldn't connect to Alice's chosen rend point %s "
+               "Couldn't connect to the client's chosen rend point %s "
                "(%s hop failed).",
                escaped(build_state_get_exit_nickname(circ->build_state)),
                failed_at_last_hop?"last":"non-last");
@@ -1986,6 +1986,7 @@ circuit_get_open_circ_or_launch(entry_connection_t *conn,
                  "No intro points for '%s': re-fetching service descriptor.",
                  safe_str_client(rend_data->onion_address));
         rend_client_refetch_v2_renddesc(rend_data);
+        connection_ap_mark_as_non_pending_circuit(conn);
         ENTRY_TO_CONN(conn)->state = AP_CONN_STATE_RENDDESC_WAIT;
         return 0;
       }
@@ -2240,7 +2241,7 @@ consider_recording_trackhost(const entry_connection_t *conn,
   char fp[HEX_DIGEST_LEN+1];
 
   /* Search the addressmap for this conn's destination. */
-  /* If he's not in the address map.. */
+  /* If they're not in the address map.. */
   if (!options->TrackHostExits ||
       addressmap_have_mapping(conn->socks_request->address,
                               options->TrackHostExitsExpire))

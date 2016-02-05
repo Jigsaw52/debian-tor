@@ -3,7 +3,7 @@ dnl Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson
 dnl Copyright (c) 2007-2015, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
-AC_INIT([tor],[0.2.7.6])
+AC_INIT([tor],[0.2.8.1-alpha])
 AC_CONFIG_SRCDIR([src/or/main.c])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE
@@ -374,25 +374,27 @@ AC_SEARCH_LIBS(pthread_detach, [pthread])
 AM_CONDITIONAL(THREADS_WIN32, test "$bwin32" = "true")
 AM_CONDITIONAL(THREADS_PTHREADS, test "$bwin32" = "false")
 
-dnl -------------------------------------------------------------------
-dnl Check for functions before libevent, since libevent-1.2 apparently
-dnl exports strlcpy without defining it in a header.
-
 AC_CHECK_FUNCS(
         _NSGetEnviron \
+	RtlSecureZeroMemory \
+	SecureZeroMemory \
         accept4 \
         backtrace \
         backtrace_symbols_fd \
         clock_gettime \
 	eventfd \
+	explicit_bzero \
+	timingsafe_memcmp \
         flock \
         ftime \
         getaddrinfo \
+        getentropy \
         getifaddrs \
         getpass \
         getrlimit \
         gettimeofday \
         gmtime_r \
+	htonll \
         inet_aton \
         ioctl \
         issetugid \
@@ -400,6 +402,7 @@ AC_CHECK_FUNCS(
         localtime_r \
         lround \
         memmem \
+        memset_s \
 	pipe \
 	pipe2 \
         prctl \
@@ -425,6 +428,7 @@ AC_CHECK_FUNCS(
 if test "$bwin32" != true; then
   AC_CHECK_HEADERS(pthread.h)
   AC_CHECK_FUNCS(pthread_create)
+  AC_CHECK_FUNCS(pthread_condattr_setclock)
 fi
 
 if test "$bwin32" = true; then
@@ -504,10 +508,7 @@ AC_CHECK_MEMBERS([struct event.min_heap_idx], , ,
 
 AC_CHECK_HEADERS(event2/event.h event2/dns.h event2/bufferevent_ssl.h)
 
-LIBS="$save_LIBS"
-LDFLAGS="$save_LDFLAGS"
-CPPFLAGS="$save_CPPFLAGS"
-
+LIBS="$STATIC_LIBEVENT_FLAGS $TOR_LIB_WS32 $save_LIBS"
 
 AM_CONDITIONAL(USE_EXTERNAL_EVDNS, test x$ac_cv_header_event2_dns_h = xyes)
 
@@ -518,8 +519,24 @@ if test "$enable_static_libevent" = "yes"; then
      TOR_LIBEVENT_LIBS="$TOR_LIBDIR_libevent/libevent.a $STATIC_LIBEVENT_FLAGS"
    fi
 else
-     TOR_LIBEVENT_LIBS="-levent"
+     if test "x$ac_cv_header_event2_event_h" = "xyes"; then
+       AC_SEARCH_LIBS(event_new, [event event_core], , AC_MSG_ERROR("libevent2 is installed but linking it failed while searching for event_new"))
+       AC_SEARCH_LIBS(evdns_base_new, [event event_extra], , AC_MSG_ERROR("libevent2 is installed but linking it failed while searching for evdns_base_new"))
+
+       if test "$ac_cv_search_event_new" != "none required"; then
+         TOR_LIBEVENT_LIBS="$ac_cv_search_event_new"
+       fi
+       if test "$ac_cv_search_evdns_base_new" != "none required"; then
+         TOR_LIBEVENT_LIBS="$ac_cv_search_evdns_base_new $TOR_LIBEVENT_LIBS"
+       fi
+     else
+       TOR_LIBEVENT_LIBS="-levent"
+     fi
 fi
+
+LIBS="$save_LIBS"
+LDFLAGS="$save_LDFLAGS"
+CPPFLAGS="$save_CPPFLAGS"
 
 dnl This isn't the best test for Libevent 2.0.3-alpha.  Once it's released,
 dnl we can do much better.
@@ -702,6 +719,19 @@ else
 fi
 AC_SUBST(TOR_ZLIB_LIBS)
 
+dnl ----------------------------------------------------------------------
+dnl Check if libcap is available for capabilities.
+
+tor_cap_pkg_debian="libcap2"
+tor_cap_pkg_redhat="libcap"
+tor_cap_devpkg_debian="libcap-dev"
+tor_cap_devpkg_redhat="libcap-devel"
+
+AC_CHECK_LIB([cap], [cap_init], [],
+  AC_MSG_NOTICE([Libcap was not found. Capabilities will not be usable.])
+)
+AC_CHECK_FUNCS(cap_set_proc)
+
 dnl ---------------------------------------------------------------------
 dnl Now that we know about our major libraries, we can check for compiler
 dnl and linker hardening options.  We need to do this with the libraries known,
@@ -709,7 +739,7 @@ dnl since sometimes the linker will like an option but not be willing to
 dnl use it with a build of a library.
 
 all_ldflags_for_check="$TOR_LDFLAGS_zlib $TOR_LDFLAGS_openssl $TOR_LDFLAGS_libevent"
-all_libs_for_check="$TOR_ZLIB_LIBS $TOR_LIB_MATH $TOR_LIBEVENT_LIBS $TOR_OPENSSL_LIBS $TOR_SYSTEMD_LIBS $TOR_LIB_WS32 $TOR_LIB_GDI"
+all_libs_for_check="$TOR_ZLIB_LIBS $TOR_LIB_MATH $TOR_LIBEVENT_LIBS $TOR_OPENSSL_LIBS $TOR_SYSTEMD_LIBS $TOR_LIB_WS32 $TOR_LIB_GDI $TOR_CAP_LIBS"
 
 AC_COMPILE_IFELSE([AC_LANG_PROGRAM([], [
 #if !defined(__clang__)
@@ -902,6 +932,7 @@ AC_CHECK_HEADERS(
         fcntl.h \
         signal.h \
         string.h \
+	sys/capability.h \
         sys/fcntl.h \
         sys/stat.h \
         sys/time.h \
@@ -942,6 +973,7 @@ AC_CHECK_HEADERS(
         sys/select.h \
         sys/socket.h \
 	sys/statvfs.h \
+        sys/syscall.h \
 	sys/sysctl.h \
         sys/syslimits.h \
         sys/time.h \
@@ -1128,7 +1160,6 @@ AC_CHECK_MEMBERS([struct in6_addr.s6_addr32, struct in6_addr.s6_addr16, struct s
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#endif
 #endif
 ])
 
