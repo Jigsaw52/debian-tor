@@ -6,6 +6,15 @@ tor (0.2.8.1-alpha-1) experimental; urgency=medium
 
  -- Peter Palfrader <weasel@debian.org>  Fri, 05 Feb 2016 15:50:51 +0100
 
+tor (0.2.7.6-2) unstable; urgency=medium
+
+  * Don't override override_dh_install, instead override
+    override_dh_install-arch to get the extra bits we like
+    installed and moved around in the tor binary package.
+    This makes arch-all only builds work (closes: #806661).
+
+ -- Peter Palfrader <weasel@debian.org>  Wed, 16 Dec 2015 14:19:50 +0100
+
 tor (0.2.7.6-1) unstable; urgency=high
 
   * New upstream version.
