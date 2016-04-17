@@ -4,8 +4,8 @@ RunAsDaemon 0
 User _tor-@@NAME@@
 SyslogIdentityTag @@NAME@@
 
-ControlSocket /var/run/tor-instances/@@NAME@@/control
-ControlSocketsGroupWritable 1
+ControlSocket /var/run/tor-instances/@@NAME@@/control GroupWritable RelaxDirModeCheck
+SocksPort unix:/var/run/tor-instances/@@NAME@@/socks WorldWritable
 
 CookieAuthentication 1
 CookieAuthFileGroupReadable 1
