@@ -1,9 +1,10 @@
-tor (0.2.8.1-alpha~2) experimental; urgency=medium
+tor (0.2.8.2-alpha-1) experimental; urgency=medium
 
+  * New upstream version.
   * apparmor profile: Allow reading of /var/lib/tor to the process.
     This is required by new tor versions (closes: Tor#18370).
 
- -- Peter Palfrader <weasel@debian.org>  Tue, 12 Apr 2016 23:11:56 +0200
+ -- Peter Palfrader <weasel@debian.org>  Sun, 17 Apr 2016 17:58:35 +0200
 
 tor (0.2.8.1-alpha-1) experimental; urgency=medium
 
