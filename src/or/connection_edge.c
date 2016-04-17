@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2015, The Tor Project, Inc. */
+ * Copyright (c) 2007-2016, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -904,7 +904,7 @@ connection_ap_mark_as_non_pending_circuit(entry_connection_t *entry_conn)
   smartlist_remove(pending_entry_connections, entry_conn);
 }
 
-/** DOCDOC */
+/* DOCDOC */
 void
 connection_ap_warn_and_unmark_if_pending_circ(entry_connection_t *entry_conn,
                                               const char *where)

@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2015, The Tor Project, Inc. */
+ * Copyright (c) 2007-2016, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -68,8 +68,8 @@ int connection_dir_process_inbuf(dir_connection_t *conn);
 int connection_dir_finished_flushing(dir_connection_t *conn);
 int connection_dir_finished_connecting(dir_connection_t *conn);
 void connection_dir_about_to_close(dir_connection_t *dir_conn);
-void directory_initiate_command(const tor_addr_t *addr,
-                                uint16_t or_port, uint16_t dir_port,
+void directory_initiate_command(const tor_addr_t *or_addr, uint16_t or_port,
+                                const tor_addr_t *dir_addr, uint16_t dir_port,
                                 const char *digest,
                                 uint8_t dir_purpose, uint8_t router_purpose,
                                 dir_indirection_t indirection,

@@ -1,5 +1,12 @@
-/* Copyright (c) 2009-2015, The Tor Project, Inc. */
+/* Copyright (c) 2009-2016, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
+
+/**
+ * \file microdesc.c
+ *
+ * \brief Implements microdescriptors -- an abbreviated description of
+ *  less-frequently-changing router information.
+ */
 
 #include "or.h"
 #include "circuitbuild.h"
@@ -53,7 +60,8 @@ microdesc_hash_(microdesc_t *md)
   return (unsigned) siphash24g(md->digest, sizeof(md->digest));
 }
 
-/** Helper: compares <b>a</b> and </b> for equality for hash-table purposes. */
+/** Helper: compares <b>a</b> and <b>b</b> for equality for hash-table
+ * purposes. */
 static inline int
 microdesc_eq_(microdesc_t *a, microdesc_t *b)
 {
@@ -840,7 +848,7 @@ microdesc_list_missing_digest256(networkstatus_t *ns, microdesc_cache_t *cache,
 /** Launch download requests for microdescriptors as appropriate.
  *
  * Specifically, we should launch download requests if we are configured to
- * download mirodescriptors, and there are some microdescriptors listed the
+ * download mirodescriptors, and there are some microdescriptors listed in the
  * current microdesc consensus that we don't have, and either we never asked
  * for them, or we failed to download them but we're willing to retry.
  */

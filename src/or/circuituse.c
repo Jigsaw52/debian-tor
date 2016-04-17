@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2015, The Tor Project, Inc. */
+ * Copyright (c) 2007-2016, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -1674,7 +1674,7 @@ circuit_launch(uint8_t purpose, int flags)
   return circuit_launch_by_extend_info(purpose, NULL, flags);
 }
 
-/** DOCDOC */
+/* DOCDOC */
 static int
 have_enough_path_info(int need_exit)
 {
@@ -2006,8 +2006,13 @@ circuit_get_open_circ_or_launch(entry_connection_t *conn,
         if (r && node_has_descriptor(r)) {
           /* We might want to connect to an IPv6 bridge for loading
              descriptors so we use the preferred address rather than
-             the primary.  */
+             the primary. */
           extend_info = extend_info_from_node(r, conn->want_onehop ? 1 : 0);
+          if (!extend_info) {
+            log_warn(LD_CIRC,"Could not make a one-hop connection to %s. "
+                     "Discarding this circuit.", conn->chosen_exit_name);
+            return -1;
+          }
         } else {
           log_debug(LD_DIR, "considering %d, %s",
                     want_onehop, conn->chosen_exit_name);

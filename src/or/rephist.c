@@ -1,5 +1,5 @@
 /* Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2015, The Tor Project, Inc. */
+ * Copyright (c) 2007-2016, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -1793,6 +1793,7 @@ rep_hist_remove_predicted_ports(const smartlist_t *rmv_ports)
   SMARTLIST_FOREACH_BEGIN(predicted_ports_list, predicted_port_t *, pp) {
     if (bitarray_is_set(remove_ports, pp->port)) {
       tor_free(pp);
+      rephist_total_alloc -= sizeof(*pp);
       SMARTLIST_DEL_CURRENT(predicted_ports_list, pp);
     }
   } SMARTLIST_FOREACH_END(pp);
