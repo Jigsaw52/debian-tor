@@ -1,7 +1,11 @@
-/* Copyright (c) 2012-2015, The Tor Project, Inc. */
+/* Copyright (c) 2012-2016, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
-/* Wrapper code for a curve25519 implementation. */
+/**
+ * \file crypto_curve25519.c
+ *
+ * \brief Wrapper code for a curve25519 implementation.
+ */
 
 #define CRYPTO_CURVE25519_PRIVATE
 #include "orconfig.h"
@@ -153,7 +157,7 @@ curve25519_keypair_generate(curve25519_keypair_t *keypair_out,
   return 0;
 }
 
-/** DOCDOC */
+/* DOCDOC */
 int
 curve25519_keypair_write_to_file(const curve25519_keypair_t *keypair,
                                  const char *fname,
@@ -176,7 +180,7 @@ curve25519_keypair_write_to_file(const curve25519_keypair_t *keypair,
   return r;
 }
 
-/** DOCDOC */
+/* DOCDOC */
 int
 curve25519_keypair_read_from_file(curve25519_keypair_t *keypair_out,
                                   char **tag_out,

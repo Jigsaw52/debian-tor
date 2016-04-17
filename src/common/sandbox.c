@@ -1,7 +1,7 @@
-/* Copyright (c) 2001 Matej Pfajfar.
+ /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2015, The Tor Project, Inc. */
+ * Copyright (c) 2007-2016, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -177,11 +177,20 @@ static int filter_nopar_gen[] = {
     SCMP_SYS(mmap),
 #endif
     SCMP_SYS(munmap),
+#ifdef __NR_prlimit
+    SCMP_SYS(prlimit),
+#endif
+#ifdef __NR_prlimit64
+    SCMP_SYS(prlimit64),
+#endif
     SCMP_SYS(read),
     SCMP_SYS(rt_sigreturn),
     SCMP_SYS(sched_getaffinity),
     SCMP_SYS(sendmsg),
     SCMP_SYS(set_robust_list),
+#ifdef __NR_setrlimit
+    SCMP_SYS(setrlimit),
+#endif
 #ifdef __NR_sigreturn
     SCMP_SYS(sigreturn),
 #endif
@@ -427,11 +436,62 @@ sb_open(scmp_filter_ctx ctx, sandbox_cfg_t *filter)
   }
 
   rc = seccomp_rule_add_1(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(open),
-                SCMP_CMP_MASKED(1, O_CLOEXEC|O_NONBLOCK|O_NOCTTY, O_RDONLY));
+                SCMP_CMP_MASKED(1, O_CLOEXEC|O_NONBLOCK|O_NOCTTY|O_NOFOLLOW,
+                                O_RDONLY));
   if (rc != 0) {
     log_err(LD_BUG,"(Sandbox) failed to add open syscall, received libseccomp "
         "error %d", rc);
     return rc;
+  }
+
+  return 0;
+}
+
+static int
+sb_chmod(scmp_filter_ctx ctx, sandbox_cfg_t *filter)
+{
+  int rc;
+  sandbox_cfg_t *elem = NULL;
+
+  // for each dynamic parameter filters
+  for (elem = filter; elem != NULL; elem = elem->next) {
+    smp_param_t *param = elem->param;
+
+    if (param != NULL && param->prot == 1 && param->syscall
+        == SCMP_SYS(chmod)) {
+      rc = seccomp_rule_add_1(ctx, SCMP_ACT_ALLOW, SCMP_SYS(chmod),
+            SCMP_CMP_STR(0, SCMP_CMP_EQ, param->value));
+      if (rc != 0) {
+        log_err(LD_BUG,"(Sandbox) failed to add open syscall, received "
+            "libseccomp error %d", rc);
+        return rc;
+      }
+    }
+  }
+
+  return 0;
+}
+
+static int
+sb_chown(scmp_filter_ctx ctx, sandbox_cfg_t *filter)
+{
+  int rc;
+  sandbox_cfg_t *elem = NULL;
+
+  // for each dynamic parameter filters
+  for (elem = filter; elem != NULL; elem = elem->next) {
+    smp_param_t *param = elem->param;
+
+    if (param != NULL && param->prot == 1 && param->syscall
+        == SCMP_SYS(chown)) {
+      rc = seccomp_rule_add_1(ctx, SCMP_ACT_ALLOW, SCMP_SYS(chown),
+            SCMP_CMP_STR(0, SCMP_CMP_EQ, param->value));
+      if (rc != 0) {
+        log_err(LD_BUG,"(Sandbox) failed to add open syscall, received "
+            "libseccomp error %d", rc);
+        return rc;
+      }
+    }
   }
 
   return 0;
@@ -970,6 +1030,8 @@ static sandbox_filter_func_t filter_func[] = {
 #ifdef __NR_mmap2
     sb_mmap2,
 #endif
+    sb_chown,
+    sb_chmod,
     sb_open,
     sb_openat,
     sb__sysctl,
@@ -1020,7 +1082,7 @@ sandbox_intern_string(const char *str)
   return str;
 }
 
-/** DOCDOC */
+/* DOCDOC */
 static int
 prot_strings_helper(strmap_t *locations,
                     char **pr_mem_next_p,
@@ -1234,6 +1296,40 @@ sandbox_cfg_allow_open_filename(sandbox_cfg_t **cfg, char *file)
   sandbox_cfg_t *elem = NULL;
 
   elem = new_element(SCMP_SYS(open), file);
+  if (!elem) {
+    log_err(LD_BUG,"(Sandbox) failed to register parameter!");
+    return -1;
+  }
+
+  elem->next = *cfg;
+  *cfg = elem;
+
+  return 0;
+}
+
+int
+sandbox_cfg_allow_chmod_filename(sandbox_cfg_t **cfg, char *file)
+{
+  sandbox_cfg_t *elem = NULL;
+
+  elem = new_element(SCMP_SYS(chmod), file);
+  if (!elem) {
+    log_err(LD_BUG,"(Sandbox) failed to register parameter!");
+    return -1;
+  }
+
+  elem->next = *cfg;
+  *cfg = elem;
+
+  return 0;
+}
+
+int
+sandbox_cfg_allow_chown_filename(sandbox_cfg_t **cfg, char *file)
+{
+  sandbox_cfg_t *elem = NULL;
+
+  elem = new_element(SCMP_SYS(chown), file);
   if (!elem) {
     log_err(LD_BUG,"(Sandbox) failed to register parameter!");
     return -1;
@@ -1783,6 +1879,20 @@ sandbox_cfg_allow_execve(sandbox_cfg_t **cfg, const char *com)
 
 int
 sandbox_cfg_allow_stat_filename(sandbox_cfg_t **cfg, char *file)
+{
+  (void)cfg; (void)file;
+  return 0;
+}
+
+int
+sandbox_cfg_allow_chown_filename(sandbox_cfg_t **cfg, char *file)
+{
+  (void)cfg; (void)file;
+  return 0;
+}
+
+int
+sandbox_cfg_allow_chmod_filename(sandbox_cfg_t **cfg, char *file)
 {
   (void)cfg; (void)file;
   return 0;

@@ -1,7 +1,11 @@
-/* Copyright (c) 2013-2015, The Tor Project, Inc. */
+/* Copyright (c) 2013-2016, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
-/* Wrapper code for an ed25519 implementation. */
+/**
+ * \file crypto_ed25519.c
+ *
+ * \brief Wrapper code for an ed25519 implementation.
+ */
 
 #include "orconfig.h"
 #ifdef HAVE_SYS_STAT_H
@@ -410,7 +414,7 @@ ed25519_seckey_write_to_file(const ed25519_secret_key_t *seckey,
 
 /**
  * Read seckey unencrypted from <b>filename</b>, storing it into
- * <b>seckey_out</b>.  Set *<b>tag_out</> to the tag it was marked with.
+ * <b>seckey_out</b>.  Set *<b>tag_out</b> to the tag it was marked with.
  * Return 0 on success, -1 on failure.
  */
 int

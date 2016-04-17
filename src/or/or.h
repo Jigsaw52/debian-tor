@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2015, The Tor Project, Inc. */
+ * Copyright (c) 2007-2016, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -1358,7 +1358,7 @@ typedef struct listener_connection_t {
  * in the v3 handshake.  The subject key must be a 1024-bit RSA key; it
  * must be signed by the identity key */
 #define OR_CERT_TYPE_AUTH_1024 3
-/** DOCDOC */
+/* DOCDOC */
 #define OR_CERT_TYPE_RSA_ED_CROSSCERT 7
 /**@}*/
 
@@ -1935,7 +1935,7 @@ typedef struct cached_dir_t {
   size_t dir_len; /**< Length of <b>dir</b> (not counting its NUL). */
   size_t dir_z_len; /**< Length of <b>dir_z</b>. */
   time_t published; /**< When was this object published. */
-  digests_t digests; /**< Digests of this object (networkstatus only) */
+  common_digests_t digests; /**< Digests of this object (networkstatus only) */
   int refcnt; /**< Reference count for this cached_dir_t. */
 } cached_dir_t;
 
@@ -2157,6 +2157,10 @@ typedef struct {
    * implying it accepts tunnelled directory requests, or it advertised
    * dir_port > 0. */
   unsigned int supports_tunnelled_dir_requests:1;
+
+  /** Used during voting to indicate that we should not include an entry for
+   * this routerinfo. Used only during voting. */
+  unsigned int omit_from_vote:1;
 
 /** Tor can use this router for general positions in circuits; we got it
  * from a directory server as usual, or we're an authority and a server
@@ -2414,7 +2418,8 @@ typedef struct node_t {
 
   /* Local info: derived. */
 
-  /** True if the IPv6 OR port is preferred over the IPv4 OR port.  */
+  /** True if the IPv6 OR port is preferred over the IPv4 OR port.
+   * XX/teor - can this become out of date if the torrc changes? */
   unsigned int ipv6_preferred:1;
 
   /** According to the geoip db what country is this router in? */
@@ -2453,8 +2458,13 @@ typedef struct vote_routerstatus_t {
   char *version; /**< The version that the authority says this router is
                   * running. */
   unsigned int has_measured_bw:1; /**< The vote had a measured bw */
-  unsigned int has_ed25519_listing:1; /** DOCDOC */
-  unsigned int ed25519_reflects_consensus:1; /** DOCDOC */
+  /** True iff the vote included an entry for ed25519 ID, or included
+   * "id ed25519 none" to indicate that there was no ed25519 ID. */
+  unsigned int has_ed25519_listing:1;
+  /** True if the Ed25519 listing here is the consensus-opinion for the
+   * Ed25519 listing; false if there was no consensus on Ed25519 key status,
+   * or if this VRS doesn't reflect it. */
+  unsigned int ed25519_reflects_consensus:1;
   uint32_t measured_bw_kb; /**< Measured bandwidth (capacity) of the router */
   /** The hash or hashes that the authority claims this microdesc has. */
   vote_microdesc_hash_t *microdesc;
@@ -2572,7 +2582,7 @@ typedef struct networkstatus_t {
   struct authority_cert_t *cert; /**< Vote only: the voter's certificate. */
 
   /** Digests of this document, as signed. */
-  digests_t digests;
+  common_digests_t digests;
 
   /** List of router statuses, sorted by identity digest.  For a vote,
    * the elements are vote_routerstatus_t; for a consensus, the elements
@@ -3455,6 +3465,7 @@ typedef struct port_cfg_t {
 
   unsigned is_group_writable : 1;
   unsigned is_world_writable : 1;
+  unsigned relax_dirmode_check : 1;
 
   entry_port_cfg_t entry_cfg;
 
@@ -3778,7 +3789,7 @@ typedef struct {
                              * and try a new circuit if the stream has been
                              * waiting for this many seconds. If zero, use
                              * our default internal timeout schedule. */
-  int MaxOnionQueueDelay; /**<DOCDOC*/
+  int MaxOnionQueueDelay; /*< DOCDOC */
   int NewCircuitPeriod; /**< How long do we use a circuit before building
                          * a new one? */
   int MaxCircuitDirtiness; /**< Never use circs that were first used more than
@@ -4081,12 +4092,24 @@ typedef struct {
    * over randomly chosen exits. */
   int ClientRejectInternalAddresses;
 
-  /** If true, clients may connect over IPv6. XXX we don't really
-      enforce this -- clients _may_ set up outgoing IPv6 connections
-      even when this option is not set. */
+  /** If true, clients may connect over IPv4. If false, they will avoid
+   * connecting over IPv4. We enforce this for OR and Dir connections. */
+  int ClientUseIPv4;
+  /** If true, clients may connect over IPv6. If false, they will avoid
+   * connecting over IPv4. We enforce this for OR and Dir connections.
+   * Use fascist_firewall_use_ipv6() instead of accessing this value
+   * directly. */
   int ClientUseIPv6;
-  /** If true, prefer an IPv6 OR port over an IPv4 one. */
+  /** If true, prefer an IPv6 OR port over an IPv4 one for entry node
+   * connections. If auto, bridge clients prefer IPv6, and other clients
+   * prefer IPv4. Use node_ipv6_or_preferred() instead of accessing this value
+   * directly. */
   int ClientPreferIPv6ORPort;
+  /** If true, prefer an IPv6 directory port over an IPv4 one for direct
+   * directory connections. If auto, bridge clients prefer IPv6, and other
+   * clients prefer IPv4. Use fascist_firewall_prefer_ipv6_dirport() instead of
+   * accessing this value directly.  */
+  int ClientPreferIPv6DirPort;
 
   /** The length of time that we think a consensus should be fresh. */
   int V3AuthVotingInterval;
@@ -5145,6 +5168,8 @@ typedef struct dir_server_t {
   char *description;
   char *nickname;
   char *address; /**< Hostname. */
+  /* XX/teor - why do we duplicate the address and port fields here and in
+   *           fake_status? Surely we could just use fake_status (#17867). */
   tor_addr_t ipv6_addr; /**< IPv6 address if present; AF_UNSPEC if not */
   uint32_t addr; /**< IPv4 address. */
   uint16_t dir_port; /**< Directory port. */
@@ -5230,7 +5255,9 @@ typedef enum {
   CRN_ALLOW_INVALID = 1<<3,
   /* XXXX not used, apparently. */
   CRN_WEIGHT_AS_EXIT = 1<<5,
-  CRN_NEED_DESC = 1<<6
+  CRN_NEED_DESC = 1<<6,
+  /* On clients, only provide nodes that satisfy ClientPreferIPv6OR */
+  CRN_PREF_ADDR = 1<<7
 } router_crn_flags_t;
 
 /** Return value for router_add_to_routerlist() and dirserv_add_descriptor() */

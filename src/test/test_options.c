@@ -1,6 +1,6 @@
 /* Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2015, The Tor Project, Inc. */
+ * Copyright (c) 2007-2016, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #define CONFIG_PRIVATE
@@ -158,7 +158,6 @@ test_options_validate_impl(const char *configuration,
   }
 
  done:
-  memarea_clear_freelist();
   escaped(NULL);
   policies_free_all();
   config_free_lines(cl);
@@ -211,7 +210,7 @@ test_have_enough_mem_for_dircache(void *arg)
 {
   (void)arg;
   or_options_t *opt=NULL;
-  or_options_t *dflt;
+  or_options_t *dflt=NULL;
   config_line_t *cl=NULL;
   char *msg=NULL;;
   int r;
@@ -242,6 +241,7 @@ test_have_enough_mem_for_dircache(void *arg)
   }
   tor_free(msg);
 
+  config_free_lines(cl); cl = NULL;
   configuration = "ORPort 8080\nDirCache 1\nBridgeRelay 1";
   r = config_get_lines(configuration, &cl, 1);
   tt_int_op(r, OP_EQ, 0);
@@ -264,6 +264,7 @@ test_have_enough_mem_for_dircache(void *arg)
   }
   tor_free(msg);
 
+  config_free_lines(cl); cl = NULL;
   configuration = "ORPort 8080\nDirCache 0";
   r = config_get_lines(configuration, &cl, 1);
   tt_int_op(r, OP_EQ, 0);
@@ -291,9 +292,9 @@ test_have_enough_mem_for_dircache(void *arg)
  done:
   if (msg)
     tor_free(msg);
-  tor_free(dflt);
-  tor_free(opt);
-  tor_free(cl);
+  or_options_free(dflt);
+  or_options_free(opt);
+  config_free_lines(cl);
   return;
 }
 
@@ -327,6 +328,7 @@ fixed_get_uname(void)
   "V3AuthVoteDelay 20\n"                                                \
   "V3AuthDistDelay 20\n"                                                \
   "V3AuthNIntervalsValid 3\n"                                           \
+  "ClientUseIPv4 1\n"                                                     \
   "VirtualAddrNetworkIPv4 127.192.0.0/10\n"                             \
   "VirtualAddrNetworkIPv6 [FE80::]/10\n"                                \
   "SchedulerHighWaterMark__ 42\n"                                       \
@@ -391,6 +393,14 @@ free_options_test_data(options_test_data_t *td)
   or_options_free(td->def_opt);
   tor_free(td);
 }
+
+#define expect_log_msg(str) \
+  tt_assert_msg(mock_saved_log_has_message(str), \
+                "expected log to contain " # str);
+
+#define expect_no_log_msg(str)                      \
+  tt_assert_msg(!mock_saved_log_has_message(str), \
+                "expected log to not contain " # str);
 
 static void
 test_options_validate__uname_for_server(void *ignored)
@@ -1048,7 +1058,7 @@ test_options_validate__transproxy(void *ignored)
   ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
   tt_int_op(ret, OP_EQ, -1);
 
-#if !defined(__FreeBSD__) && !defined( DARWIN )
+#ifndef KERNEL_MAY_SUPPORT_IPFW
   tt_str_op(msg, OP_EQ, "ipfw is a FreeBSD-specificand OS X/Darwin-specific "
             "feature.");
 #else
@@ -1068,6 +1078,7 @@ test_options_validate__transproxy(void *ignored)
 
   // Test trans proxy success
   free_options_test_data(tdata);
+  tdata = NULL;
 
 #if defined(linux)
   tdata = get_options_test_data("TransProxyType tproxy\n"
@@ -1076,7 +1087,7 @@ test_options_validate__transproxy(void *ignored)
   tt_int_op(ret, OP_EQ, -1);
   tt_assert(!msg);
 #endif
-#if defined(__FreeBSD__) || defined( DARWIN )
+#if defined(__FreeBSD_kernel__) || defined( DARWIN )
   tdata = get_options_test_data("TransProxyType ipfw\n"
                                 "TransPort 127.0.0.1:123\n");
   ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
@@ -1090,6 +1101,9 @@ test_options_validate__transproxy(void *ignored)
   tt_int_op(ret, OP_EQ, -1);
   tt_assert(!msg);
 #endif
+
+  // Assert that a test has run for some TransProxyType
+  tt_assert(tdata);
 
 #else
   tdata = get_options_test_data("TransPort 127.0.0.1:555\n");
@@ -1715,6 +1729,10 @@ test_options_validate__reachable_addresses(void *ignored)
   tt_str_op(tdata->opt->ReachableAddresses->value, OP_EQ, "*:82");
   tor_free(msg);
 
+#define SERVERS_REACHABLE_MSG "Servers must be able to freely connect to" \
+  " the rest of the Internet, so they must not set Reachable*Addresses or" \
+  " FascistFirewall or FirewallPorts or ClientUseIPv4 0."
+
   free_options_test_data(tdata);
   tdata = get_options_test_data("ReachableAddresses *:82\n"
                                 "ORListenAddress 127.0.0.1:5555\n"
@@ -1726,9 +1744,7 @@ test_options_validate__reachable_addresses(void *ignored)
 
   ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
   tt_int_op(ret, OP_EQ, -1);
-  tt_str_op(msg, OP_EQ, "Servers must be able to freely connect to the rest of"
-            " the Internet, so they must not set Reachable*Addresses or"
-            " FascistFirewall.");
+  tt_str_op(msg, OP_EQ, SERVERS_REACHABLE_MSG);
   tor_free(msg);
 
   free_options_test_data(tdata);
@@ -1742,9 +1758,7 @@ test_options_validate__reachable_addresses(void *ignored)
 
   ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
   tt_int_op(ret, OP_EQ, -1);
-  tt_str_op(msg, OP_EQ, "Servers must be able to freely connect to the rest of"
-            " the Internet, so they must not set Reachable*Addresses or"
-            " FascistFirewall.");
+  tt_str_op(msg, OP_EQ, SERVERS_REACHABLE_MSG);
   tor_free(msg);
 
   free_options_test_data(tdata);
@@ -1758,10 +1772,106 @@ test_options_validate__reachable_addresses(void *ignored)
 
   ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
   tt_int_op(ret, OP_EQ, -1);
-  tt_str_op(msg, OP_EQ, "Servers must be able to freely connect to the rest of"
-            " the Internet, so they must not set Reachable*Addresses or"
-            " FascistFirewall.");
+  tt_str_op(msg, OP_EQ, SERVERS_REACHABLE_MSG);
   tor_free(msg);
+
+  free_options_test_data(tdata);
+  tdata = get_options_test_data("ClientUseIPv4 0\n"
+                                "ORListenAddress 127.0.0.1:5555\n"
+                                "ORPort 955\n"
+                                "MaxClientCircuitsPending 1\n"
+                                "ConnLimit 1\n"
+                                "SchedulerHighWaterMark__ 42\n"
+                                "SchedulerLowWaterMark__ 10\n");
+
+  ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
+  tt_int_op(ret, OP_EQ, -1);
+  tt_str_op(msg, OP_EQ, SERVERS_REACHABLE_MSG);
+  tor_free(msg);
+
+  /* Test IPv4-only clients setting IPv6 preferences */
+
+#define WARN_PLEASE_USE_IPV6_OR_LOG_MSG \
+        "ClientPreferIPv6ORPort 1 is ignored unless tor is using IPv6. " \
+        "Please set ClientUseIPv6 1, ClientUseIPv4 0, or configure bridges.\n"
+
+#define WARN_PLEASE_USE_IPV6_DIR_LOG_MSG \
+        "ClientPreferIPv6DirPort 1 is ignored unless tor is using IPv6. " \
+        "Please set ClientUseIPv6 1, ClientUseIPv4 0, or configure bridges.\n"
+
+  free_options_test_data(tdata);
+  tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
+                                "ClientUseIPv4 1\n"
+                                "ClientUseIPv6 0\n"
+                                "UseBridges 0\n"
+                                "ClientPreferIPv6ORPort 1\n");
+
+  ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
+  tt_int_op(ret, OP_EQ, 0);
+  expect_log_msg(WARN_PLEASE_USE_IPV6_OR_LOG_MSG);
+  tor_free(msg);
+
+  free_options_test_data(tdata);
+  tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
+                                "ClientUseIPv4 1\n"
+                                "ClientUseIPv6 0\n"
+                                "UseBridges 0\n"
+                                "ClientPreferIPv6DirPort 1\n");
+
+  ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
+  tt_int_op(ret, OP_EQ, 0);
+  expect_log_msg(WARN_PLEASE_USE_IPV6_DIR_LOG_MSG);
+  tor_free(msg);
+
+  /* Now test an IPv4/IPv6 client setting IPv6 preferences */
+
+  free_options_test_data(tdata);
+  tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
+                                "ClientUseIPv4 1\n"
+                                "ClientUseIPv6 1\n"
+                                "ClientPreferIPv6ORPort 1\n"
+                                "ClientPreferIPv6DirPort 1\n");
+
+  ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
+  tt_int_op(ret, OP_EQ, 0);
+  tt_ptr_op(msg, OP_EQ, NULL);
+
+  /* Now test an IPv6 client setting IPv6 preferences */
+
+  free_options_test_data(tdata);
+  tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
+                                "ClientUseIPv6 1\n"
+                                "ClientPreferIPv6ORPort 1\n"
+                                "ClientPreferIPv6DirPort 1\n");
+
+  ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
+  tt_int_op(ret, OP_EQ, 0);
+  tt_ptr_op(msg, OP_EQ, NULL);
+
+  /* And an implicit (IPv4 disabled) IPv6 client setting IPv6 preferences */
+
+  free_options_test_data(tdata);
+  tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
+                                "ClientUseIPv4 0\n"
+                                "ClientPreferIPv6ORPort 1\n"
+                                "ClientPreferIPv6DirPort 1\n");
+
+  ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
+  tt_int_op(ret, OP_EQ, 0);
+  tt_ptr_op(msg, OP_EQ, NULL);
+
+  /* And an implicit (bridge) client setting IPv6 preferences */
+
+  free_options_test_data(tdata);
+  tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
+                                "UseBridges 1\n"
+                                "Bridge 127.0.0.1:12345\n"
+                                "ClientPreferIPv6ORPort 1\n"
+                                "ClientPreferIPv6DirPort 1\n");
+
+  ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
+  tt_int_op(ret, OP_EQ, 0);
+  tt_ptr_op(msg, OP_EQ, NULL);
 
  done:
   teardown_capture_of_logs(previous_log);
@@ -1777,6 +1887,7 @@ test_options_validate__use_bridges(void *ignored)
   char *msg;
   options_test_data_t *tdata = get_options_test_data(
                                    "UseBridges 1\n"
+                                   "ClientUseIPv4 1\n"
                                    "ORListenAddress 127.0.0.1:5555\n"
                                    "ORPort 955\n"
                                    "MaxClientCircuitsPending 1\n"
@@ -1841,7 +1952,6 @@ test_options_validate__use_bridges(void *ignored)
 
  done:
   NS_UNMOCK(geoip_get_country);
-  memarea_clear_freelist();
   policies_free_all();
   free_options_test_data(tdata);
   tor_free(msg);
@@ -2079,7 +2189,6 @@ test_options_validate__publish_server_descriptor(void *ignored)
 
  done:
   teardown_capture_of_logs(previous_log);
-  memarea_clear_freelist();
   policies_free_all();
   free_options_test_data(tdata);
   tor_free(msg);
@@ -2155,7 +2264,6 @@ test_options_validate__testing(void *ignored)
 
  done:
   escaped(NULL); // This will free the leaking memory from the previous escaped
-  memarea_clear_freelist();
   policies_free_all();
   free_options_test_data(tdata);
   tor_free(msg);
@@ -2203,7 +2311,6 @@ test_options_validate__hidserv(void *ignored)
 
  done:
   teardown_capture_of_logs(previous_log);
-  memarea_clear_freelist();
   policies_free_all();
   free_options_test_data(tdata);
   tor_free(msg);
@@ -2228,7 +2335,6 @@ test_options_validate__predicted_ports(void *ignored)
 
  done:
   teardown_capture_of_logs(previous_log);
-  memarea_clear_freelist();
   policies_free_all();
   free_options_test_data(tdata);
   tor_free(msg);
@@ -2431,7 +2537,6 @@ test_options_validate__bandwidth(void *ignored)
   tor_free(msg);
 
  done:
-  memarea_clear_freelist();
   policies_free_all();
   free_options_test_data(tdata);
   tor_free(msg);
@@ -2519,7 +2624,6 @@ test_options_validate__circuits(void *ignored)
   tor_free(msg);
 
  done:
-  memarea_clear_freelist();
   policies_free_all();
   teardown_capture_of_logs(previous_log);
   free_options_test_data(tdata);
@@ -2553,7 +2657,6 @@ test_options_validate__port_forwarding(void *ignored)
 
  done:
   free_options_test_data(tdata);
-  memarea_clear_freelist();
   policies_free_all();
   tor_free(msg);
 }
@@ -2583,7 +2686,6 @@ test_options_validate__tor2web(void *ignored)
   tor_free(msg);
 
  done:
-  memarea_clear_freelist();
   policies_free_all();
   free_options_test_data(tdata);
   tor_free(msg);
@@ -2650,7 +2752,6 @@ test_options_validate__rend(void *ignored)
   tor_free(msg);
 
  done:
-  memarea_clear_freelist();
   policies_free_all();
   teardown_capture_of_logs(previous_log);
   free_options_test_data(tdata);
@@ -2770,7 +2871,6 @@ test_options_validate__accounting(void *ignored)
 
  done:
   teardown_capture_of_logs(previous_log);
-  memarea_clear_freelist();
   policies_free_all();
   free_options_test_data(tdata);
   tor_free(msg);
@@ -3102,7 +3202,6 @@ test_options_validate__proxy(void *ignored)
  done:
   teardown_capture_of_logs(previous_log);
   free_options_test_data(tdata);
-  memarea_clear_freelist();
   policies_free_all();
   // sandbox_free_getaddrinfo_cache();
   tor_free(msg);
@@ -3330,7 +3429,6 @@ test_options_validate__control(void *ignored)
 
  done:
   teardown_capture_of_logs(previous_log);
-  memarea_clear_freelist();
   policies_free_all();
   free_options_test_data(tdata);
   tor_free(msg);
@@ -3403,7 +3501,6 @@ test_options_validate__families(void *ignored)
 
  done:
   teardown_capture_of_logs(previous_log);
-  memarea_clear_freelist();
   policies_free_all();
   free_options_test_data(tdata);
   tor_free(msg);
@@ -3428,7 +3525,6 @@ test_options_validate__addr_policies(void *ignored)
   tor_free(msg);
 
  done:
-  memarea_clear_freelist();
   policies_free_all();
   free_options_test_data(tdata);
   tor_free(msg);
@@ -3515,7 +3611,6 @@ test_options_validate__dir_auth(void *ignored)
   tor_free(msg);
 
  done:
-  memarea_clear_freelist();
   policies_free_all();
   teardown_capture_of_logs(previous_log);
   free_options_test_data(tdata);
@@ -3641,7 +3736,6 @@ test_options_validate__transport(void *ignored)
 
  done:
   escaped(NULL); // This will free the leaking memory from the previous escaped
-  memarea_clear_freelist();
   policies_free_all();
   teardown_capture_of_logs(previous_log);
   free_options_test_data(tdata);
@@ -3725,7 +3819,6 @@ test_options_validate__constrained_sockets(void *ignored)
   tor_free(msg);
 
  done:
-  memarea_clear_freelist();
   policies_free_all();
   teardown_capture_of_logs(previous_log);
   free_options_test_data(tdata);
@@ -3945,7 +4038,6 @@ test_options_validate__v3_auth(void *ignored)
   tor_free(msg);
 
  done:
-  memarea_clear_freelist();
   policies_free_all();
   teardown_capture_of_logs(previous_log);
   free_options_test_data(tdata);
@@ -3980,7 +4072,6 @@ test_options_validate__virtual_addr(void *ignored)
 
  done:
   escaped(NULL); // This will free the leaking memory from the previous escaped
-  memarea_clear_freelist();
   policies_free_all();
   free_options_test_data(tdata);
   tor_free(msg);
@@ -4022,7 +4113,6 @@ test_options_validate__exits(void *ignored)
   tor_free(msg);
 
  done:
-  memarea_clear_freelist();
   policies_free_all();
   teardown_capture_of_logs(previous_log);
   free_options_test_data(tdata);
@@ -4191,7 +4281,6 @@ test_options_validate__testing_options(void *ignored)
   tor_free(msg);
 
  done:
-  memarea_clear_freelist();
   policies_free_all();
   teardown_capture_of_logs(previous_log);
   free_options_test_data(tdata);
@@ -4245,7 +4334,6 @@ test_options_validate__accel(void *ignored)
   tor_free(msg);
 
  done:
-  memarea_clear_freelist();
   policies_free_all();
   free_options_test_data(tdata);
   tor_free(msg);

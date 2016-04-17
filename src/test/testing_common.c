@@ -1,6 +1,6 @@
 /* Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2015, The Tor Project, Inc. */
+ * Copyright (c) 2007-2016, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /* Ordinarily defined in tor_main.c; this bit is just here to provide one
@@ -228,6 +228,9 @@ main(int c, const char **v)
   int loglevel = LOG_ERR;
   int accel_crypto = 0;
 
+  /* We must initialise logs before we call tor_assert() */
+  init_logging(1);
+
 #ifdef USE_DMALLOC
   {
     int r = CRYPTO_set_mem_ex_functions(tor_malloc_, tor_realloc_, tor_free_);
@@ -244,7 +247,6 @@ main(int c, const char **v)
   tor_libevent_initialize(&cfg);
 
   control_initialize_event_queue();
-  init_logging(1);
   configure_backtrace_handler(get_version());
 
   for (i_out = i = 1; i < c; ++i) {

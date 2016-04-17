@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2015, The Tor Project, Inc. */
+ * Copyright (c) 2007-2016, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -190,10 +190,12 @@ static config_var_t option_vars_[] = {
   V(CircuitPriorityHalflife,     DOUBLE,  "-100.0"), /*negative:'Use default'*/
   V(ClientDNSRejectInternalAddresses, BOOL,"1"),
   V(ClientOnly,                  BOOL,     "0"),
-  V(ClientPreferIPv6ORPort,      BOOL,     "0"),
+  V(ClientPreferIPv6ORPort,      AUTOBOOL, "auto"),
+  V(ClientPreferIPv6DirPort,     AUTOBOOL, "auto"),
   V(ClientRejectInternalAddresses, BOOL,   "1"),
   V(ClientTransportPlugin,       LINELIST, NULL),
   V(ClientUseIPv6,               BOOL,     "0"),
+  V(ClientUseIPv4,               BOOL,     "1"),
   V(ConsensusParams,             STRING,   NULL),
   V(ConnLimit,                   UINT,     "1000"),
   V(ConnDirectionStatistics,     BOOL,     "0"),
@@ -2193,7 +2195,7 @@ print_usage(void)
   printf(
 "Copyright (c) 2001-2004, Roger Dingledine\n"
 "Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson\n"
-"Copyright (c) 2007-2015, The Tor Project, Inc.\n\n"
+"Copyright (c) 2007-2016, The Tor Project, Inc.\n\n"
 "tor -f <torrc> [args]\n"
 "See man page for options, or https://www.torproject.org/ for "
 "documentation.\n");
@@ -2691,7 +2693,7 @@ options_validate_cb(void *old_options, void *options, void *default_options,
 
 /** Log a warning message iff <b>filepath</b> is not absolute.
  * Warning message must contain option name <b>option</b> and
- * an absolute path that <b>filepath<b> will resolve to.
+ * an absolute path that <b>filepath</b> will resolve to.
  *
  * In case <b>filepath</b> is absolute, do nothing.
  */
@@ -2859,7 +2861,7 @@ options_validate(or_options_t *old_options, or_options_t *options,
       options->TransProxyType_parsed = TPT_TPROXY;
 #endif
     } else if (!strcasecmp(options->TransProxyType, "ipfw")) {
-#if !defined(__FreeBSD__) && !defined( DARWIN )
+#ifndef KERNEL_MAY_SUPPORT_IPFW
       /* Earlier versions of OS X have ipfw */
       REJECT("ipfw is a FreeBSD-specific"
              "and OS X/Darwin-specific feature.");
@@ -3078,6 +3080,8 @@ options_validate(or_options_t *old_options, or_options_t *options,
     }
   }
 
+  /* Terminate Reachable*Addresses with reject *
+   */
   for (i=0; i<3; i++) {
     config_line_t **linep =
       (i==0) ? &options->ReachableAddresses :
@@ -3087,8 +3091,6 @@ options_validate(or_options_t *old_options, or_options_t *options,
       continue;
     /* We need to end with a reject *:*, not an implicit accept *:* */
     for (;;) {
-      if (!strcmp((*linep)->value, "reject *:*")) /* already there */
-        break;
       linep = &((*linep)->next);
       if (!*linep) {
         *linep = tor_malloc_zero(sizeof(config_line_t));
@@ -3104,11 +3106,29 @@ options_validate(or_options_t *old_options, or_options_t *options,
 
   if ((options->ReachableAddresses ||
        options->ReachableORAddresses ||
-       options->ReachableDirAddresses) &&
+       options->ReachableDirAddresses ||
+       options->ClientUseIPv4 == 0) &&
       server_mode(options))
     REJECT("Servers must be able to freely connect to the rest "
            "of the Internet, so they must not set Reachable*Addresses "
-           "or FascistFirewall.");
+           "or FascistFirewall or FirewallPorts or ClientUseIPv4 0.");
+
+  /* We check if Reachable*Addresses blocks all addresses in
+   * parse_reachable_addresses(). */
+
+#define WARN_PLEASE_USE_IPV6_LOG_MSG \
+        "ClientPreferIPv6%sPort 1 is ignored unless tor is using IPv6. " \
+        "Please set ClientUseIPv6 1, ClientUseIPv4 0, or configure bridges."
+
+  if (!fascist_firewall_use_ipv6(options)
+      && options->ClientPreferIPv6ORPort == 1)
+    log_warn(LD_CONFIG, WARN_PLEASE_USE_IPV6_LOG_MSG, "OR");
+
+  if (!fascist_firewall_use_ipv6(options)
+      && options->ClientPreferIPv6DirPort == 1)
+    log_warn(LD_CONFIG, WARN_PLEASE_USE_IPV6_LOG_MSG, "Dir");
+
+#undef WARN_PLEASE_USE_IPV6_LOG_MSG
 
   if (options->UseBridges &&
       server_mode(options))
@@ -4247,6 +4267,7 @@ options_transition_allowed(const or_options_t *old,
       }                                                                 \
     } while (0)
 
+    SB_NOCHANGE_STR(Address);
     SB_NOCHANGE_STR(PidFile);
     SB_NOCHANGE_STR(ServerDNSResolvConfFile);
     SB_NOCHANGE_STR(DirPortFrontPage);
@@ -6305,7 +6326,9 @@ parse_port_config(smartlist_t *out,
       ipv4_traffic = 1, ipv6_traffic = 0, prefer_ipv6 = 0,
       cache_ipv4 = 1, use_cached_ipv4 = 0,
       cache_ipv6 = 0, use_cached_ipv6 = 0,
-      prefer_ipv6_automap = 1, world_writable = 0, group_writable = 0;
+      prefer_ipv6_automap = 1, world_writable = 0, group_writable = 0,
+      relax_dirmode_check = 0,
+      has_used_unix_socket_only_option = 0;
 
     smartlist_split_string(elts, ports->value, NULL,
                            SPLIT_SKIP_SPACE|SPLIT_IGNORE_BLANK, 0);
@@ -6353,6 +6376,7 @@ parse_port_config(smartlist_t *out,
         tor_free(addrtmp);
         goto err;
       }
+      tor_free(addrtmp);
     } else {
       /* Try parsing integer port before address, because, who knows?
          "9050" might be a valid address. */
@@ -6457,9 +6481,15 @@ parse_port_config(smartlist_t *out,
 
         if (!strcasecmp(elt, "GroupWritable")) {
           group_writable = !no;
+          has_used_unix_socket_only_option = 1;
           continue;
         } else if (!strcasecmp(elt, "WorldWritable")) {
           world_writable = !no;
+          has_used_unix_socket_only_option = 1;
+          continue;
+        } else if (!strcasecmp(elt, "RelaxDirModeCheck")) {
+          relax_dirmode_check = !no;
+          has_used_unix_socket_only_option = 1;
           continue;
         }
 
@@ -6547,9 +6577,10 @@ parse_port_config(smartlist_t *out,
       goto err;
     }
 
-    if ( (world_writable || group_writable) && ! unix_socket_path) {
-      log_warn(LD_CONFIG, "You have a %sPort entry with GroupWritable "
-               "or WorldWritable set, but it is not a unix socket.", portname);
+    if ( has_used_unix_socket_only_option && ! unix_socket_path) {
+      log_warn(LD_CONFIG, "You have a %sPort entry with GroupWritable, "
+               "WorldWritable, or RelaxDirModeCheck, but it is not a "
+               "unix socket.", portname);
       goto err;
     }
 
@@ -6575,6 +6606,7 @@ parse_port_config(smartlist_t *out,
       cfg->type = listener_type;
       cfg->is_world_writable = world_writable;
       cfg->is_group_writable = group_writable;
+      cfg->relax_dirmode_check = relax_dirmode_check;
       cfg->entry_cfg.isolation_flags = isolation;
       cfg->entry_cfg.session_group = sessiongroup;
       cfg->server_cfg.no_advertise = no_advertise;

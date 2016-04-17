@@ -1,5 +1,5 @@
 /* Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2015, The Tor Project, Inc. */
+ * Copyright (c) 2007-2016, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -1818,6 +1818,18 @@ find_rp_for_intro(const rend_intro_cell_t *intro,
     goto err;
   }
 
+  /* Make sure the RP we are being asked to connect to is _not_ a private
+   * address unless it's allowed. Let's avoid to build a circuit to our
+   * second middle node and fail right after when extending to the RP. */
+  if (!extend_info_addr_is_allowed(&rp->addr)) {
+    if (err_msg_out) {
+      tor_asprintf(&err_msg,
+                   "Relay IP in INTRODUCE2 cell is private address.");
+    }
+    extend_info_free(rp);
+    rp = NULL;
+    goto err;
+  }
   goto done;
 
  err:
@@ -2705,7 +2717,7 @@ rend_service_intro_has_opened(origin_circuit_t *circuit)
                 circuit->rend_data->rend_pk_digest);
   if (!service) {
     log_warn(LD_REND, "Unrecognized service ID %s on introduction circuit %u.",
-             serviceid, (unsigned)circuit->base_.n_circ_id);
+             safe_str_client(serviceid), (unsigned)circuit->base_.n_circ_id);
     reason = END_CIRC_REASON_NOSUCHSERVICE;
     goto err;
   }

@@ -1,6 +1,6 @@
 /* Copyright (c) 2003, Roger Dingledine
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2015, The Tor Project, Inc. */
+ * Copyright (c) 2007-2016, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -1475,9 +1475,19 @@ tor_timegm(const struct tm *tm, time_t *time_out)
 {
   /* This is a pretty ironclad timegm implementation, snarfed from Python2.2.
    * It's way more brute-force than fiddling with tzset().
-   */
-  time_t year, days, hours, minutes, seconds;
+   *
+   * We use int64_t rather than time_t to avoid overflow on multiplication on
+   * platforms with 32-bit time_t. Since year is clipped to INT32_MAX, and
+   * since 365 * 24 * 60 * 60 is approximately 31 million, it's not possible
+   * for INT32_MAX years to overflow int64_t when converted to seconds. */
+  int64_t year, days, hours, minutes, seconds;
   int i, invalid_year, dpm;
+
+  /* Initialize time_out to 0 for now, to avoid bad usage in case this function
+     fails and the caller ignores the return value. */
+  tor_assert(time_out);
+  *time_out = 0;
+
   /* avoid int overflow on addition */
   if (tm->tm_year < INT32_MAX-1900) {
     year = tm->tm_year + 1900;
@@ -1516,7 +1526,17 @@ tor_timegm(const struct tm *tm, time_t *time_out)
 
   minutes = hours*60 + tm->tm_min;
   seconds = minutes*60 + tm->tm_sec;
-  *time_out = seconds;
+  /* Check that "seconds" will fit in a time_t. On platforms where time_t is
+   * 32-bit, this check will fail for dates in and after 2038.
+   *
+   * We already know that "seconds" can't be negative because "year" >= 1970 */
+#if SIZEOF_TIME_T < 8
+  if (seconds < TIME_MIN || seconds > TIME_MAX) {
+    log_warn(LD_BUG, "Result does not fit in tor_timegm");
+    return -1;
+  }
+#endif
+  *time_out = (time_t)seconds;
   return 0;
 }
 
@@ -2058,57 +2078,98 @@ check_private_dir(const char *dirname, cpd_check_t check,
 {
   int r;
   struct stat st;
-  char *f;
+
+  tor_assert(dirname);
+
 #ifndef _WIN32
-  unsigned unwanted_bits = 0;
+  int fd;
   const struct passwd *pw = NULL;
   uid_t running_uid;
   gid_t running_gid;
-#else
-  (void)effective_user;
-#endif
 
-  tor_assert(dirname);
-  f = tor_strdup(dirname);
-  clean_name_for_stat(f);
-  log_debug(LD_FS, "stat()ing %s", f);
-  r = stat(sandbox_intern_string(f), &st);
-  tor_free(f);
-  if (r) {
+  /*
+   * Goal is to harden the implementation by removing any
+   * potential for race between stat() and chmod().
+   * chmod() accepts filename as argument. If an attacker can move
+   * the file between stat() and chmod(), a potential race exists.
+   *
+   * Several suggestions taken from:
+   * https://developer.apple.com/library/mac/documentation/
+   *     Security/Conceptual/SecureCodingGuide/Articles/RaceConditions.html
+   */
+
+  /* Open directory.
+   * O_NOFOLLOW to ensure that it does not follow symbolic links */
+  fd = open(sandbox_intern_string(dirname), O_NOFOLLOW);
+
+  /* Was there an error? Maybe the directory does not exist? */
+  if (fd == -1) {
+
     if (errno != ENOENT) {
+      /* Other directory error */
       log_warn(LD_FS, "Directory %s cannot be read: %s", dirname,
                strerror(errno));
       return -1;
     }
+
+    /* Received ENOENT: Directory does not exist */
+
+    /* Should we create the directory? */
     if (check & CPD_CREATE) {
       log_info(LD_GENERAL, "Creating directory %s", dirname);
-#if defined (_WIN32)
-      r = mkdir(dirname);
-#else
       if (check & CPD_GROUP_READ) {
         r = mkdir(dirname, 0750);
       } else {
         r = mkdir(dirname, 0700);
       }
-#endif
+
+      /* check for mkdir() error */
       if (r) {
         log_warn(LD_FS, "Error creating directory %s: %s", dirname,
             strerror(errno));
         return -1;
       }
+
+      /* we just created the directory. try to open it again.
+       * permissions on the directory will be checked again below.*/
+      fd = open(sandbox_intern_string(dirname), O_NOFOLLOW);
+
+      if (fd == -1)
+        return -1;
+      else
+        close(fd);
+
     } else if (!(check & CPD_CHECK)) {
       log_warn(LD_FS, "Directory %s does not exist.", dirname);
       return -1;
     }
+
     /* XXXX In the case where check==CPD_CHECK, we should look at the
      * parent directory a little harder. */
     return 0;
   }
+
+  tor_assert(fd >= 0);
+
+  //f = tor_strdup(dirname);
+  //clean_name_for_stat(f);
+  log_debug(LD_FS, "stat()ing %s", dirname);
+  //r = stat(sandbox_intern_string(f), &st);
+  r = fstat(fd, &st);
+  if (r == -1) {
+      log_warn(LD_FS, "fstat() on directory %s failed.", dirname);
+      close(fd);
+      return -1;
+  }
+  //tor_free(f);
+
+  /* check that dirname is a directory */
   if (!(st.st_mode & S_IFDIR)) {
     log_warn(LD_FS, "%s is not a directory", dirname);
+    close(fd);
     return -1;
   }
-#ifndef _WIN32
+
   if (effective_user) {
     /* Look up the user and group information.
      * If we have a problem, bail out. */
@@ -2116,6 +2177,7 @@ check_private_dir(const char *dirname, cpd_check_t check,
     if (pw == NULL) {
       log_warn(LD_CONFIG, "Error setting configured user: %s not found",
                effective_user);
+      close(fd);
       return -1;
     }
     running_uid = pw->pw_uid;
@@ -2124,7 +2186,6 @@ check_private_dir(const char *dirname, cpd_check_t check,
     running_uid = getuid();
     running_gid = getgid();
   }
-
   if (st.st_uid != running_uid) {
     const struct passwd *pw = NULL;
     char *process_ownername = NULL;
@@ -2140,6 +2201,7 @@ check_private_dir(const char *dirname, cpd_check_t check,
                          pw ? pw->pw_name : "<unknown>", (int)st.st_uid);
 
     tor_free(process_ownername);
+    close(fd);
     return -1;
   }
   if ( (check & (CPD_GROUP_OK|CPD_GROUP_READ))
@@ -2156,18 +2218,25 @@ check_private_dir(const char *dirname, cpd_check_t check,
              gr ?  gr->gr_name : "<unknown>", (int)st.st_gid);
 
     tor_free(process_groupname);
+    close(fd);
     return -1;
   }
+  unsigned unwanted_bits = 0;
   if (check & (CPD_GROUP_OK|CPD_GROUP_READ)) {
     unwanted_bits = 0027;
   } else {
     unwanted_bits = 0077;
   }
-  if ((st.st_mode & unwanted_bits) != 0) {
+  unsigned check_bits_filter = ~0;
+  if (check & CPD_RELAX_DIRMODE_CHECK) {
+    check_bits_filter = 0022;
+  }
+  if ((st.st_mode & unwanted_bits & check_bits_filter) != 0) {
     unsigned new_mode;
     if (check & CPD_CHECK_MODE_ONLY) {
       log_warn(LD_FS, "Permissions on directory %s are too permissive.",
                dirname);
+      close(fd);
       return -1;
     }
     log_warn(LD_FS, "Fixing permissions on directory %s", dirname);
@@ -2177,14 +2246,51 @@ check_private_dir(const char *dirname, cpd_check_t check,
       new_mode |= 0050; /* Group should have rx */
     }
     new_mode &= ~unwanted_bits; /* Clear the bits that we didn't want set...*/
-    if (chmod(dirname, new_mode)) {
+    if (fchmod(fd, new_mode)) {
       log_warn(LD_FS, "Could not chmod directory %s: %s", dirname,
                strerror(errno));
+      close(fd);
       return -1;
     } else {
+      close(fd);
       return 0;
     }
   }
+  close(fd);
+#else
+  /* Win32 case: we can't open() a directory. */
+  (void)effective_user;
+
+  char *f = tor_strdup(dirname);
+  clean_name_for_stat(f);
+  log_debug(LD_FS, "stat()ing %s", f);
+  r = stat(sandbox_intern_string(f), &st);
+  tor_free(f);
+  if (r) {
+    if (errno != ENOENT) {
+      log_warn(LD_FS, "Directory %s cannot be read: %s", dirname,
+               strerror(errno));
+      return -1;
+    }
+    if (check & CPD_CREATE) {
+      log_info(LD_GENERAL, "Creating directory %s", dirname);
+      r = mkdir(dirname);
+      if (r) {
+        log_warn(LD_FS, "Error creating directory %s: %s", dirname,
+                 strerror(errno));
+        return -1;
+      }
+    } else if (!(check & CPD_CHECK)) {
+      log_warn(LD_FS, "Directory %s does not exist.", dirname);
+      return -1;
+    }
+    return 0;
+  }
+  if (!(st.st_mode & S_IFDIR)) {
+    log_warn(LD_FS, "%s is not a directory", dirname);
+    return -1;
+  }
+
 #endif
   return 0;
 }
@@ -2900,6 +3006,10 @@ expand_filename(const char *filename)
 {
   tor_assert(filename);
 #ifdef _WIN32
+  /* Might consider using GetFullPathName() as described here:
+   * http://etutorials.org/Programming/secure+programming/
+   *     Chapter+3.+Input+Validation/3.7+Validating+Filenames+and+Paths/
+   */
   return tor_strdup(filename);
 #else
   if (*filename == '~') {

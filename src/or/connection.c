@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2015, The Tor Project, Inc. */
+ * Copyright (c) 2007-2016, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -19,6 +19,7 @@
  */
 #define TOR_CHANNEL_INTERNAL_
 #define CONNECTION_PRIVATE
+#include "backtrace.h"
 #include "channel.h"
 #include "channeltls.h"
 #include "circuitbuild.h"
@@ -37,6 +38,7 @@
 #include "ext_orport.h"
 #include "geoip.h"
 #include "main.h"
+#include "nodelist.h"
 #include "policies.h"
 #include "reasons.h"
 #include "relay.h"
@@ -44,8 +46,10 @@
 #include "rendcommon.h"
 #include "rephist.h"
 #include "router.h"
+#include "routerlist.h"
 #include "transports.h"
 #include "routerparse.h"
+#include "sandbox.h"
 #include "transports.h"
 
 #ifdef USE_BUFFEREVENTS
@@ -1011,6 +1015,10 @@ check_location_for_unix_socket(const or_options_t *options, const char *path,
     flags |= CPD_GROUP_OK;
   }
 
+  if (port->relax_dirmode_check) {
+    flags |= CPD_RELAX_DIRMODE_CHECK;
+  }
+
   if (check_private_dir(p, flags, options->User) < 0) {
     char *escpath, *escdir;
     escpath = esc_for_log(path);
@@ -1057,6 +1065,31 @@ make_socket_reuseable(tor_socket_t sock)
   return 0;
 #endif
 }
+
+#ifdef _WIN32
+/** Tell the Windows TCP stack to prevent other applications from receiving
+ * traffic from tor's open ports. Return 0 on success, -1 on failure. */
+static int
+make_win32_socket_exclusive(tor_socket_t sock)
+{
+#ifdef SO_EXCLUSIVEADDRUSE
+  int one=1;
+
+  /* Any socket that sets REUSEADDR on win32 can bind to a port _even when
+   * somebody else already has it bound_, and _even if the original socket
+   * didn't set REUSEADDR_. Use EXCLUSIVEADDRUSE to prevent this port-stealing
+   * on win32. */
+  if (setsockopt(sock, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (void*) &one,
+                 (socklen_t)sizeof(one))) {
+    return -1;
+  }
+  return 0;
+#else
+  (void) sock;
+  return 0;
+#endif
+}
+#endif
 
 /** Max backlog to pass to listen.  We start at */
 static int listen_limit = INT_MAX;
@@ -1111,7 +1144,6 @@ connection_listener_new(const struct sockaddr *listensockaddr,
       start_reading = 1;
 
     tor_addr_from_sockaddr(&addr, listensockaddr, &usePort);
-
     log_notice(LD_NET, "Opening %s on %s",
                conn_type_to_string(type), fmt_addrport(&addr, usePort));
 
@@ -1134,6 +1166,14 @@ connection_listener_new(const struct sockaddr *listensockaddr,
                conn_type_to_string(type),
                tor_socket_strerror(errno));
     }
+
+#ifdef _WIN32
+    if (make_win32_socket_exclusive(s) < 0) {
+      log_warn(LD_NET, "Error setting SO_EXCLUSIVEADDRUSE flag on %s: %s",
+               conn_type_to_string(type),
+               tor_socket_strerror(errno));
+    }
+#endif
 
 #if defined(USE_TRANSPARENT) && defined(IP_TRANSPARENT)
     if (options->TransProxyType_parsed == TPT_TPROXY &&
@@ -1248,11 +1288,16 @@ connection_listener_new(const struct sockaddr *listensockaddr,
 #ifdef HAVE_PWD_H
     if (options->User) {
       pw = tor_getpwnam(options->User);
+      struct stat st;
       if (pw == NULL) {
         log_warn(LD_NET,"Unable to chown() %s socket: user %s not found.",
                  address, options->User);
         goto err;
-      } else if (chown(address, pw->pw_uid, pw->pw_gid) < 0) {
+      } else if (fstat(s, &st) == 0 &&
+                 st.st_uid == pw->pw_uid && st.st_gid == pw->pw_gid) {
+        /* No change needed */
+      } else if (chown(sandbox_intern_string(address),
+                       pw->pw_uid, pw->pw_gid) < 0) {
         log_warn(LD_NET,"Unable to chown() %s socket: %s.",
                  address, strerror(errno));
         goto err;
@@ -1263,6 +1308,7 @@ connection_listener_new(const struct sockaddr *listensockaddr,
     {
       unsigned mode;
       const char *status;
+      struct stat st;
       if (port_cfg->is_world_writable) {
         mode = 0666;
         status = "world-writable";
@@ -1275,7 +1321,9 @@ connection_listener_new(const struct sockaddr *listensockaddr,
       }
       /* We need to use chmod; fchmod doesn't work on sockets on all
        * platforms. */
-      if (chmod(address, mode) < 0) {
+      if (fstat(s, &st) == 0 && (st.st_mode & 0777) == mode) {
+        /* no change needed */
+      } else if (chmod(sandbox_intern_string(address), mode) < 0) {
         log_warn(LD_FS,"Unable to make %s %s.", address, status);
         goto err;
       }
@@ -1715,6 +1763,79 @@ connection_connect_sockaddr,(connection_t *conn,
   return inprogress ? 0 : 1;
 }
 
+/* Log a message if connection attempt is made when IPv4 or IPv6 is disabled.
+ * Log a less severe message if we couldn't conform to ClientPreferIPv6ORPort
+ * or ClientPreferIPv6ORPort. */
+static void
+connection_connect_log_client_use_ip_version(const connection_t *conn)
+{
+  const or_options_t *options = get_options();
+
+  /* Only clients care about ClientUseIPv4/6, bail out early on servers, and
+   * on connections we don't care about */
+  if (server_mode(options) || !conn || conn->type == CONN_TYPE_EXIT) {
+    return;
+  }
+
+  /* We're only prepared to log OR and DIR connections here */
+  if (conn->type != CONN_TYPE_OR && conn->type != CONN_TYPE_DIR) {
+    return;
+  }
+
+  const int must_ipv4 = !fascist_firewall_use_ipv6(options);
+  const int must_ipv6 = (options->ClientUseIPv4 == 0);
+  const int pref_ipv6 = (conn->type == CONN_TYPE_OR
+                         ? fascist_firewall_prefer_ipv6_orport(options)
+                         : fascist_firewall_prefer_ipv6_dirport(options));
+  tor_addr_t real_addr;
+  tor_addr_make_null(&real_addr, AF_UNSPEC);
+
+  /* OR conns keep the original address in real_addr, as addr gets overwritten
+   * with the descriptor address */
+  if (conn->type == CONN_TYPE_OR) {
+    const or_connection_t *or_conn = TO_OR_CONN((connection_t *)conn);
+    tor_addr_copy(&real_addr, &or_conn->real_addr);
+  } else if (conn->type == CONN_TYPE_DIR) {
+    tor_addr_copy(&real_addr, &conn->addr);
+  }
+
+  /* Check if we broke a mandatory address family restriction */
+  if ((must_ipv4 && tor_addr_family(&real_addr) == AF_INET6)
+      || (must_ipv6 && tor_addr_family(&real_addr) == AF_INET)) {
+    static int logged_backtrace = 0;
+    log_info(LD_BUG, "Outgoing %s connection to %s violated ClientUseIPv%s 0.",
+             conn->type == CONN_TYPE_OR ? "OR" : "Dir",
+             fmt_addr(&real_addr),
+             options->ClientUseIPv4 == 0 ? "4" : "6");
+    if (!logged_backtrace) {
+      log_backtrace(LOG_INFO, LD_BUG, "Address came from");
+      logged_backtrace = 1;
+    }
+  }
+
+  /* Bridges are allowed to break IPv4/IPv6 ORPort preferences to connect to
+   * the node's configured address when ClientPreferIPv6ORPort is auto */
+  if (options->UseBridges && conn->type == CONN_TYPE_OR
+      && options->ClientPreferIPv6ORPort == -1) {
+    return;
+  }
+
+  /* Check if we couldn't satisfy an address family preference */
+  if ((!pref_ipv6 && tor_addr_family(&real_addr) == AF_INET6)
+      || (pref_ipv6 && tor_addr_family(&real_addr) == AF_INET)) {
+    log_info(LD_NET, "Outgoing connection to %s doesn't satisfy "
+             "ClientPreferIPv6%sPort %d, with ClientUseIPv4 %d, and "
+             "fascist_firewall_use_ipv6 %d (ClientUseIPv6 %d and UseBridges "
+             "%d).",
+             fmt_addr(&real_addr),
+             conn->type == CONN_TYPE_OR ? "OR" : "Dir",
+             conn->type == CONN_TYPE_OR ? options->ClientPreferIPv6ORPort
+                                        : options->ClientPreferIPv6DirPort,
+             options->ClientUseIPv4, fascist_firewall_use_ipv6(options),
+             options->ClientUseIPv6, options->UseBridges);
+  }
+}
+
 /** Take conn, make a nonblocking socket; try to connect to
  * addr:port (port arrives in *host order*). If fail, return -1 and if
  * applicable put your best guess about errno into *<b>socket_error</b>.
@@ -1738,6 +1859,10 @@ connection_connect(connection_t *conn, const char *address,
   int dest_addr_len, bind_addr_len = 0;
   const or_options_t *options = get_options();
   int protocol_family;
+
+  /* Log if we didn't stick to ClientUseIPv4/6 or ClientPreferIPv6OR/DirPort
+   */
+  connection_connect_log_client_use_ip_version(conn);
 
   if (tor_addr_family(addr) == AF_INET6)
     protocol_family = PF_INET6;
@@ -2398,7 +2523,8 @@ retry_listener_ports(smartlist_t *old_conns,
     /* We don't need to be root to create a UNIX socket, so defer until after
      * setuid. */
     const or_options_t *options = get_options();
-    if (port->is_unix_addr && !geteuid() && strcmp(options->User, "root"))
+    if (port->is_unix_addr && !geteuid() && (options->User) &&
+        strcmp(options->User, "root"))
       continue;
 #endif
 
@@ -4246,10 +4372,10 @@ connection_write_to_buf_impl_,(const char *string, size_t len,
 /** Return a connection with given type, address, port, and purpose;
  * or NULL if no such connection exists (or if all such connections are marked
  * for close). */
-connection_t *
-connection_get_by_type_addr_port_purpose(int type,
+MOCK_IMPL(connection_t *,
+connection_get_by_type_addr_port_purpose,(int type,
                                          const tor_addr_t *addr, uint16_t port,
-                                         int purpose)
+                                         int purpose))
 {
   CONN_GET_TEMPLATE(conn,
        (conn->type == type &&
