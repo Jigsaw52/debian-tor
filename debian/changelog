@@ -10,8 +10,11 @@ tor (0.2.8.2-alpha-1) experimental; urgency=medium
     directories.
   * Use the RelaxDirModeCheck option for the control unix domain socket
     so that works.
+  * tor-instance-create: in the torrc we create, append to the SocksPort
+    list using + instead of overriding what is configured in the defaults
+    file.
 
- -- Peter Palfrader <weasel@debian.org>  Sun, 17 Apr 2016 18:05:42 +0200
+ -- Peter Palfrader <weasel@debian.org>  Tue, 19 Apr 2016 20:00:33 +0200
 
 tor (0.2.8.1-alpha-1) experimental; urgency=medium
 

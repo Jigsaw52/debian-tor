@@ -89,7 +89,11 @@ install -d "$etc"
 # To start/reload/etc this instance, run "systemctl tor@$name start" (or reload, or..).
 # This instance will run as user $user; its data directory is $home.
 #
-SocksPort auto
+# Append to the list of socks interfaces configured via
+# /usr/share/tor/tor-service-defaults-torrc-instances
+# which is unix:/var/run/tor-instances/$name/socks
+
++SocksPort auto
 EOF
 
 [ -x /bin/systemctl ] && systemctl daemon-reload || true
