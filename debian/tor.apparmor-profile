@@ -8,7 +8,9 @@ profile system_tor flags=(attach_disconnected) {
   owner /var/lib/tor/ r,
   owner /var/log/tor/* w,
 
+  /{,var/}run/tor/ r,
   /{,var/}run/tor/control w,
+  /{,var/}run/tor/socks w,
   /{,var/}run/tor/tor.pid w,
   /{,var/}run/tor/control.authcookie w,
   /{,var/}run/tor/control.authcookie.tmp rw,

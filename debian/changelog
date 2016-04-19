@@ -13,8 +13,10 @@ tor (0.2.8.2-alpha-1) experimental; urgency=medium
   * tor-instance-create: in the torrc we create, append to the SocksPort
     list using + instead of overriding what is configured in the defaults
     file.
+  * apparmor: allow reading of {/var,}/run/tor, and writing of
+    {/var,}/run/tor/socks.
 
- -- Peter Palfrader <weasel@debian.org>  Tue, 19 Apr 2016 20:00:33 +0200
+ -- Peter Palfrader <weasel@debian.org>  Tue, 19 Apr 2016 20:06:47 +0200
 
 tor (0.2.8.1-alpha-1) experimental; urgency=medium
 
