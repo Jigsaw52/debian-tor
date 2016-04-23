@@ -5,18 +5,18 @@ tor (0.2.8.2-alpha-1) experimental; urgency=medium
     This is required by new tor versions (closes: Tor#18370).
   * Set SocksPort unix:/var/run/tor/socks and 9050 in the defaults file
     (closes: #797335).
-  * For non-default instances, use /var/run/tor-instances/@@NAME@@/socks.
-  * Make /var/run/tor mode 755 (from 750).  Same for the instance run
-    directories.
-  * Use the RelaxDirModeCheck option for the control unix domain socket
-    so that works.
-  * tor-instance-create: in the torrc we create, append to the SocksPort
-    list using + instead of overriding what is configured in the defaults
-    file.
-  * apparmor: allow reading of {/var,}/run/tor, and writing of
-    {/var,}/run/tor/socks.
+    - For non-default instances, use /var/run/tor-instances/@@NAME@@/socks.
+    - Make /var/run/tor mode 755 (from 750).  Same for the instance run
+      directories.
+    - Use the RelaxDirModeCheck option for the control unix domain socket
+      so that works.
+    - tor-instance-create: in the torrc we create, append to the SocksPort
+      list using + instead of overriding what is configured in the defaults
+      file.
+    - apparmor: allow reading of {/var,}/run/tor, and writing of
+      {/var,}/run/tor/socks.
 
- -- Peter Palfrader <weasel@debian.org>  Tue, 19 Apr 2016 20:06:47 +0200
+ -- Peter Palfrader <weasel@debian.org>  Sat, 23 Apr 2016 11:23:40 +0200
 
 tor (0.2.8.1-alpha-1) experimental; urgency=medium
 
