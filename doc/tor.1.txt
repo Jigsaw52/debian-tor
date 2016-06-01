@@ -30,7 +30,7 @@ Users bounce their TCP streams -- web traffic, ftp, ssh, etc. -- around the
 network, and recipients, observers, and even the relays themselves have
 difficulty tracking the source of the stream.
 
-By default, **tor** will only act as a client only.  To help the network
+By default, **tor** will act as a client only.  To help the network
 by providing bandwidth as a relay, change the **ORPort** configuration
 option -- see below.  Please also consult the documentation on the Tor
 Project's website.
@@ -961,12 +961,12 @@ The following options are useful only for clients (that is, if
     When a request for address arrives to Tor, it will transform to newaddress
     before processing it. For example, if you always want connections to
     www.example.com to exit via __torserver__ (where __torserver__ is the
-    nickname of the server), use "MapAddress www.example.com
+    fingerprint of the server), use "MapAddress www.example.com
     www.example.com.torserver.exit". If the value is prefixed with a
     "\*.", matches an entire domain. For example, if you
     always want connections to example.com and any if its subdomains
     to exit via
-    __torserver__ (where __torserver__ is the nickname of the server), use
+    __torserver__ (where __torserver__ is the fingerprint of the server), use
     "MapAddress \*.example.com \*.example.com.torserver.exit". (Note the
     leading "*." in each part of the directive.) You can also redirect all
     subdomains of a domain to a single address. For example, "MapAddress
@@ -1557,6 +1557,45 @@ The following options are useful only for clients (that is, if
     prevent your Tor client from bootstrapping.  If this option is negative,
     Tor will use a default value chosen by the directory
     authorities. (Default: -1.)
+
+[[ClientBootstrapConsensusAuthorityDownloadSchedule]] **ClientBootstrapConsensusAuthorityDownloadSchedule** __N__,__N__,__...__::
+    Schedule for when clients should download consensuses from authorities
+    if they are bootstrapping (that is, they don't have a usable, reasonably
+    live consensus). Only used by clients fetching from a list of fallback
+    directory mirrors. This schedule is advanced by (potentially concurrent)
+    connection attempts, unlike other schedules, which are advanced by
+    connection failures. (Default: 10, 11, 3600, 10800, 25200, 54000,
+    111600, 262800)
+
+[[ClientBootstrapConsensusFallbackDownloadSchedule]] **ClientBootstrapConsensusFallbackDownloadSchedule** __N__,__N__,__...__::
+    Schedule for when clients should download consensuses from fallback
+    directory mirrors if they are bootstrapping (that is, they don't have a
+    usable, reasonably live consensus). Only used by clients fetching from a
+    list of fallback directory mirrors. This schedule is advanced by
+    (potentially concurrent) connection attempts, unlike other schedules,
+    which are advanced by connection failures. (Default: 0, 1, 4, 11, 3600,
+    10800, 25200, 54000, 111600, 262800)
+
+[[ClientBootstrapConsensusAuthorityOnlyDownloadSchedule]] **ClientBootstrapConsensusAuthorityOnlyDownloadSchedule** __N__,__N__,__...__::
+    Schedule for when clients should download consensuses from authorities
+    if they are bootstrapping (that is, they don't have a usable, reasonably
+    live consensus). Only used by clients which don't have or won't fetch
+    from a list of fallback directory mirrors. This schedule is advanced by
+    (potentially concurrent) connection attempts, unlike other schedules,
+    which are advanced by connection failures. (Default: 0, 3, 7, 3600,
+    10800, 25200, 54000, 111600, 262800)
+
+[[ClientBootstrapConsensusMaxDownloadTries]] **ClientBootstrapConsensusMaxDownloadTries** __NUM__::
+    Try this many times to download a consensus while bootstrapping using
+    fallback directory mirrors before giving up. (Default: 7)
+
+[[ClientBootstrapConsensusAuthorityOnlyMaxDownloadTries]] **ClientBootstrapConsensusAuthorityOnlyMaxDownloadTries** __NUM__::
+    Try this many times to download a consensus while bootstrapping using
+    authorities before giving up. (Default: 4)
+
+[[ClientBootstrapConsensusMaxInProgressTries]] **ClientBootstrapConsensusMaxInProgressTries** __NUM__::
+    Try this many simultaneous connections to download a consensus before
+    waiting for one to complete, timeout, or error out. (Default: 4)
 
 SERVER OPTIONS
 --------------
@@ -2347,6 +2386,14 @@ The following options are used for running a testing Tor network.
        AssumeReachable 1
        AuthDirMaxServersPerAddr 0
        AuthDirMaxServersPerAuthAddr 0
+       ClientBootstrapConsensusAuthorityDownloadSchedule 0, 2,
+          4 (for 40 seconds), 8, 16, 32, 60
+       ClientBootstrapConsensusFallbackDownloadSchedule 0, 1,
+          4 (for 40 seconds), 8, 16, 32, 60
+       ClientBootstrapConsensusAuthorityOnlyDownloadSchedule 0, 1,
+          4 (for 40 seconds), 8, 16, 32, 60
+       ClientBootstrapConsensusMaxDownloadTries 80
+       ClientBootstrapConsensusAuthorityOnlyMaxDownloadTries 80
        ClientDNSRejectInternalAddresses 0
        ClientRejectInternalAddresses 0
        CountPrivateBandwidth 1
@@ -2365,18 +2412,10 @@ The following options are used for running a testing Tor network.
        TestingClientDownloadSchedule 0, 0, 5, 10, 15, 20, 30, 60
        TestingServerConsensusDownloadSchedule 0, 0, 5, 10, 15, 20, 30, 60
        TestingClientConsensusDownloadSchedule 0, 0, 5, 10, 15, 20, 30, 60
-       TestingClientBootstrapConsensusAuthorityDownloadSchedule 0, 2,
-           4 (for 40 seconds), 8, 16, 32, 60
-       TestingClientBootstrapConsensusFallbackDownloadSchedule 0, 1,
-           4 (for 40 seconds), 8, 16, 32, 60
-       TestingClientBootstrapConsensusAuthorityOnlyDownloadSchedule 0, 1,
-           4 (for 40 seconds), 8, 16, 32, 60
        TestingBridgeDownloadSchedule 60, 30, 30, 60
        TestingClientMaxIntervalWithoutRequest 5 seconds
        TestingDirConnectionMaxStall 30 seconds
        TestingConsensusMaxDownloadTries 80
-       TestingClientBootstrapConsensusMaxDownloadTries 80
-       TestingClientBootstrapConsensusAuthorityOnlyMaxDownloadTries 80
        TestingDescriptorMaxDownloadTries 80
        TestingMicrodescMaxDownloadTries 80
        TestingCertMaxDownloadTries 80
@@ -2437,36 +2476,6 @@ The following options are used for running a testing Tor network.
     requires that **TestingTorNetwork** is set. (Default: 0, 0, 60, 300, 600,
     1800, 3600, 3600, 3600, 10800, 21600, 43200)
 
-[[TestingClientBootstrapConsensusAuthorityDownloadSchedule]] **TestingClientBootstrapConsensusAuthorityDownloadSchedule** __N__,__N__,__...__::
-    Schedule for when clients should download consensuses from authorities if
-    they are bootstrapping (that is, they don't have a usable, reasonably live
-    consensus). Only used by clients fetching from a list of fallback
-    directory mirrors. This schedule is advanced by (potentially concurrent)
-    connection attempts, unlike other schedules, which are advanced by
-    connection failures. Changing this schedule requires that
-    **TestingTorNetwork** is set. (Default: 10, 11, 3600, 10800, 25200, 54000,
-    111600, 262800)
-
-[[TestingClientBootstrapConsensusFallbackDownloadSchedule]] **TestingClientBootstrapConsensusFallbackDownloadSchedule** __N__,__N__,__...__::
-    Schedule for when clients should download consensuses from fallback
-    directory mirrors if they are bootstrapping (that is, they don't have a
-    usable, reasonably live consensus). Only used by clients fetching from a
-    list of fallback directory mirrors.  This schedule is advanced by
-    (potentially concurrent) connection attempts, unlike other schedules, which
-    are advanced by connection failures. Changing this schedule requires that
-    **TestingTorNetwork** is set. (Default: 0, 1, 4, 11, 3600, 10800, 25200,
-    54000, 111600, 262800)
-
-[[TestingClientBootstrapConsensusAuthorityOnlyDownloadSchedule]] **TestingClientBootstrapConsensusAuthorityOnlyDownloadSchedule** __N__,__N__,__...__::
-    Schedule for when clients should download consensuses from authorities if
-    they are bootstrapping (that is, they don't have a usable, reasonably live
-    consensus). Only used by clients which don't have or won't fetch from a
-    list of fallback directory mirrors. This schedule is advanced by
-    (potentially concurrent) connection attempts, unlike other schedules,
-    which are advanced by connection failures. Changing this schedule requires
-    that **TestingTorNetwork** is set. (Default: 0, 3, 7, 3600, 10800, 25200,
-    54000, 111600, 262800)
-
 [[TestingBridgeDownloadSchedule]] **TestingBridgeDownloadSchedule** __N__,__N__,__...__::
     Schedule for when clients should download bridge descriptors. Changing this
     requires that **TestingTorNetwork** is set. (Default: 3600, 900, 900, 3600)
@@ -2485,21 +2494,6 @@ The following options are used for running a testing Tor network.
 [[TestingConsensusMaxDownloadTries]] **TestingConsensusMaxDownloadTries** __NUM__::
     Try this many times to download a consensus before giving up. Changing
     this requires that **TestingTorNetwork** is set. (Default: 8)
-
-[[TestingClientBootstrapConsensusMaxDownloadTries]] **TestingClientBootstrapConsensusMaxDownloadTries** __NUM__::
-    Try this many times to download a consensus while bootstrapping using
-    fallback directory mirrors before giving up. Changing this requires that
-    **TestingTorNetwork** is set. (Default: 7)
-
-[[TestingClientBootstrapConsensusAuthorityOnlyMaxDownloadTries]] **TestingClientBootstrapConsensusAuthorityOnlyMaxDownloadTries** __NUM__::
-    Try this many times to download a consensus while bootstrapping using
-    authorities before giving up. Changing this requires that
-    **TestingTorNetwork** is set. (Default: 4)
-
-[[TestingClientBootstrapConsensusMaxInProgressTries]] **TestingClientBootstrapConsensusMaxInProgressTries** __NUM__::
-    Try this many simultaneous connections to download a consensus before
-    waiting for one to complete, timeout, or error out. Changing this
-    requires that **TestingTorNetwork** is set. (Default: 4)
 
 [[TestingDescriptorMaxDownloadTries]] **TestingDescriptorMaxDownloadTries** __NUM__::
     Try this often to download a server descriptor before giving up.
@@ -2708,6 +2702,61 @@ __DataDirectory__**/lock**::
 __DataDirectory__**/keys/***::
     Only used by servers. Holds identity keys and onion keys.
 
+__DataDirectory__**/keys/authority_identity_key**::
+    A v3 directory authority's master identity key, used to authenticate its
+    signing key. Tor doesn't use this while it's running. The tor-gencert
+    program uses this. If you're running an authority, you should keep this
+    key offline, and not actually put it here.
+
+__DataDirectory__**/keys/authority_certificate**::
+    A v3 directory authority's certificate, which authenticates the authority's
+    current vote- and consensus-signing key using its master identity key.
+    Only directory authorities use this file.
+
+__DataDirectory__**/keys/authority_signing_key**::
+    A v3 directory authority's signing key, used to sign votes and consensuses.
+    Only directory authorities use this file.  Corresponds to the
+    **authority_certificate** cert.
+
+__DataDirectory__**/keys/legacy_certificate**::
+    As authority_certificate: used only when V3AuthUseLegacyKey is set.
+    See documentation for V3AuthUseLegacyKey.
+
+__DataDirectory__**/keys/legacy_signing_key**::
+    As authority_signing_key: used only when V3AuthUseLegacyKey is set.
+    See documentation for V3AuthUseLegacyKey.
+
+__DataDirectory__**/keys/secret_id_key**::
+    A relay's RSA1024 permanent identity key, including private and public
+    components.  Used to sign router descriptors, and to sign other keys.
+
+__DataDirectory__**/keys/ed25519_master_id_public_key**::
+    The public part of a relay's Ed25519 permanent identity key.
+
+__DataDirectory__**/keys/ed25519_master_id_secret_key**::
+    The private part of a relay's Ed25519 permanent identity key.  This key
+    is used to sign the medium-term ed25519 signing key.  This file can be
+    kept offline, or kept encrypted. If so, Tor will not be able to generate
+    new signing keys itself; you'll need to use tor --keygen yourself to do
+    so.
+
+__DataDirectory__**/keys/ed25519_signing_secret_key**::
+    The private and public components of a relay's medium-term Ed25519 signing
+    key. This key is authenticated by the Ed25519 master key, in turn
+    authenticates other keys (and router descriptors).
+
+__DataDirectory__**/keys/ed25519_signing_cert**::
+    The certificate which authenticates "ed25519_signing_secret_key" as
+    having been signed by the Ed25519 master key.
+
+__DataDirectory__**/keys/secret_onion_key**::
+    A relay's RSA1024 short-term onion key. Used to decrypt old-style ("TAP")
+    circuit extension requests.
+
+__DataDirectory__**/keys/secret_onion_key_ntor**::
+    A relay's Curve25519 short-term onion key. Used to handle modern ("ntor")
+    circuit extension requests.
+
 __DataDirectory__**/fingerprint**::
     Only used by servers. Holds the fingerprint of the server's identity key.
 
@@ -2716,9 +2765,8 @@ __DataDirectory__**/hashed-fingerprint**::
     identity key. (That is, the hash of the hash of the identity key.)
 
 __DataDirectory__**/v3-status-votes**::
-    Only for authoritative directory servers. This file contains status votes
-    from all the authoritative directory servers and is used to generate the
-    network consensus document.
+    Only for v3 authoritative directory servers. This file contains
+    status votes from all the authoritative directory servers.
 
 __DataDirectory__**/unverified-consensus**::
     This file contains a network consensus document that has been downloaded,

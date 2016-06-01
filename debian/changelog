@@ -1,3 +1,9 @@
+tor (0.2.8.3-alpha-1) experimental; urgency=medium
+
+  * New upstream version.
+
+ -- Peter Palfrader <weasel@debian.org>  Wed, 01 Jun 2016 21:29:15 +0200
+
 tor (0.2.8.2-alpha-1) experimental; urgency=medium
 
   * New upstream version.
