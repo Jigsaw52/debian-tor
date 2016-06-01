@@ -1426,7 +1426,7 @@ static void
 circuit_testing_opened(origin_circuit_t *circ)
 {
   if (have_performed_bandwidth_test ||
-      !check_whether_orport_reachable()) {
+      !check_whether_orport_reachable(get_options())) {
     /* either we've already done everything we want with testing circuits,
      * or this testing circuit became open due to a fluke, e.g. we picked
      * a last hop where we already had the connection open due to an
@@ -1443,7 +1443,8 @@ circuit_testing_opened(origin_circuit_t *circ)
 static void
 circuit_testing_failed(origin_circuit_t *circ, int at_last_hop)
 {
-  if (server_mode(get_options()) && check_whether_orport_reachable())
+  const or_options_t *options = get_options();
+  if (server_mode(options) && check_whether_orport_reachable(options))
     return;
 
   log_info(LD_GENERAL,
@@ -1674,7 +1675,11 @@ circuit_launch(uint8_t purpose, int flags)
   return circuit_launch_by_extend_info(purpose, NULL, flags);
 }
 
-/* DOCDOC */
+/* Do we have enough descriptors to build paths?
+ * If need_exit is true, return 1 if we can build exit paths.
+ * (We need at least one Exit in the consensus to build exit paths.)
+ * If need_exit is false, return 1 if we can build internal paths.
+ */
 static int
 have_enough_path_info(int need_exit)
 {
@@ -2354,6 +2359,25 @@ connection_ap_handshake_attach_circuit(entry_connection_t *conn)
   if (!connection_edge_is_rendezvous_stream(ENTRY_TO_EDGE_CONN(conn))) {
     /* we're a general conn */
     origin_circuit_t *circ=NULL;
+
+    /* Are we linked to a dir conn that aims to fetch a consensus?
+     * We check here because this conn might no longer be needed. */
+    if (base_conn->linked_conn &&
+        base_conn->linked_conn->type == CONN_TYPE_DIR &&
+        base_conn->linked_conn->purpose == DIR_PURPOSE_FETCH_CONSENSUS) {
+
+      /* Yes we are. Is there a consensus fetch farther along than us? */
+      if (networkstatus_consensus_is_already_downloading(
+            TO_DIR_CONN(base_conn->linked_conn)->requested_resource)) {
+        /* We're doing the "multiple consensus fetch attempts" game from
+         * proposal 210, and we're late to the party. Just close this conn.
+         * The circuit and TLS conn that we made will time out after a while
+         * if nothing else wants to use them. */
+        log_info(LD_DIR, "Closing extra consensus fetch (to %s) since one "
+                 "is already downloading.", base_conn->linked_conn->address);
+        return -1;
+      }
+    }
 
     if (conn->chosen_exit_name) {
       const node_t *node = node_get_by_nickname(conn->chosen_exit_name, 1);

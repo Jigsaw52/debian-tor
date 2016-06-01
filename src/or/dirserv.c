@@ -257,11 +257,11 @@ dirserv_router_get_status(const routerinfo_t *router, const char **msg,
     return FP_REJECT;
   }
 
-  if (router->signing_key_cert) {
+  if (router->cache_info.signing_key_cert) {
     /* This has an ed25519 identity key. */
     if (KEYPIN_MISMATCH ==
         keypin_check((const uint8_t*)router->cache_info.identity_digest,
-                     router->signing_key_cert->signing_key.pubkey)) {
+                   router->cache_info.signing_key_cert->signing_key.pubkey)) {
       log_fn(severity, LD_DIR,
              "Descriptor from router %s has an Ed25519 key, "
                "but the <rsa,ed25519> keys don't match what they were before.",
@@ -629,10 +629,10 @@ dirserv_add_descriptor(routerinfo_t *ri, const char **msg, const char *source)
 
   /* Do keypinning again ... this time, to add the pin if appropriate */
   int keypin_status;
-  if (ri->signing_key_cert) {
+  if (ri->cache_info.signing_key_cert) {
     keypin_status = keypin_check_and_add(
       (const uint8_t*)ri->cache_info.identity_digest,
-      ri->signing_key_cert->signing_key.pubkey,
+      ri->cache_info.signing_key_cert->signing_key.pubkey,
       ! key_pinning);
   } else {
     keypin_status = keypin_check_lone_rsa(
@@ -691,12 +691,14 @@ dirserv_add_descriptor(routerinfo_t *ri, const char **msg, const char *source)
 static was_router_added_t
 dirserv_add_extrainfo(extrainfo_t *ei, const char **msg)
 {
-  const routerinfo_t *ri;
+  routerinfo_t *ri;
   int r;
   tor_assert(msg);
   *msg = NULL;
 
-  ri = router_get_by_id_digest(ei->cache_info.identity_digest);
+  /* Needs to be mutable so routerinfo_incompatible_with_extrainfo
+   * can mess with some of the flags in ri->cache_info. */
+  ri = router_get_mutable_by_digest(ei->cache_info.identity_digest);
   if (!ri) {
     *msg = "No corresponding router descriptor for extra-info descriptor";
     extrainfo_free(ei);
@@ -716,7 +718,8 @@ dirserv_add_extrainfo(extrainfo_t *ei, const char **msg)
     return ROUTER_BAD_EI;
   }
 
-  if ((r = routerinfo_incompatible_with_extrainfo(ri, ei, NULL, msg))) {
+  if ((r = routerinfo_incompatible_with_extrainfo(ri->identity_pkey, ei,
+                                                  &ri->cache_info, msg))) {
     extrainfo_free(ei);
     return r < 0 ? ROUTER_IS_ALREADY_KNOWN : ROUTER_BAD_EI;
   }
@@ -1131,8 +1134,11 @@ directory_caches_unknown_auth_certs(const or_options_t *options)
   return dir_server_mode(options) || options->BridgeRelay;
 }
 
-/** Return 1 if we want to keep descriptors, networkstatuses, etc around
- * and we're willing to serve them to others. Else return 0.
+/** Return 1 if we want to keep descriptors, networkstatuses, etc around.
+ * Else return 0.
+ * Check options->DirPort_set and directory_permits_begindir_requests()
+ * to see if we are willing to serve these directory documents to others via
+ * the DirPort and begindir-over-ORPort, respectively.
  */
 int
 directory_caches_dir_info(const or_options_t *options)
@@ -1424,13 +1430,13 @@ router_counts_toward_thresholds(const node_t *node, time_t now,
  *
  * Also, set the is_exit flag of each router appropriately. */
 static void
-dirserv_compute_performance_thresholds(const smartlist_t *routers,
-                                       digestmap_t *omit_as_sybil)
+dirserv_compute_performance_thresholds(digestmap_t *omit_as_sybil)
 {
   int n_active, n_active_nonexit, n_familiar;
   uint32_t *uptimes, *bandwidths_kb, *bandwidths_excluding_exits_kb;
   long *tks;
   double *mtbfs, *wfus;
+  smartlist_t *nodelist;
   time_t now = time(NULL);
   const or_options_t *options = get_options();
 
@@ -1448,27 +1454,28 @@ dirserv_compute_performance_thresholds(const smartlist_t *routers,
   guard_tk = 0;
   guard_wfu = 0;
 
+  nodelist_assert_ok();
+  nodelist = nodelist_get_list();
+
   /* Initialize arrays that will hold values for each router.  We'll
    * sort them and use that to compute thresholds. */
   n_active = n_active_nonexit = 0;
   /* Uptime for every active router. */
-  uptimes = tor_calloc(smartlist_len(routers), sizeof(uint32_t));
+  uptimes = tor_calloc(smartlist_len(nodelist), sizeof(uint32_t));
   /* Bandwidth for every active router. */
-  bandwidths_kb = tor_calloc(smartlist_len(routers), sizeof(uint32_t));
+  bandwidths_kb = tor_calloc(smartlist_len(nodelist), sizeof(uint32_t));
   /* Bandwidth for every active non-exit router. */
   bandwidths_excluding_exits_kb =
-    tor_calloc(smartlist_len(routers), sizeof(uint32_t));
+    tor_calloc(smartlist_len(nodelist), sizeof(uint32_t));
   /* Weighted mean time between failure for each active router. */
-  mtbfs = tor_calloc(smartlist_len(routers), sizeof(double));
+  mtbfs = tor_calloc(smartlist_len(nodelist), sizeof(double));
   /* Time-known for each active router. */
-  tks = tor_calloc(smartlist_len(routers), sizeof(long));
+  tks = tor_calloc(smartlist_len(nodelist), sizeof(long));
   /* Weighted fractional uptime for each active router. */
-  wfus = tor_calloc(smartlist_len(routers), sizeof(double));
-
-  nodelist_assert_ok();
+  wfus = tor_calloc(smartlist_len(nodelist), sizeof(double));
 
   /* Now, fill in the arrays. */
-  SMARTLIST_FOREACH_BEGIN(nodelist_get_list(), node_t *, node) {
+  SMARTLIST_FOREACH_BEGIN(nodelist, node_t *, node) {
     if (options->BridgeAuthoritativeDir &&
         node->ri &&
         node->ri->purpose != ROUTER_PURPOSE_BRIDGE)
@@ -1544,7 +1551,7 @@ dirserv_compute_performance_thresholds(const smartlist_t *routers,
    * fill wfus with the wfu of every such "familiar" router. */
   n_familiar = 0;
 
-  SMARTLIST_FOREACH_BEGIN(nodelist_get_list(), node_t *, node) {
+  SMARTLIST_FOREACH_BEGIN(nodelist, node_t *, node) {
       if (router_counts_toward_thresholds(node, now,
                                           omit_as_sybil, require_mbw)) {
         routerinfo_t *ri = node->ri;
@@ -1598,11 +1605,10 @@ dirserv_compute_performance_thresholds(const smartlist_t *routers,
  * networkstatus_getinfo_by_purpose().
  */
 void
-dirserv_compute_bridge_flag_thresholds(const smartlist_t *routers)
+dirserv_compute_bridge_flag_thresholds(void)
 {
-
   digestmap_t *omit_as_sybil = digestmap_new();
-  dirserv_compute_performance_thresholds(routers, omit_as_sybil);
+  dirserv_compute_performance_thresholds(omit_as_sybil);
   digestmap_free(omit_as_sybil, NULL);
 }
 
@@ -2136,9 +2142,9 @@ routers_make_ed_keys_unique(smartlist_t *routers)
 
   SMARTLIST_FOREACH_BEGIN(routers, routerinfo_t *, ri) {
     ri->omit_from_vote = 0;
-    if (ri->signing_key_cert == NULL)
+    if (ri->cache_info.signing_key_cert == NULL)
       continue; /* No ed key */
-    const uint8_t *pk = ri->signing_key_cert->signing_key.pubkey;
+    const uint8_t *pk = ri->cache_info.signing_key_cert->signing_key.pubkey;
     if ((ri2 = digest256map_get(by_ed_key, pk))) {
       /* Duplicate; must omit one.  Set the omit_from_vote flag in whichever
        * one has the earlier published_on. */
@@ -2873,7 +2879,7 @@ dirserv_generate_networkstatus_vote_obj(crypto_pk_t *private_key,
    * this must come before dirserv_compute_performance_thresholds() */
   dirserv_count_measured_bws(routers);
 
-  dirserv_compute_performance_thresholds(routers, omit_as_sybil);
+  dirserv_compute_performance_thresholds(omit_as_sybil);
 
   routerstatuses = smartlist_new();
   microdescriptors = smartlist_new();
@@ -2891,8 +2897,9 @@ dirserv_generate_networkstatus_vote_obj(crypto_pk_t *private_key,
       set_routerstatus_from_routerinfo(rs, node, ri, now,
                                        listbadexits);
 
-      if (ri->signing_key_cert) {
-        memcpy(vrs->ed25519_id, ri->signing_key_cert->signing_key.pubkey,
+      if (ri->cache_info.signing_key_cert) {
+        memcpy(vrs->ed25519_id,
+               ri->cache_info.signing_key_cert->signing_key.pubkey,
                ED25519_PUBKEY_LEN);
       }
 

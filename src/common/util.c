@@ -1723,6 +1723,7 @@ parse_iso_time_(const char *cp, time_t *t, int strict)
   st_tm.tm_hour = hour;
   st_tm.tm_min = minute;
   st_tm.tm_sec = second;
+  st_tm.tm_wday = 0; /* Should be ignored. */
 
   if (st_tm.tm_year < 70) {
     char *esc = esc_for_log(cp);
@@ -1790,6 +1791,7 @@ parse_http_time(const char *date, struct tm *tm)
   tm->tm_hour = (int)tm_hour;
   tm->tm_min = (int)tm_min;
   tm->tm_sec = (int)tm_sec;
+  tm->tm_wday = 0; /* Leave this unset. */
 
   month[3] = '\0';
   /* Okay, now decode the month. */
@@ -3928,8 +3930,13 @@ format_helper_exit_status(unsigned char child_state, int saved_errno,
 /* Maximum number of file descriptors, if we cannot get it via sysconf() */
 #define DEFAULT_MAX_FD 256
 
-/** Terminate the process of <b>process_handle</b>.
- *  Code borrowed from Python's os.kill. */
+/** Terminate the process of <b>process_handle</b>, if that process has not
+ * already exited.
+ *
+ * Return 0 if we succeeded in terminating the process (or if the process
+ * already exited), and -1 if we tried to kill the process but failed.
+ *
+ * Based on code originally borrowed from Python's os.kill. */
 int
 tor_terminate_process(process_handle_t *process_handle)
 {
@@ -3949,7 +3956,7 @@ tor_terminate_process(process_handle_t *process_handle)
   }
 #endif
 
-  return -1;
+  return 0; /* We didn't need to kill the process, so report success */
 }
 
 /** Return the Process ID of <b>process_handle</b>. */

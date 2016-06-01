@@ -24,9 +24,9 @@
 /** A value which, when masked out of a pointer, produces a maximally aligned
  * pointer. */
 #if MEMAREA_ALIGN == 4
-#define MEMAREA_ALIGN_MASK 3lu
+#define MEMAREA_ALIGN_MASK ((uintptr_t)3)
 #elif MEMAREA_ALIGN == 8
-#define MEMAREA_ALIGN_MASK 7lu
+#define MEMAREA_ALIGN_MASK ((uintptr_t)7)
 #else
 #error "void* is neither 4 nor 8 bytes long. I don't know how to align stuff."
 #endif
@@ -83,8 +83,7 @@ typedef struct memarea_chunk_t {
   struct memarea_chunk_t *next_chunk;
   size_t mem_size; /**< How much RAM is available in mem, total? */
   char *next_mem; /**< Next position in mem to allocate data at.  If it's
-                   * greater than or equal to mem+mem_size, this chunk is
-                   * full. */
+                   * equal to mem+mem_size, this chunk is full. */
 #ifdef USE_ALIGNED_ATTRIBUTE
   /** Actual content of the memory chunk. */
   char mem[FLEXIBLE_ARRAY_MEMBER] __attribute__((aligned(MEMAREA_ALIGN)));
@@ -205,7 +204,10 @@ memarea_alloc(memarea_t *area, size_t sz)
   tor_assert(sz < SIZE_T_CEILING);
   if (sz == 0)
     sz = 1;
-  if (chunk->next_mem+sz > chunk->U_MEM+chunk->mem_size) {
+  tor_assert(chunk->next_mem <= chunk->U_MEM + chunk->mem_size);
+  const size_t space_remaining =
+    (chunk->U_MEM + chunk->mem_size) - chunk->next_mem;
+  if (sz > space_remaining) {
     if (sz+CHUNK_HEADER_SIZE >= CHUNK_SIZE) {
       /* This allocation is too big.  Stick it in a special chunk, and put
        * that chunk second in the list. */

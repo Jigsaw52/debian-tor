@@ -148,6 +148,22 @@ get_n_authorities(dirinfo_type_t type)
   return n;
 }
 
+/** Initialise schedule, want_authority, and increment on in the download
+ * status dlstatus, then call download_status_reset() on it.
+ * It is safe to call this function or download_status_reset() multiple times
+ * on a new dlstatus. But it should *not* be called after a dlstatus has been
+ * used to count download attempts or failures. */
+static void
+download_status_cert_init(download_status_t *dlstatus)
+{
+  dlstatus->schedule = DL_SCHED_CONSENSUS;
+  dlstatus->want_authority = DL_WANT_ANY_DIRSERVER;
+  dlstatus->increment_on = DL_SCHED_INCREMENT_FAILURE;
+
+  /* Use the new schedule to set next_attempt_at */
+  download_status_reset(dlstatus);
+}
+
 /** Reset the download status of a specified element in a dsmap */
 static void
 download_status_reset_by_sk_in_cl(cert_list_t *cl, const char *digest)
@@ -168,6 +184,7 @@ download_status_reset_by_sk_in_cl(cert_list_t *cl, const char *digest)
     /* Insert before we reset */
     dlstatus = tor_malloc_zero(sizeof(*dlstatus));
     dsmap_set(cl->dl_status_map, digest, dlstatus);
+    download_status_cert_init(dlstatus);
   }
   tor_assert(dlstatus);
   /* Go ahead and reset it */
@@ -206,7 +223,7 @@ download_status_is_ready_by_sk_in_cl(cert_list_t *cl,
      * too.
      */
     dlstatus = tor_malloc_zero(sizeof(*dlstatus));
-    download_status_reset(dlstatus);
+    download_status_cert_init(dlstatus);
     dsmap_set(cl->dl_status_map, digest, dlstatus);
     rv = 1;
   }
@@ -225,7 +242,7 @@ get_cert_list(const char *id_digest)
   cl = digestmap_get(trusted_dir_certs, id_digest);
   if (!cl) {
     cl = tor_malloc_zero(sizeof(cert_list_t));
-    cl->dl_status_by_id.schedule = DL_SCHED_CONSENSUS;
+    download_status_cert_init(&cl->dl_status_by_id);
     cl->certs = smartlist_new();
     cl->dl_status_map = dsmap_new();
     digestmap_set(trusted_dir_certs, id_digest, cl);
@@ -896,7 +913,8 @@ authority_certs_fetch_missing(networkstatus_t *status, time_t now)
 
     if (smartlist_len(fps) > 1) {
       resource = smartlist_join_strings(fps, "", 0, NULL);
-      /* XXX - do we want certs from authorities or mirrors? - teor */
+      /* We want certs from mirrors, because they will almost always succeed.
+       */
       directory_get_from_dirserver(DIR_PURPOSE_FETCH_CERTIFICATE, 0,
                                    resource, PDS_RETRY_IF_NO_SERVERS,
                                    DL_WANT_ANY_DIRSERVER);
@@ -942,7 +960,8 @@ authority_certs_fetch_missing(networkstatus_t *status, time_t now)
 
     if (smartlist_len(fp_pairs) > 1) {
       resource = smartlist_join_strings(fp_pairs, "", 0, NULL);
-      /* XXX - do we want certs from authorities or mirrors? - teor */
+      /* We want certs from mirrors, because they will almost always succeed.
+       */
       directory_get_from_dirserver(DIR_PURPOSE_FETCH_CERTIFICATE, 0,
                                    resource, PDS_RETRY_IF_NO_SERVERS,
                                    DL_WANT_ANY_DIRSERVER);
@@ -1597,11 +1616,10 @@ router_picked_poor_directory_log(const routerstatus_t *rs)
   STMT_BEGIN                                                                  \
     if (result == NULL && try_ip_pref && options->ClientUseIPv4               \
         && fascist_firewall_use_ipv6(options) && !server_mode(options)        \
-        && n_not_preferred && !n_busy) {                                      \
+        && !n_busy) {                                                         \
       n_excluded = 0;                                                         \
       n_busy = 0;                                                             \
       try_ip_pref = 0;                                                        \
-      n_not_preferred = 0;                                                    \
       goto retry_label;                                                       \
     }                                                                         \
   STMT_END                                                                    \
@@ -1620,7 +1638,6 @@ router_picked_poor_directory_log(const routerstatus_t *rs)
       n_excluded = 0;                                                         \
       n_busy = 0;                                                             \
       try_ip_pref = 1;                                                        \
-      n_not_preferred = 0;                                                    \
       goto retry_label;                                                       \
     }                                                                         \
   STMT_END
@@ -1673,7 +1690,7 @@ router_pick_directory_server_impl(dirinfo_type_t type, int flags,
   const int no_microdesc_fetching = (flags & PDS_NO_EXISTING_MICRODESC_FETCH);
   const int for_guard = (flags & PDS_FOR_GUARD);
   int try_excluding = 1, n_excluded = 0, n_busy = 0;
-  int try_ip_pref = 1, n_not_preferred = 0;
+  int try_ip_pref = 1;
 
   if (!consensus)
     return NULL;
@@ -1687,8 +1704,9 @@ router_pick_directory_server_impl(dirinfo_type_t type, int flags,
   overloaded_direct = smartlist_new();
   overloaded_tunnel = smartlist_new();
 
-  const int skip_or = router_skip_or_reachability(options, try_ip_pref);
-  const int skip_dir = router_skip_dir_reachability(options, try_ip_pref);
+  const int skip_or_fw = router_skip_or_reachability(options, try_ip_pref);
+  const int skip_dir_fw = router_skip_dir_reachability(options, try_ip_pref);
+  const int must_have_or = directory_must_use_begindir(options);
 
   /* Find all the running dirservers we know about. */
   SMARTLIST_FOREACH_BEGIN(nodelist_get_list(), const node_t *, node) {
@@ -1740,18 +1758,16 @@ router_pick_directory_server_impl(dirinfo_type_t type, int flags,
      * address for each router (if any). (To ensure correct load-balancing
      * we try routers that only have one address both times.)
      */
-    if (!fascistfirewall || skip_or ||
-        fascist_firewall_allows_rs(status, FIREWALL_OR_CONNECTION,
-                                   try_ip_pref))
+    if (!fascistfirewall || skip_or_fw ||
+        fascist_firewall_allows_node(node, FIREWALL_OR_CONNECTION,
+                                     try_ip_pref))
       smartlist_add(is_trusted ? trusted_tunnel :
                     is_overloaded ? overloaded_tunnel : tunnel, (void*)node);
-    else if (skip_dir ||
-             fascist_firewall_allows_rs(status, FIREWALL_DIR_CONNECTION,
-                                        try_ip_pref))
+    else if (!must_have_or && (skip_dir_fw ||
+             fascist_firewall_allows_node(node, FIREWALL_DIR_CONNECTION,
+                                          try_ip_pref)))
       smartlist_add(is_trusted ? trusted_direct :
                     is_overloaded ? overloaded_direct : direct, (void*)node);
-    else if (!tor_addr_is_null(&status->ipv6_addr))
-      ++n_not_preferred;
   } SMARTLIST_FOREACH_END(node);
 
   if (smartlist_len(tunnel)) {
@@ -1839,7 +1855,7 @@ router_pick_trusteddirserver_impl(const smartlist_t *sourcelist,
   smartlist_t *pick_from;
   int n_busy = 0;
   int try_excluding = 1, n_excluded = 0;
-  int try_ip_pref = 1, n_not_preferred = 0;
+  int try_ip_pref = 1;
 
   if (!sourcelist)
     return NULL;
@@ -1851,8 +1867,9 @@ router_pick_trusteddirserver_impl(const smartlist_t *sourcelist,
   overloaded_direct = smartlist_new();
   overloaded_tunnel = smartlist_new();
 
-  const int skip_or = router_skip_or_reachability(options, try_ip_pref);
-  const int skip_dir = router_skip_dir_reachability(options, try_ip_pref);
+  const int skip_or_fw = router_skip_or_reachability(options, try_ip_pref);
+  const int skip_dir_fw = router_skip_dir_reachability(options, try_ip_pref);
+  const int must_have_or = directory_must_use_begindir(options);
 
   SMARTLIST_FOREACH_BEGIN(sourcelist, const dir_server_t *, d)
     {
@@ -1888,16 +1905,14 @@ router_pick_trusteddirserver_impl(const smartlist_t *sourcelist,
        * address for each router (if any). (To ensure correct load-balancing
        * we try routers that only have one address both times.)
        */
-      if (!fascistfirewall || skip_or ||
+      if (!fascistfirewall || skip_or_fw ||
           fascist_firewall_allows_dir_server(d, FIREWALL_OR_CONNECTION,
                                              try_ip_pref))
         smartlist_add(is_overloaded ? overloaded_tunnel : tunnel, (void*)d);
-      else if (skip_dir ||
+      else if (!must_have_or && (skip_dir_fw ||
                fascist_firewall_allows_dir_server(d, FIREWALL_DIR_CONNECTION,
-                                                  try_ip_pref))
+                                                  try_ip_pref)))
         smartlist_add(is_overloaded ? overloaded_direct : direct, (void*)d);
-      else if (!tor_addr_is_null(&d->ipv6_addr))
-        ++n_not_preferred;
     }
   SMARTLIST_FOREACH_END(d);
 
@@ -2882,7 +2897,7 @@ routerinfo_free(routerinfo_t *router)
   tor_free(router->onion_curve25519_pkey);
   if (router->identity_pkey)
     crypto_pk_free(router->identity_pkey);
-  tor_cert_free(router->signing_key_cert);
+  tor_cert_free(router->cache_info.signing_key_cert);
   if (router->declared_family) {
     SMARTLIST_FOREACH(router->declared_family, char *, s, tor_free(s));
     smartlist_free(router->declared_family);
@@ -2901,7 +2916,7 @@ extrainfo_free(extrainfo_t *extrainfo)
 {
   if (!extrainfo)
     return;
-  tor_cert_free(extrainfo->signing_key_cert);
+  tor_cert_free(extrainfo->cache_info.signing_key_cert);
   tor_free(extrainfo->cache_info.signed_descriptor_body);
   tor_free(extrainfo->pending_sig);
 
@@ -2917,9 +2932,23 @@ signed_descriptor_free(signed_descriptor_t *sd)
     return;
 
   tor_free(sd->signed_descriptor_body);
+  tor_cert_free(sd->signing_key_cert);
 
   memset(sd, 99, sizeof(signed_descriptor_t)); /* Debug bad mem usage */
   tor_free(sd);
+}
+
+/** Copy src into dest, and steal all references inside src so that when
+ * we free src, we don't mess up dest. */
+static void
+signed_descriptor_move(signed_descriptor_t *dest,
+                       signed_descriptor_t *src)
+{
+  tor_assert(dest != src);
+  memcpy(dest, src, sizeof(signed_descriptor_t));
+  src->signed_descriptor_body = NULL;
+  src->signing_key_cert = NULL;
+  dest->routerlist_index = -1;
 }
 
 /** Extract a signed_descriptor_t from a general routerinfo, and free the
@@ -2931,9 +2960,7 @@ signed_descriptor_from_routerinfo(routerinfo_t *ri)
   signed_descriptor_t *sd;
   tor_assert(ri->purpose == ROUTER_PURPOSE_GENERAL);
   sd = tor_malloc_zero(sizeof(signed_descriptor_t));
-  memcpy(sd, &(ri->cache_info), sizeof(signed_descriptor_t));
-  sd->routerlist_index = -1;
-  ri->cache_info.signed_descriptor_body = NULL;
+  signed_descriptor_move(sd, &ri->cache_info);
   routerinfo_free(ri);
   return sd;
 }
@@ -3111,7 +3138,7 @@ extrainfo_insert,(routerlist_t *rl, extrainfo_t *ei, int warn_if_incompatible))
                      "Mismatch in digest in extrainfo map.");
     goto done;
   }
-  if (routerinfo_incompatible_with_extrainfo(ri, ei, sd,
+  if (routerinfo_incompatible_with_extrainfo(ri->identity_pkey, ei, sd,
                                              &compatibility_error_msg)) {
     char d1[HEX_DIGEST_LEN+1], d2[HEX_DIGEST_LEN+1];
     r = (ri->cache_info.extrainfo_is_bogus) ?
@@ -3419,9 +3446,7 @@ routerlist_reparse_old(routerlist_t *rl, signed_descriptor_t *sd)
                          0, 1, NULL, NULL);
   if (!ri)
     return NULL;
-  memcpy(&ri->cache_info, sd, sizeof(signed_descriptor_t));
-  sd->signed_descriptor_body = NULL; /* Steal reference. */
-  ri->cache_info.routerlist_index = -1;
+  signed_descriptor_move(&ri->cache_info, sd);
 
   routerlist_remove_old(rl, sd, -1);
 
@@ -5150,25 +5175,32 @@ router_differences_are_cosmetic(const routerinfo_t *r1, const routerinfo_t *r2)
   return 1;
 }
 
-/** Check whether <b>ri</b> (a.k.a. sd) is a router compatible with the
- * extrainfo document
- * <b>ei</b>.  If no router is compatible with <b>ei</b>, <b>ei</b> should be
+/** Check whether <b>sd</b> describes a router descriptor compatible with the
+ * extrainfo document <b>ei</b>.
+ *
+ * <b>identity_pkey</b> (which must also be provided) is RSA1024 identity key
+ * for the router. We use it to check the signature of the extrainfo document,
+ * if it has not already been checked.
+ *
+ * If no router is compatible with <b>ei</b>, <b>ei</b> should be
  * dropped.  Return 0 for "compatible", return 1 for "reject, and inform
  * whoever uploaded <b>ei</b>, and return -1 for "reject silently.".  If
  * <b>msg</b> is present, set *<b>msg</b> to a description of the
  * incompatibility (if any).
+ *
+ * Set the extrainfo_is_bogus field in <b>sd</b> if the digests matched
+ * but the extrainfo was nonetheless incompatible.
  **/
 int
-routerinfo_incompatible_with_extrainfo(const routerinfo_t *ri,
+routerinfo_incompatible_with_extrainfo(const crypto_pk_t *identity_pkey,
                                        extrainfo_t *ei,
                                        signed_descriptor_t *sd,
                                        const char **msg)
 {
   int digest_matches, digest256_matches, r=1;
-  tor_assert(ri);
+  tor_assert(identity_pkey);
+  tor_assert(sd);
   tor_assert(ei);
-  if (!sd)
-    sd = (signed_descriptor_t*)&ri->cache_info;
 
   if (ei->bad_sig) {
     if (msg) *msg = "Extrainfo signature was bad, or signed with wrong key.";
@@ -5180,27 +5212,28 @@ routerinfo_incompatible_with_extrainfo(const routerinfo_t *ri,
   /* Set digest256_matches to 1 if the digest is correct, or if no
    * digest256 was in the ri. */
   digest256_matches = tor_memeq(ei->digest256,
-                                ri->extra_info_digest256, DIGEST256_LEN);
+                                sd->extra_info_digest256, DIGEST256_LEN);
   digest256_matches |=
-    tor_mem_is_zero(ri->extra_info_digest256, DIGEST256_LEN);
+    tor_mem_is_zero(sd->extra_info_digest256, DIGEST256_LEN);
 
   /* The identity must match exactly to have been generated at the same time
    * by the same router. */
-  if (tor_memneq(ri->cache_info.identity_digest,
+  if (tor_memneq(sd->identity_digest,
                  ei->cache_info.identity_digest,
                  DIGEST_LEN)) {
     if (msg) *msg = "Extrainfo nickname or identity did not match routerinfo";
     goto err; /* different servers */
   }
 
-  if (! tor_cert_opt_eq(ri->signing_key_cert, ei->signing_key_cert)) {
+  if (! tor_cert_opt_eq(sd->signing_key_cert,
+                        ei->cache_info.signing_key_cert)) {
     if (msg) *msg = "Extrainfo signing key cert didn't match routerinfo";
     goto err; /* different servers */
   }
 
   if (ei->pending_sig) {
     char signed_digest[128];
-    if (crypto_pk_public_checksig(ri->identity_pkey,
+    if (crypto_pk_public_checksig(identity_pkey,
                        signed_digest, sizeof(signed_digest),
                        ei->pending_sig, ei->pending_sig_len) != DIGEST_LEN ||
         tor_memneq(signed_digest, ei->cache_info.signed_descriptor_digest,
@@ -5211,7 +5244,7 @@ routerinfo_incompatible_with_extrainfo(const routerinfo_t *ri,
       goto err; /* Bad signature, or no match. */
     }
 
-    ei->cache_info.send_unencrypted = ri->cache_info.send_unencrypted;
+    ei->cache_info.send_unencrypted = sd->send_unencrypted;
     tor_free(ei->pending_sig);
   }
 

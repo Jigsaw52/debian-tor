@@ -2065,6 +2065,10 @@ typedef struct signed_descriptor_t {
   time_t published_on;
   /** For routerdescs only: digest of the corresponding extrainfo. */
   char extra_info_digest[DIGEST_LEN];
+  /** For routerdescs only: A SHA256-digest of the extrainfo (if any) */
+  char extra_info_digest256[DIGEST256_LEN];
+  /** Certificate for ed25519 signing key. */
+  struct tor_cert_st *signing_key_cert;
   /** For routerdescs only: Status of downloading the corresponding
    * extrainfo. */
   download_status_t ei_dl_status;
@@ -2096,8 +2100,6 @@ typedef int16_t country_t;
 /** Information about another onion router in the network. */
 typedef struct {
   signed_descriptor_t cache_info;
-  /** A SHA256-digest of the extrainfo (if any) */
-  char extra_info_digest256[DIGEST256_LEN];
   char *nickname; /**< Human-readable OR name. */
 
   uint32_t addr; /**< IPv4 address of OR, in host order. */
@@ -2115,8 +2117,6 @@ typedef struct {
   crypto_pk_t *identity_pkey;  /**< Public RSA key for signing. */
   /** Public curve25519 key for onions */
   curve25519_public_key_t *onion_curve25519_pkey;
-  /** Certificate for ed25519 signing key */
-  struct tor_cert_st *signing_key_cert;
   /** What's the earliest expiration time on all the certs in this
    * routerinfo? */
   time_t cert_expiration_time;
@@ -2192,8 +2192,6 @@ typedef struct extrainfo_t {
   uint8_t digest256[DIGEST256_LEN];
   /** The router's nickname. */
   char nickname[MAX_NICKNAME_LEN+1];
-  /** Certificate for ed25519 signing key */
-  struct tor_cert_st *signing_key_cert;
   /** True iff we found the right key for this extra-info, verified the
    * signature, and found it to be bad. */
   unsigned int bad_sig : 1;
@@ -2215,7 +2213,7 @@ typedef struct routerstatus_t {
   /** Digest of the router's most recent descriptor or microdescriptor.
    * If it's a descriptor, we only use the first DIGEST_LEN bytes. */
   char descriptor_digest[DIGEST256_LEN];
-  uint32_t addr; /**< IPv4 address for this router. */
+  uint32_t addr; /**< IPv4 address for this router, in host order. */
   uint16_t or_port; /**< OR port for this router. */
   uint16_t dir_port; /**< Directory port for this router. */
   tor_addr_t ipv6_addr; /**< IPv6 address for this router. */
@@ -4188,7 +4186,7 @@ typedef struct {
    * This schedule is incremented by (potentially concurrent) connection
    * attempts, unlike other schedules, which are incremented by connection
    * failures.  Only altered on testing networks. */
-  smartlist_t *TestingClientBootstrapConsensusAuthorityDownloadSchedule;
+  smartlist_t *ClientBootstrapConsensusAuthorityDownloadSchedule;
 
   /** Schedule for when clients should download consensuses from fallback
    * directory mirrors if they are bootstrapping (that is, they don't have a
@@ -4198,7 +4196,7 @@ typedef struct {
    * This schedule is incremented by (potentially concurrent) connection
    * attempts, unlike other schedules, which are incremented by connection
    * failures.  Only altered on testing networks. */
-  smartlist_t *TestingClientBootstrapConsensusFallbackDownloadSchedule;
+  smartlist_t *ClientBootstrapConsensusFallbackDownloadSchedule;
 
   /** Schedule for when clients should download consensuses from authorities
    * if they are bootstrapping (that is, they don't have a usable, reasonably
@@ -4208,7 +4206,7 @@ typedef struct {
    * This schedule is incremented by (potentially concurrent) connection
    * attempts, unlike other schedules, which are incremented by connection
    * failures.  Only altered on testing networks. */
-  smartlist_t *TestingClientBootstrapConsensusAuthorityOnlyDownloadSchedule;
+  smartlist_t *ClientBootstrapConsensusAuthorityOnlyDownloadSchedule;
 
   /** Schedule for when clients should download bridge descriptors.  Only
    * altered on testing networks. */
@@ -4230,17 +4228,17 @@ typedef struct {
   /** How many times will a client try to fetch a consensus while
    * bootstrapping using a list of fallback directories, before it gives up?
    * Only altered on testing networks. */
-  int TestingClientBootstrapConsensusMaxDownloadTries;
+  int ClientBootstrapConsensusMaxDownloadTries;
 
   /** How many times will a client try to fetch a consensus while
    * bootstrapping using only a list of authorities, before it gives up?
    * Only altered on testing networks. */
-  int TestingClientBootstrapConsensusAuthorityOnlyMaxDownloadTries;
+  int ClientBootstrapConsensusAuthorityOnlyMaxDownloadTries;
 
   /** How many simultaneous in-progress connections will we make when trying
    * to fetch a consensus before we wait for one to complete, timeout, or
    * error out?  Only altered on testing networks. */
-  int TestingClientBootstrapConsensusMaxInProgressTries;
+  int ClientBootstrapConsensusMaxInProgressTries;
 
   /** How many times will we try to download a router's descriptor before
    * giving up?  Only altered on testing networks. */

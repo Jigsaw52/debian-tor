@@ -4,7 +4,7 @@ dnl Copyright (c) 2007-2015, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
 AC_PREREQ([2.63])
-AC_INIT([tor],[0.2.8.2-alpha])
+AC_INIT([tor],[0.2.8.3-alpha])
 AC_CONFIG_SRCDIR([src/or/main.c])
 AC_CONFIG_MACRO_DIR([m4])
 
@@ -58,8 +58,6 @@ fi
 
 AM_CONDITIONAL(UNITTESTS_ENABLED, test "x$enable_unittests" != "xno")
 AM_CONDITIONAL(COVERAGE_ENABLED, test "x$enable_coverage" = "xyes")
-AM_CONDITIONAL(UNITTESTS_ENABLED, test x$enable_unittests != xno)
-AM_CONDITIONAL(COVERAGE_ENABLED, test x$enable_coverage = xyes)
 AM_CONDITIONAL(DISABLE_ASSERTS_IN_UNIT_TESTS, test "x$enable_asserts_in_tests" = "xno")
 
 if test "$enable_static_tor" = "yes"; then
@@ -763,7 +761,7 @@ AC_COMPILE_IFELSE([AC_LANG_PROGRAM([], [
 #endif])], have_clang=yes, have_clang=no)
 
 if test "x$enable_gcc_hardening" != "xno"; then
-    CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=2"
+    CFLAGS="$CFLAGS -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2"
     if test "x$have_clang" = "xyes"; then
         TOR_CHECK_CFLAGS(-Qunused-arguments)
     fi
@@ -835,6 +833,7 @@ dnl Check for libscrypt
 if test "x$enable_libscrypt" != "xno"; then
   AC_CHECK_HEADERS([libscrypt.h])
   AC_SEARCH_LIBS(libscrypt_scrypt, [scrypt])
+  AC_CHECK_FUNCS([libscrypt_scrypt])
 fi
 
 dnl ============================================================
