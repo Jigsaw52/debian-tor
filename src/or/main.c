@@ -2004,18 +2004,24 @@ check_fw_helper_app_callback(time_t now, const or_options_t *options)
   return PORT_FORWARDING_CHECK_INTERVAL;
 }
 
+/** Callback to write heartbeat message in the logs. */
 static int
 heartbeat_callback(time_t now, const or_options_t *options)
 {
   static int first = 1;
-  /* 12. write the heartbeat message */
+
+  /* Check if heartbeat is disabled */
+  if (!options->HeartbeatPeriod) {
+    return PERIODIC_EVENT_NO_UPDATE;
+  }
+
+  /* Write the heartbeat message */
   if (first) {
     first = 0; /* Skip the first one. */
   } else {
     log_heartbeat(now);
   }
-  /* XXXX This isn't such a good way to handle possible changes in the
-   * callback event */
+
   return options->HeartbeatPeriod;
 }
 
@@ -3524,6 +3530,7 @@ sandbox_init_filter(void)
     OPEN_DATADIR2_SUFFIX("stats", "exit-stats", ".tmp");
     OPEN_DATADIR2_SUFFIX("stats", "buffer-stats", ".tmp");
     OPEN_DATADIR2_SUFFIX("stats", "conn-stats", ".tmp");
+    OPEN_DATADIR2_SUFFIX("stats", "hidserv-stats", ".tmp");
 
     OPEN_DATADIR("approved-routers");
     OPEN_DATADIR_SUFFIX("fingerprint", ".tmp");
@@ -3562,6 +3569,7 @@ sandbox_init_filter(void)
              get_datadir_fname2("keys", "secret_onion_key_ntor.old"));
 
     STAT_DATADIR("keys");
+    OPEN_DATADIR("stats");
     STAT_DATADIR("stats");
     STAT_DATADIR2("stats", "dirreq-stats");
   }
