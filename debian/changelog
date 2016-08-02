@@ -1,8 +1,8 @@
-tor (0.2.8.5-rc-1) experimental; urgency=medium
+tor (0.2.8.6-1) unstable; urgency=medium
 
-  * New upstream version.
+  * New upstream version, upload 0.2.8.x tree to unstable.
 
- -- Peter Palfrader <weasel@debian.org>  Mon, 11 Jul 2016 14:33:45 +0200
+ -- Peter Palfrader <weasel@debian.org>  Tue, 02 Aug 2016 18:07:21 +0200
 
 tor (0.2.8.4-rc-1) experimental; urgency=medium
 
