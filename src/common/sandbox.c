@@ -212,6 +212,10 @@ static int filter_nopar_gen[] = {
     SCMP_SYS(getrandom),
 #endif
 
+#ifdef __NR_sysinfo
+    // qsort uses this..
+    SCMP_SYS(sysinfo),
+#endif
     /*
      * These socket syscalls are not required on x86_64 and not supported with
      * some libseccomp versions (eg: 1.0.1)
@@ -585,7 +589,7 @@ static int
 sb_socket(scmp_filter_ctx ctx, sandbox_cfg_t *filter)
 {
   int rc = 0;
-  int i;
+  int i, j;
   (void) filter;
 
 #ifdef __i386__
@@ -602,20 +606,19 @@ sb_socket(scmp_filter_ctx ctx, sandbox_cfg_t *filter)
 
   for (i = 0; i < 2; ++i) {
     const int pf = i ? PF_INET : PF_INET6;
-
-    rc = seccomp_rule_add_3(ctx, SCMP_ACT_ALLOW, SCMP_SYS(socket),
-      SCMP_CMP(0, SCMP_CMP_EQ, pf),
-      SCMP_CMP_MASKED(1, SOCK_CLOEXEC|SOCK_NONBLOCK, SOCK_STREAM),
-      SCMP_CMP(2, SCMP_CMP_EQ, IPPROTO_TCP));
-    if (rc)
-      return rc;
-
-    rc = seccomp_rule_add_3(ctx, SCMP_ACT_ALLOW, SCMP_SYS(socket),
-      SCMP_CMP(0, SCMP_CMP_EQ, pf),
-      SCMP_CMP_MASKED(1, SOCK_CLOEXEC|SOCK_NONBLOCK, SOCK_DGRAM),
-      SCMP_CMP(2, SCMP_CMP_EQ, IPPROTO_IP));
-    if (rc)
-      return rc;
+    for (j=0; j < 3; ++j) {
+      const int type     = (j == 0) ? SOCK_STREAM :
+                                      SOCK_DGRAM;
+      const int protocol = (j == 0) ? IPPROTO_TCP :
+                           (j == 1) ? IPPROTO_IP :
+                                      IPPROTO_UDP;
+      rc = seccomp_rule_add_3(ctx, SCMP_ACT_ALLOW, SCMP_SYS(socket),
+        SCMP_CMP(0, SCMP_CMP_EQ, pf),
+        SCMP_CMP_MASKED(1, SOCK_CLOEXEC|SOCK_NONBLOCK, type),
+        SCMP_CMP(2, SCMP_CMP_EQ, protocol));
+      if (rc)
+        return rc;
+    }
   }
 
   rc = seccomp_rule_add_3(ctx, SCMP_ACT_ALLOW, SCMP_SYS(socket),
@@ -701,6 +704,14 @@ sb_setsockopt(scmp_filter_ctx ctx, sandbox_cfg_t *filter)
   if (rc)
     return rc;
 
+#ifdef HAVE_SYSTEMD
+  rc = seccomp_rule_add_2(ctx, SCMP_ACT_ALLOW, SCMP_SYS(setsockopt),
+      SCMP_CMP(1, SCMP_CMP_EQ, SOL_SOCKET),
+      SCMP_CMP(2, SCMP_CMP_EQ, SO_SNDBUFFORCE));
+  if (rc)
+    return rc;
+#endif
+
 #ifdef IP_TRANSPARENT
   rc = seccomp_rule_add_2(ctx, SCMP_ACT_ALLOW, SCMP_SYS(setsockopt),
       SCMP_CMP(1, SCMP_CMP_EQ, SOL_IP),
@@ -733,6 +744,14 @@ sb_getsockopt(scmp_filter_ctx ctx, sandbox_cfg_t *filter)
       SCMP_CMP(2, SCMP_CMP_EQ, SO_ERROR));
   if (rc)
     return rc;
+
+#ifdef HAVE_SYSTEMD
+  rc = seccomp_rule_add_2(ctx, SCMP_ACT_ALLOW, SCMP_SYS(getsockopt),
+      SCMP_CMP(1, SCMP_CMP_EQ, SOL_SOCKET),
+      SCMP_CMP(2, SCMP_CMP_EQ, SO_SNDBUF));
+  if (rc)
+    return rc;
+#endif
 
 #ifdef HAVE_LINUX_NETFILTER_IPV4_H
   rc = seccomp_rule_add_2(ctx, SCMP_ACT_ALLOW, SCMP_SYS(getsockopt),
