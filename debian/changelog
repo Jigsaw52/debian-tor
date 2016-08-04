@@ -4,8 +4,10 @@ tor (0.2.8.6-2) unstable; urgency=medium
     also.  This matches the systemd service file.
   * No longer create /var/run/tor in postinst -- it is created when services
     start.
+  * apparmor policy: let tor read /var/lib/tor/** (without it being the
+    owner of these files)
 
- -- Peter Palfrader <weasel@debian.org>  Thu, 04 Aug 2016 10:29:22 +0200
+ -- Peter Palfrader <weasel@debian.org>  Thu, 04 Aug 2016 20:27:55 +0200
 
 tor (0.2.8.6-1) unstable; urgency=medium
 
