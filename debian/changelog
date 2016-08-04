@@ -1,3 +1,10 @@
+tor (0.2.8.6-2) unstable; urgency=medium
+
+  * Update the system V init script to create /var/run/tor with mode 02755
+    also.  This matches the systemd service file.
+
+ -- Peter Palfrader <weasel@debian.org>  Thu, 04 Aug 2016 10:28:00 +0200
+
 tor (0.2.8.6-1) unstable; urgency=medium
 
   * New upstream version, upload 0.2.8.x tree to unstable.
