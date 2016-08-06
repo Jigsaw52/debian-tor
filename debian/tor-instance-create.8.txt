@@ -15,7 +15,7 @@ SYNOPSIS
 DESCRIPTION
 -----------
 The Tor Debian package supports running multiple instances of the Tor
-daemon.  This can be useful if you want to run multiple relays or brdige
+daemon.  This can be useful if you want to run multiple relays or bridge
 relays on a single system, of if you want to provide a hidden service in
 addition to running a relay.
 
