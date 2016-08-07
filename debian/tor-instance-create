@@ -86,7 +86,7 @@ install -d "$etc"
 [ -e "$torrc" ] || cat > "$torrc" << EOF
 # This is the tor configuration file for tor instance $name.
 #
-# To start/reload/etc this instance, run "systemctl start tor@$name " (or reload, or..).
+# To start/reload/etc this instance, run "systemctl start tor@$name" (or reload, or..).
 # This instance will run as user $user; its data directory is $home.
 #
 # Append to the list of socks interfaces configured via
