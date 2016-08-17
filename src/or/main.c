@@ -57,6 +57,7 @@
 #include "routerlist.h"
 #include "routerparse.h"
 #include "scheduler.h"
+#include "shared_random.h"
 #include "statefile.h"
 #include "status.h"
 #include "util_process.h"
@@ -68,11 +69,7 @@
 #include "memarea.h"
 #include "sandbox.h"
 
-#ifdef HAVE_EVENT2_EVENT_H
 #include <event2/event.h>
-#else
-#include <event.h>
-#endif
 
 #ifdef USE_BUFFEREVENTS
 #include <event2/bufferevent.h>
@@ -962,7 +959,7 @@ conn_close_if_marked(int i)
           connection_stop_writing(conn);
         }
         if (connection_is_reading(conn)) {
-          /* XXXX024 We should make this code unreachable; if a connection is
+          /* XXXX+ We should make this code unreachable; if a connection is
            * marked for close and flushing, there is no point in reading to it
            * at all. Further, checking at this point is a bit of a hack: it
            * would make much more sense to react in
@@ -1632,8 +1629,8 @@ rotate_x509_certificate_callback(time_t now, const or_options_t *options)
    * TLS context. */
   log_info(LD_GENERAL,"Rotating tls context.");
   if (router_initialize_tls_context() < 0) {
-    log_warn(LD_BUG, "Error reinitializing TLS context");
-    tor_assert(0);
+    log_err(LD_BUG, "Error reinitializing TLS context");
+    tor_assert_unreached();
   }
 
   /* We also make sure to rotate the TLS connections themselves if they've
@@ -2220,8 +2217,8 @@ ip_address_changed(int at_interface)
 {
   const or_options_t *options = get_options();
   int server = server_mode(options);
-  int exit_reject_private = (server && options->ExitRelay
-                             && options->ExitPolicyRejectPrivate);
+  int exit_reject_interfaces = (server && options->ExitRelay
+                                && options->ExitPolicyRejectLocalInterfaces);
 
   if (at_interface) {
     if (! server) {
@@ -2239,8 +2236,8 @@ ip_address_changed(int at_interface)
   }
 
   /* Exit relays incorporate interface addresses in their exit policies when
-   * ExitPolicyRejectPrivate is set */
-  if (exit_reject_private || (server && !at_interface)) {
+   * ExitPolicyRejectLocalInterfaces is set */
+  if (exit_reject_interfaces || (server && !at_interface)) {
     mark_my_descriptor_dirty("IP address changed");
   }
 
@@ -2447,6 +2444,13 @@ do_main_loop(void)
     cpu_init();
   }
 
+  /* Setup shared random protocol subsystem. */
+  if (authdir_mode_publishes_statuses(get_options())) {
+    if (sr_init(1) < 0) {
+      return -1;
+    }
+  }
+
   /* set up once-a-second callback. */
   if (! second_timer) {
     struct timeval one_second;
@@ -2558,9 +2562,7 @@ run_main_loop_once(void)
         return -1;
 #endif
     } else {
-      if (ERRNO_IS_EINPROGRESS(e))
-        log_warn(LD_BUG,
-                 "libevent call returned EINPROGRESS? Please report.");
+      tor_assert_nonfatal_once(! ERRNO_IS_EINPROGRESS(e));
       log_debug(LD_NET,"libevent call interrupted.");
       /* You can't trust the results of this poll(). Go back to the
        * top of the big for loop. */
@@ -2690,9 +2692,6 @@ get_uptime,(void))
 {
   return stats_n_seconds_working;
 }
-
-extern uint64_t rephist_total_alloc;
-extern uint32_t rephist_total_num;
 
 /**
  * Write current memory usage information to the log.
@@ -3050,6 +3049,9 @@ tor_init(int argc, char *argv[])
     log_warn(LD_NET, "Problem initializing libevent RNG.");
   }
 
+  /* Scan/clean unparseable descroptors; after reading config */
+  routerparse_init();
+
   return 0;
 }
 
@@ -3151,6 +3153,7 @@ tor_free_all(int postfork)
   scheduler_free_all();
   nodelist_free_all();
   microdesc_free_all();
+  routerparse_free_all();
   ext_orport_free_all();
   control_free_all();
   sandbox_free_getaddrinfo_cache();
@@ -3215,6 +3218,9 @@ tor_cleanup(void)
       accounting_record_bandwidth_usage(now, get_or_state());
     or_state_mark_dirty(get_or_state(), 0); /* force an immediate save. */
     or_state_save(now);
+    if (authdir_mode(options)) {
+      sr_save_and_cleanup();
+    }
     if (authdir_mode_tests_reachability(options))
       rep_hist_record_mtbf_data(now, 0);
     keypin_close_journal();
@@ -3373,6 +3379,7 @@ sandbox_init_filter(void)
   OPEN_DATADIR_SUFFIX("cached-extrainfo.new", ".tmp");
   OPEN_DATADIR("cached-extrainfo.tmp.tmp");
   OPEN_DATADIR_SUFFIX("state", ".tmp");
+  OPEN_DATADIR_SUFFIX("sr-state", ".tmp");
   OPEN_DATADIR_SUFFIX("unparseable-desc", ".tmp");
   OPEN_DATADIR_SUFFIX("v3-status-votes", ".tmp");
   OPEN_DATADIR("key-pinning-journal");
@@ -3425,6 +3432,7 @@ sandbox_init_filter(void)
   RENAME_SUFFIX("cached-extrainfo", ".new");
   RENAME_SUFFIX("cached-extrainfo.new", ".tmp");
   RENAME_SUFFIX("state", ".tmp");
+  RENAME_SUFFIX("sr-state", ".tmp");
   RENAME_SUFFIX("unparseable-desc", ".tmp");
   RENAME_SUFFIX("v3-status-votes", ".tmp");
 
@@ -3637,6 +3645,8 @@ tor_main(int argc, char *argv[])
         (char*) sandbox_intern_string("/dev/urandom"));
 #endif
   }
+
+  monotime_init();
 
   switch (get_options()->command) {
   case CMD_RUN_TOR:

@@ -604,7 +604,7 @@ rep_hist_get_weighted_time_known(const char *id, time_t when)
 int
 rep_hist_have_measured_enough_stability(void)
 {
-  /* XXXX023 This doesn't do so well when we change our opinion
+  /* XXXX++ This doesn't do so well when we change our opinion
    * as to whether we're tracking router stability. */
   return started_tracking_stability < time(NULL) - 4*60*60;
 }
@@ -743,14 +743,15 @@ rep_history_clean(time_t before)
 
   orhist_it = digestmap_iter_init(history_map);
   while (!digestmap_iter_done(orhist_it)) {
-    int remove;
+    int should_remove;
     digestmap_iter_get(orhist_it, &d1, &or_history_p);
     or_history = or_history_p;
 
-    remove = authority ? (or_history->total_run_weights < STABILITY_EPSILON &&
+    should_remove = authority ?
+                       (or_history->total_run_weights < STABILITY_EPSILON &&
                           !or_history->start_of_run)
                        : (or_history->changed < before);
-    if (remove) {
+    if (should_remove) {
       orhist_it = digestmap_iter_next_rmv(history_map, orhist_it);
       free_or_history(or_history);
       continue;
@@ -1074,7 +1075,8 @@ rep_hist_load_mtbf_data(time_t now)
       if (mtbf_idx > i)
         i = mtbf_idx;
     }
-    if (base16_decode(digest, DIGEST_LEN, hexbuf, HEX_DIGEST_LEN) < 0) {
+    if (base16_decode(digest, DIGEST_LEN,
+                      hexbuf, HEX_DIGEST_LEN) != DIGEST_LEN) {
       log_warn(LD_HIST, "Couldn't hex string %s", escaped(hexbuf));
       continue;
     }
@@ -2293,16 +2295,16 @@ void
 rep_hist_add_buffer_stats(double mean_num_cells_in_queue,
     double mean_time_cells_in_queue, uint32_t processed_cells)
 {
-  circ_buffer_stats_t *stat;
+  circ_buffer_stats_t *stats;
   if (!start_of_buffer_stats_interval)
     return; /* Not initialized. */
-  stat = tor_malloc_zero(sizeof(circ_buffer_stats_t));
-  stat->mean_num_cells_in_queue = mean_num_cells_in_queue;
-  stat->mean_time_cells_in_queue = mean_time_cells_in_queue;
-  stat->processed_cells = processed_cells;
+  stats = tor_malloc_zero(sizeof(circ_buffer_stats_t));
+  stats->mean_num_cells_in_queue = mean_num_cells_in_queue;
+  stats->mean_time_cells_in_queue = mean_time_cells_in_queue;
+  stats->processed_cells = processed_cells;
   if (!circuits_for_buffer_stats)
     circuits_for_buffer_stats = smartlist_new();
-  smartlist_add(circuits_for_buffer_stats, stat);
+  smartlist_add(circuits_for_buffer_stats, stats);
 }
 
 /** Remember cell statistics for circuit <b>circ</b> at time
@@ -2372,7 +2374,7 @@ rep_hist_reset_buffer_stats(time_t now)
   if (!circuits_for_buffer_stats)
     circuits_for_buffer_stats = smartlist_new();
   SMARTLIST_FOREACH(circuits_for_buffer_stats, circ_buffer_stats_t *,
-      stat, tor_free(stat));
+      stats, tor_free(stats));
   smartlist_clear(circuits_for_buffer_stats);
   start_of_buffer_stats_interval = now;
 }
@@ -2413,15 +2415,15 @@ rep_hist_format_buffer_stats(time_t now)
                    buffer_stats_compare_entries_);
     i = 0;
     SMARTLIST_FOREACH_BEGIN(circuits_for_buffer_stats,
-                            circ_buffer_stats_t *, stat)
+                            circ_buffer_stats_t *, stats)
     {
       int share = i++ * SHARES / number_of_circuits;
-      processed_cells[share] += stat->processed_cells;
-      queued_cells[share] += stat->mean_num_cells_in_queue;
-      time_in_queue[share] += stat->mean_time_cells_in_queue;
+      processed_cells[share] += stats->processed_cells;
+      queued_cells[share] += stats->mean_num_cells_in_queue;
+      time_in_queue[share] += stats->mean_time_cells_in_queue;
       circs_in_share[share]++;
     }
-    SMARTLIST_FOREACH_END(stat);
+    SMARTLIST_FOREACH_END(stats);
   }
 
   /* Write deciles to strings. */
@@ -2738,7 +2740,7 @@ bidi_map_ent_hash(const bidi_map_entry_t *entry)
 }
 
 HT_PROTOTYPE(bidimap, bidi_map_entry_t, node, bidi_map_ent_hash,
-             bidi_map_ent_eq);
+             bidi_map_ent_eq)
 HT_GENERATE2(bidimap, bidi_map_entry_t, node, bidi_map_ent_hash,
              bidi_map_ent_eq, 0.6, tor_reallocarray_, tor_free_)
 
@@ -2933,7 +2935,7 @@ static time_t start_of_hs_stats_interval;
  *  information needed. */
 typedef struct hs_stats_t {
   /** How many relay cells have we seen as rendezvous points? */
-  int64_t rp_relay_cells_seen;
+  uint64_t rp_relay_cells_seen;
 
   /** Set of unique public key digests we've seen this stat period
    * (could also be implemented as sorted smartlist). */
@@ -2947,22 +2949,22 @@ static hs_stats_t *hs_stats = NULL;
 static hs_stats_t *
 hs_stats_new(void)
 {
-  hs_stats_t * hs_stats = tor_malloc_zero(sizeof(hs_stats_t));
-  hs_stats->onions_seen_this_period = digestmap_new();
+  hs_stats_t *new_hs_stats = tor_malloc_zero(sizeof(hs_stats_t));
+  new_hs_stats->onions_seen_this_period = digestmap_new();
 
-  return hs_stats;
+  return new_hs_stats;
 }
 
 /** Free an hs_stats_t structure. */
 static void
-hs_stats_free(hs_stats_t *hs_stats)
+hs_stats_free(hs_stats_t *victim_hs_stats)
 {
-  if (!hs_stats) {
+  if (!victim_hs_stats) {
     return;
   }
 
-  digestmap_free(hs_stats->onions_seen_this_period, NULL);
-  tor_free(hs_stats);
+  digestmap_free(victim_hs_stats->onions_seen_this_period, NULL);
+  tor_free(victim_hs_stats);
 }
 
 /** Initialize hidden service statistics. */
@@ -3074,16 +3076,20 @@ rep_hist_format_hs_stats(time_t now)
   int64_t obfuscated_cells_seen;
   int64_t obfuscated_onions_seen;
 
-  obfuscated_cells_seen = round_int64_to_next_multiple_of(
-                          hs_stats->rp_relay_cells_seen,
-                          REND_CELLS_BIN_SIZE);
-  obfuscated_cells_seen = add_laplace_noise(obfuscated_cells_seen,
+  uint64_t rounded_cells_seen
+    = round_uint64_to_next_multiple_of(hs_stats->rp_relay_cells_seen,
+                                       REND_CELLS_BIN_SIZE);
+  rounded_cells_seen = MIN(rounded_cells_seen, INT64_MAX);
+  obfuscated_cells_seen = add_laplace_noise((int64_t)rounded_cells_seen,
                           crypto_rand_double(),
                           REND_CELLS_DELTA_F, REND_CELLS_EPSILON);
-  obfuscated_onions_seen = round_int64_to_next_multiple_of(digestmap_size(
-                           hs_stats->onions_seen_this_period),
-                           ONIONS_SEEN_BIN_SIZE);
-  obfuscated_onions_seen = add_laplace_noise(obfuscated_onions_seen,
+
+  uint64_t rounded_onions_seen =
+    round_uint64_to_next_multiple_of((size_t)digestmap_size(
+                                        hs_stats->onions_seen_this_period),
+                                     ONIONS_SEEN_BIN_SIZE);
+  rounded_onions_seen = MIN(rounded_onions_seen, INT64_MAX);
+  obfuscated_onions_seen = add_laplace_noise((int64_t)rounded_onions_seen,
                            crypto_rand_double(), ONIONS_SEEN_DELTA_F,
                            ONIONS_SEEN_EPSILON);
 
@@ -3217,7 +3223,7 @@ rep_hist_free_all(void)
   rep_hist_desc_stats_term();
   total_descriptor_downloads = 0;
 
-  tor_assert(rephist_total_alloc == 0);
-  tor_assert(rephist_total_num == 0);
+  tor_assert_nonfatal(rephist_total_alloc == 0);
+  tor_assert_nonfatal_once(rephist_total_num == 0);
 }
 

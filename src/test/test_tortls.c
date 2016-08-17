@@ -8,19 +8,13 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #endif
+#include <math.h>
 
-#ifdef __GNUC__
-#define GCC_VERSION (__GNUC__ * 100 + __GNUC_MINOR__)
-#endif
+#include "compat.h"
 
-#if __GNUC__ && GCC_VERSION >= 402
-#if GCC_VERSION >= 406
-#pragma GCC diagnostic push
-#endif
 /* Some versions of OpenSSL declare SSL_get_selected_srtp_profile twice in
  * srtp.h. Suppress the GCC warning so we can build with -Wredundant-decl. */
-#pragma GCC diagnostic ignored "-Wredundant-decls"
-#endif
+DISABLE_GCC_WARNING(redundant-decls)
 
 #include <openssl/opensslv.h>
 
@@ -33,13 +27,7 @@
 #include <openssl/evp.h>
 #include <openssl/bn.h>
 
-#if __GNUC__ && GCC_VERSION >= 402
-#if GCC_VERSION >= 406
-#pragma GCC diagnostic pop
-#else
-#pragma GCC diagnostic warning "-Wredundant-decls"
-#endif
-#endif
+ENABLE_GCC_WARNING(redundant-decls)
 
 #include "or.h"
 #include "torlog.h"
@@ -49,9 +37,6 @@
 #include "test.h"
 #include "log_test_helpers.h"
 #define NS_MODULE tortls
-
-extern tor_tls_context_t *server_tls_context;
-extern tor_tls_context_t *client_tls_context;
 
 #if OPENSSL_VERSION_NUMBER >= OPENSSL_V_SERIES(1,1,0) \
     && !defined(LIBRESSL_VERSION_NUMBER)
@@ -276,8 +261,6 @@ test_tortls_get_state_description(void *ignored)
   tor_free(buf);
   tor_free(tls);
 }
-
-extern int tor_tls_object_ex_data_index;
 
 static void
 test_tortls_get_by_ssl(void *ignored)
@@ -791,8 +774,6 @@ get_cipher_by_id(uint16_t id)
   return NULL;
 }
 
-extern uint16_t v2_cipher_list[];
-
 static void
 test_tortls_classify_client_ciphers(void *ignored)
 {
@@ -1185,9 +1166,6 @@ test_tortls_get_forced_write_size(void *ignored)
   tor_free(tls);
 }
 
-extern uint64_t total_bytes_written_over_tls;
-extern uint64_t total_bytes_written_by_tls;
-
 static void
 test_tortls_get_write_overhead_ratio(void *ignored)
 {
@@ -1196,17 +1174,17 @@ test_tortls_get_write_overhead_ratio(void *ignored)
 
   total_bytes_written_over_tls = 0;
   ret = tls_get_write_overhead_ratio();
-  tt_int_op(ret, OP_EQ, 1.0);
+  tt_double_op(fabs(ret - 1.0), OP_LT, 1E-12);
 
   total_bytes_written_by_tls = 10;
   total_bytes_written_over_tls = 1;
   ret = tls_get_write_overhead_ratio();
-  tt_int_op(ret, OP_EQ, 10.0);
+  tt_double_op(fabs(ret - 10.0), OP_LT, 1E-12);
 
   total_bytes_written_by_tls = 10;
   total_bytes_written_over_tls = 2;
   ret = tls_get_write_overhead_ratio();
-  tt_int_op(ret, OP_EQ, 5.0);
+  tt_double_op(fabs(ret - 5.0), OP_LT, 1E-12);
 
  done:
   (void)0;

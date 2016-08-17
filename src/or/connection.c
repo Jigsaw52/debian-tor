@@ -98,7 +98,7 @@ static int get_proxy_type(void);
 /** The last addresses that our network interface seemed to have been
  * binding to.  We use this as one way to detect when our IP changes.
  *
- * XXX024 We should really use the entire list of interfaces here.
+ * XXXX+ We should really use the entire list of interfaces here.
  **/
 static tor_addr_t *last_interface_ipv4 = NULL;
 /* DOCDOC last_interface_ipv6 */
@@ -665,9 +665,7 @@ connection_free,(connection_t *conn))
     return;
   tor_assert(!connection_is_on_closeable_list(conn));
   tor_assert(!connection_in_array(conn));
-  if (conn->linked_conn) {
-    log_err(LD_BUG, "Called with conn->linked_conn still set.");
-    tor_fragile_assert();
+  if (BUG(conn->linked_conn)) {
     conn->linked_conn->linked_conn = NULL;
     if (! conn->linked_conn->marked_for_close &&
         conn->linked_conn->reading_from_linked_conn)
@@ -1564,7 +1562,7 @@ connection_handle_listener_read(connection_t *conn, int new_type)
     /* remember the remote address */
     tor_addr_copy(&newconn->addr, &addr);
     newconn->port = port;
-    newconn->address = tor_dup_addr(&addr);
+    newconn->address = tor_addr_to_str_dup(&addr);
 
     if (new_type == CONN_TYPE_AP && conn->socket_family != AF_UNIX) {
       log_info(LD_NET, "New SOCKS connection opened from %s.",
@@ -2242,7 +2240,7 @@ connection_send_socks5_connect(connection_t *conn)
   } else { /* AF_INET6 */
     buf[3] = 4;
     reqsize += 16;
-    memcpy(buf + 4, tor_addr_to_in6(&conn->addr), 16);
+    memcpy(buf + 4, tor_addr_to_in6_addr8(&conn->addr), 16);
     memcpy(buf + 20, &port, 2);
   }
 
@@ -2538,7 +2536,7 @@ retry_listener_ports(smartlist_t *old_conns,
                                            real_port,
                                            listensockaddr,
                                            sizeof(struct sockaddr_storage));
-      address = tor_dup_addr(&port->addr);
+      address = tor_addr_to_str_dup(&port->addr);
     }
 
     if (listensockaddr) {
@@ -2699,8 +2697,6 @@ connection_is_rate_limited(connection_t *conn)
 #ifdef USE_BUFFEREVENTS
 static struct bufferevent_rate_limit_group *global_rate_limit = NULL;
 #else
-extern int global_read_bucket, global_write_bucket;
-extern int global_relayed_read_bucket, global_relayed_write_bucket;
 
 /** Did either global write bucket run dry last second? If so,
  * we are likely to run dry again this second, so be stingy with the
@@ -2934,7 +2930,7 @@ static void
 record_num_bytes_transferred(connection_t *conn,
                              time_t now, size_t num_read, size_t num_written)
 {
-  /* XXX024 check if this is necessary */
+  /* XXXX check if this is necessary */
   if (num_written >= INT_MAX || num_read >= INT_MAX) {
     log_err(LD_BUG, "Value out of range. num_read=%lu, num_written=%lu, "
              "connection type=%s, state=%s",
@@ -3644,7 +3640,7 @@ connection_read_to_buf(connection_t *conn, ssize_t *max_to_read,
        * take us over our read allotment, but really we shouldn't be
        * believing that SSL bytes are the same as TCP bytes anyway. */
       int r2 = read_to_buf_tls(or_conn->tls, pending, conn->inbuf);
-      if (r2<0) {
+      if (BUG(r2<0)) {
         log_warn(LD_BUG, "apparently, reading pending bytes can fail.");
         return -1;
       }
@@ -3761,7 +3757,7 @@ evbuffer_inbuf_callback(struct evbuffer *buf,
     connection_consider_empty_read_buckets(conn);
     if (conn->type == CONN_TYPE_AP) {
       edge_connection_t *edge_conn = TO_EDGE_CONN(conn);
-      /*XXXX024 check for overflow*/
+      /*XXXX++ check for overflow*/
       edge_conn->n_read += (int)info->n_added;
     }
   }
@@ -3782,7 +3778,7 @@ evbuffer_outbuf_callback(struct evbuffer *buf,
     connection_consider_empty_write_buckets(conn);
     if (conn->type == CONN_TYPE_AP) {
       edge_connection_t *edge_conn = TO_EDGE_CONN(conn);
-      /*XXXX024 check for overflow*/
+      /*XXXX++ check for overflow*/
       edge_conn->n_written += (int)info->n_deleted;
     }
   }
@@ -4141,7 +4137,7 @@ connection_handle_write_impl(connection_t *conn, int force)
     or_conn->bytes_xmitted += result;
     or_conn->bytes_xmitted_by_tls += n_written;
     /* So we notice bytes were written even on error */
-    /* XXXX024 This cast is safe since we can never write INT_MAX bytes in a
+    /* XXXX This cast is safe since we can never write INT_MAX bytes in a
      * single set of TLS operations. But it looks kinda ugly. If we refactor
      * the *_buf_tls functions, we should make them return ssize_t or size_t
      * or something. */

@@ -12,7 +12,7 @@
 
 #define ROUTERSET_PRIVATE
 #include "routerset.h"
-
+#include "main.h"
 #include "log_test_helpers.h"
 
 #include "sandbox.h"
@@ -513,8 +513,9 @@ test_options_validate__nickname(void *ignored)
   ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
   tt_int_op(ret, OP_EQ, -1);
   tt_str_op(msg, OP_EQ,
-            "Nickname 'ThisNickNameIsABitTooLong' is wrong length or"
-            " contains illegal characters.");
+            "Nickname 'ThisNickNameIsABitTooLong', nicknames must be between "
+            "1 and 19 characters inclusive, and must contain only the "
+            "characters [a-zA-Z0-9].");
   tor_free(msg);
 
   free_options_test_data(tdata);
@@ -570,8 +571,6 @@ test_options_validate__contactinfo(void *ignored)
   free_options_test_data(tdata);
   tor_free(msg);
 }
-
-extern int quiet_level;
 
 static void
 test_options_validate__logs(void *ignored)

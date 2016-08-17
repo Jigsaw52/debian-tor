@@ -5,6 +5,7 @@
 
 #include "orconfig.h"
 #define COMPAT_PRIVATE
+#define COMPAT_TIME_PRIVATE
 #define CONTROL_PRIVATE
 #define UTIL_PRIVATE
 #include "or.h"
@@ -13,6 +14,7 @@
 #include "test.h"
 #include "memarea.h"
 #include "util_process.h"
+#include "log_test_helpers.h"
 
 #ifdef HAVE_PWD_H
 #include <pwd.h>
@@ -29,6 +31,9 @@
 #include <math.h>
 #include <ctype.h>
 #include <float.h>
+
+#define INFINITY_DBL ((double)INFINITY)
+#define NAN_DBL ((double)NAN)
 
 /* XXXX this is a minimal wrapper to make the unit tests compile with the
  * changed tor_timegm interface. */
@@ -258,7 +263,7 @@ test_util_time(void *arg)
   int i;
   struct timeval tv;
 
-  /* Test tv_udiff */
+  /* Test tv_udiff and tv_mdiff */
 
   (void)arg;
   start.tv_sec = 5;
@@ -268,22 +273,312 @@ test_util_time(void *arg)
   end.tv_usec = 5000;
 
   tt_int_op(0L,OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(0L,OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(0L,OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(0L,OP_EQ, tv_mdiff(&end, &start));
 
   end.tv_usec = 7000;
 
   tt_int_op(2000L,OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(2L,OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(-2000L,OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(-2L,OP_EQ, tv_mdiff(&end, &start));
 
   end.tv_sec = 6;
 
   tt_int_op(1002000L,OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(1002L,OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(-1002000L,OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(-1002L,OP_EQ, tv_mdiff(&end, &start));
 
   end.tv_usec = 0;
 
   tt_int_op(995000L,OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(995L,OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(-995000L,OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(-995L,OP_EQ, tv_mdiff(&end, &start));
 
   end.tv_sec = 4;
 
   tt_int_op(-1005000L,OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(-1005L,OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(1005000L,OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(1005L,OP_EQ, tv_mdiff(&end, &start));
+
+  /* Negative tv_sec values, these will break on platforms where tv_sec is
+   * unsigned */
+
+  end.tv_sec = -10;
+
+  tt_int_op(-15005000L,OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(-15005L,OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(15005000L,OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(15005L,OP_EQ, tv_mdiff(&end, &start));
+
+  start.tv_sec = -100;
+
+  tt_int_op(89995000L,OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(89995L,OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(-89995000L,OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(-89995L,OP_EQ, tv_mdiff(&end, &start));
+
+  /* Test that tv_usec values round away from zero when converted to msec */
+  start.tv_sec = 0;
+  start.tv_usec = 0;
+  end.tv_sec = 10;
+  end.tv_usec = 499;
+
+  tt_int_op(10000499L, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(10000L, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(-10000499L, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(-10000L, OP_EQ, tv_mdiff(&end, &start));
+
+  start.tv_sec = 0;
+  start.tv_usec = 0;
+  end.tv_sec = 10;
+  end.tv_usec = 500;
+
+  tt_int_op(10000500L, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(10001L, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(-10000500L, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(-10000L, OP_EQ, tv_mdiff(&end, &start));
+
+  start.tv_sec = 0;
+  start.tv_usec = 0;
+  end.tv_sec = 10;
+  end.tv_usec = 501;
+
+  tt_int_op(10000501L, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(10001L, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(-10000501L, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(-10001L, OP_EQ, tv_mdiff(&end, &start));
+
+  /* Overflow conditions */
+
+#ifdef _WIN32
+  /* Would you believe that tv_sec is a long on windows? Of course you would.*/
+#define TV_SEC_MAX LONG_MAX
+#define TV_SEC_MIN LONG_MIN
+#else
+  /* Some BSDs have struct timeval.tv_sec 64-bit, but time_t (and long) 32-bit
+   * Which means TIME_MAX is not actually the maximum value of tv_sec.
+   * But that's ok for the moment, because the code correctly performs 64-bit
+   * calculations internally, then catches the overflow. */
+#define TV_SEC_MAX TIME_MAX
+#define TV_SEC_MIN TIME_MIN
+#endif
+
+/* Assume tv_usec is an unsigned integer until proven otherwise */
+#define TV_USEC_MAX UINT_MAX
+#define TOR_USEC_PER_SEC 1000000
+
+  /* Overflows in the result type */
+
+  /* All comparisons work */
+  start.tv_sec = 0;
+  start.tv_usec = 0;
+  end.tv_sec = LONG_MAX/1000 - 2;
+  end.tv_usec = 0;
+
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(end.tv_sec*1000L, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(-end.tv_sec*1000L, OP_EQ, tv_mdiff(&end, &start));
+
+  start.tv_sec = 0;
+  start.tv_usec = 0;
+  end.tv_sec = LONG_MAX/1000000 - 1;
+  end.tv_usec = 0;
+
+  tt_int_op(end.tv_sec*1000000L, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(end.tv_sec*1000L, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(-end.tv_sec*1000000L, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(-end.tv_sec*1000L, OP_EQ, tv_mdiff(&end, &start));
+
+  /* No comparisons work */
+  start.tv_sec = 0;
+  start.tv_usec = 0;
+  end.tv_sec = LONG_MAX/1000 + 1;
+  end.tv_usec = 0;
+
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&end, &start));
+
+  start.tv_sec = 0;
+  start.tv_usec = 0;
+  end.tv_sec = LONG_MAX/1000000 + 1;
+  end.tv_usec = 0;
+
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(end.tv_sec*1000L, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(-end.tv_sec*1000L, OP_EQ, tv_mdiff(&end, &start));
+
+  start.tv_sec = 0;
+  start.tv_usec = 0;
+  end.tv_sec = LONG_MAX/1000;
+  end.tv_usec = TOR_USEC_PER_SEC;
+
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&end, &start));
+
+  start.tv_sec = 0;
+  start.tv_usec = 0;
+  end.tv_sec = LONG_MAX/1000000;
+  end.tv_usec = TOR_USEC_PER_SEC;
+
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op((end.tv_sec + 1)*1000L, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(-(end.tv_sec + 1)*1000L, OP_EQ, tv_mdiff(&end, &start));
+
+  /* Overflows on comparison to zero */
+
+  start.tv_sec = 0;
+  start.tv_usec = 0;
+
+  end.tv_sec = TV_SEC_MAX;
+  end.tv_usec = 0;
+
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&end, &start));
+
+  end.tv_sec = TV_SEC_MAX;
+  end.tv_usec = TOR_USEC_PER_SEC;
+
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&end, &start));
+
+  end.tv_sec = 0;
+  end.tv_usec = TV_USEC_MAX;
+
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&end, &start));
+
+  end.tv_sec = TV_SEC_MAX;
+  end.tv_usec = TV_USEC_MAX;
+
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&end, &start));
+
+  end.tv_sec = 0;
+  end.tv_usec = 0;
+
+  start.tv_sec = TV_SEC_MIN;
+  start.tv_usec = 0;
+
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&end, &start));
+
+  start.tv_sec = TV_SEC_MIN;
+  start.tv_usec = TOR_USEC_PER_SEC;
+
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&end, &start));
+
+  start.tv_sec = TV_SEC_MIN;
+  start.tv_usec = TV_USEC_MAX;
+
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&end, &start));
+
+  /* overflows on comparison to maxima / minima */
+
+  start.tv_sec = TV_SEC_MIN;
+  start.tv_usec = 0;
+
+  end.tv_sec = TV_SEC_MAX;
+  end.tv_usec = 0;
+
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&end, &start));
+
+  end.tv_sec = TV_SEC_MAX;
+  end.tv_usec = TOR_USEC_PER_SEC;
+
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&end, &start));
+
+  end.tv_sec = TV_SEC_MAX;
+  end.tv_usec = 0;
+
+  start.tv_sec = TV_SEC_MIN;
+  start.tv_usec = 0;
+
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&end, &start));
+
+  start.tv_sec = TV_SEC_MIN;
+  start.tv_usec = TOR_USEC_PER_SEC;
+
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&end, &start));
+
+  /* overflows on comparison to maxima / minima with extra usec */
+
+  start.tv_sec = TV_SEC_MIN;
+  start.tv_usec = TOR_USEC_PER_SEC;
+
+  end.tv_sec = TV_SEC_MAX;
+  end.tv_usec = 0;
+
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&end, &start));
+
+  end.tv_sec = TV_SEC_MAX;
+  end.tv_usec = TOR_USEC_PER_SEC;
+
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&end, &start));
+
+  end.tv_sec = TV_SEC_MAX;
+  end.tv_usec = TOR_USEC_PER_SEC;
+
+  start.tv_sec = TV_SEC_MIN;
+  start.tv_usec = 0;
+
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&end, &start));
+
+  start.tv_sec = TV_SEC_MIN;
+  start.tv_usec = TOR_USEC_PER_SEC;
+
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&start, &end));
+  tt_int_op(LONG_MAX, OP_EQ, tv_udiff(&end, &start));
+  tt_int_op(LONG_MAX, OP_EQ, tv_mdiff(&end, &start));
 
   /* Test tor_timegm & tor_gmtime_r */
 
@@ -622,9 +917,16 @@ test_util_time(void *arg)
             parse_rfc1123_time("Wed, 30 Ene 2011 23:59:59 GMT", &t_res));
   tt_int_op(-1,OP_EQ,
             parse_rfc1123_time("Wed, 30 Mar 2011 23:59:59 GM", &t_res));
+  tt_int_op(-1,OP_EQ,
+            parse_rfc1123_time("Wed, 30 Mar 1900 23:59:59 GMT", &t_res));
 
+  /* Leap year. */
   tt_int_op(-1,OP_EQ,
             parse_rfc1123_time("Wed, 29 Feb 2011 16:00:00 GMT", &t_res));
+  tt_int_op(0,OP_EQ,
+            parse_rfc1123_time("Wed, 29 Feb 2012 16:00:00 GMT", &t_res));
+
+  /* Leap second plus one */
   tt_int_op(-1,OP_EQ,
             parse_rfc1123_time("Wed, 30 Mar 2011 23:59:61 GMT", &t_res));
 
@@ -865,106 +1167,106 @@ test_util_config_line(void *arg)
           , sizeof(buf));
   str = buf;
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "k");
   tt_str_op(v,OP_EQ, "v");
   tor_free(k); tor_free(v);
   tt_assert(!strcmpstart(str, "key    value with"));
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "key");
   tt_str_op(v,OP_EQ, "value with spaces");
   tor_free(k); tor_free(v);
   tt_assert(!strcmpstart(str, "keykey"));
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "keykey");
   tt_str_op(v,OP_EQ, "val");
   tor_free(k); tor_free(v);
   tt_assert(!strcmpstart(str, "k2\n"));
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "k2");
   tt_str_op(v,OP_EQ, "");
   tor_free(k); tor_free(v);
   tt_assert(!strcmpstart(str, "k3 \n"));
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "k3");
   tt_str_op(v,OP_EQ, "");
   tor_free(k); tor_free(v);
   tt_assert(!strcmpstart(str, "#comment"));
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "k4");
   tt_str_op(v,OP_EQ, "");
   tor_free(k); tor_free(v);
   tt_assert(!strcmpstart(str, "k5#abc"));
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "k5");
   tt_str_op(v,OP_EQ, "");
   tor_free(k); tor_free(v);
   tt_assert(!strcmpstart(str, "k6"));
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "k6");
   tt_str_op(v,OP_EQ, "val");
   tor_free(k); tor_free(v);
   tt_assert(!strcmpstart(str, "kseven"));
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "kseven");
   tt_str_op(v,OP_EQ, "a quoted \'string");
   tor_free(k); tor_free(v);
   tt_assert(!strcmpstart(str, "k8 "));
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "k8");
   tt_str_op(v,OP_EQ, "a quoted\n\"str\\ing\t\x01\x01\x01\"");
   tor_free(k); tor_free(v);
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "k9");
   tt_str_op(v,OP_EQ, "a line that spans two lines.");
   tor_free(k); tor_free(v);
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "k10");
   tt_str_op(v,OP_EQ, "more than one continuation");
   tor_free(k); tor_free(v);
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "k11");
   tt_str_op(v,OP_EQ, "continuation at the start");
   tor_free(k); tor_free(v);
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "k12");
   tt_str_op(v,OP_EQ, "line with a embedded");
   tor_free(k); tor_free(v);
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "k13");
   tt_str_op(v,OP_EQ, "continuation at the very start");
   tor_free(k); tor_free(v);
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "k14");
   tt_str_op(v,OP_EQ, "a line that has a comment and" );
   tor_free(k); tor_free(v);
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "k15");
   tt_str_op(v,OP_EQ, "this should be the next new line");
   tor_free(k); tor_free(v);
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "k16");
   tt_str_op(v,OP_EQ, "a line that has a comment and" );
   tor_free(k); tor_free(v);
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "k17");
   tt_str_op(v,OP_EQ, "this should be the next new line");
   tor_free(k); tor_free(v);
@@ -999,32 +1301,36 @@ test_util_config_line_quotes(void *arg)
           , sizeof(buf4));
   str = buf1;
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "kTrailingSpace");
   tt_str_op(v,OP_EQ, "quoted value");
   tor_free(k); tor_free(v);
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_ptr_op(str,OP_EQ, NULL);
   tor_free(k); tor_free(v);
 
   str = buf2;
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_ptr_op(str,OP_EQ, NULL);
   tor_free(k); tor_free(v);
 
   str = buf3;
 
-  str = parse_config_line_from_str(str, &k, &v);
+  const char *err = NULL;
+  str = parse_config_line_from_str_verbose(str, &k, &v, &err);
   tt_ptr_op(str,OP_EQ, NULL);
   tor_free(k); tor_free(v);
+  tt_str_op(err, OP_EQ, "Invalid escape sequence in quoted string");
 
   str = buf4;
 
-  str = parse_config_line_from_str(str, &k, &v);
+  err = NULL;
+  str = parse_config_line_from_str_verbose(str, &k, &v, &err);
   tt_ptr_op(str,OP_EQ, NULL);
   tor_free(k); tor_free(v);
+  tt_str_op(err, OP_EQ, "Invalid escape sequence in quoted string");
 
  done:
   tor_free(k);
@@ -1046,12 +1352,12 @@ test_util_config_line_comment_character(void *arg)
           , sizeof(buf));
   str = buf;
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "k1");
   tt_str_op(v,OP_EQ, "# in quotes");
   tor_free(k); tor_free(v);
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "k2");
   tt_str_op(v,OP_EQ, "some value");
   tor_free(k); tor_free(v);
@@ -1059,7 +1365,7 @@ test_util_config_line_comment_character(void *arg)
   tt_str_op(str,OP_EQ, "k3 /home/user/myTorNetwork#2\n");
 
 #if 0
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   test_streq(k, "k3");
   test_streq(v, "/home/user/myTorNetwork#2");
   tor_free(k); tor_free(v);
@@ -1116,57 +1422,57 @@ test_util_config_line_escaped_content(void *arg)
 
   str = buf1;
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "HexadecimalLower");
   tt_str_op(v,OP_EQ, "*");
   tor_free(k); tor_free(v);
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "HexadecimalUpper");
   tt_str_op(v,OP_EQ, "*");
   tor_free(k); tor_free(v);
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "HexadecimalUpperX");
   tt_str_op(v,OP_EQ, "*");
   tor_free(k); tor_free(v);
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "Octal");
   tt_str_op(v,OP_EQ, "*");
   tor_free(k); tor_free(v);
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "Newline");
   tt_str_op(v,OP_EQ, "\n");
   tor_free(k); tor_free(v);
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "Tab");
   tt_str_op(v,OP_EQ, "\t");
   tor_free(k); tor_free(v);
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "CarriageReturn");
   tt_str_op(v,OP_EQ, "\r");
   tor_free(k); tor_free(v);
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "DoubleQuote");
   tt_str_op(v,OP_EQ, "\"");
   tor_free(k); tor_free(v);
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "SimpleQuote");
   tt_str_op(v,OP_EQ, "'");
   tor_free(k); tor_free(v);
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "Backslash");
   tt_str_op(v,OP_EQ, "\\");
   tor_free(k); tor_free(v);
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_str_op(k,OP_EQ, "Mix");
   tt_str_op(v,OP_EQ, "This is a \"star\":\t'*'\nAnd second line");
   tor_free(k); tor_free(v);
@@ -1174,35 +1480,80 @@ test_util_config_line_escaped_content(void *arg)
 
   str = buf2;
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_ptr_op(str,OP_EQ, NULL);
   tor_free(k); tor_free(v);
 
   str = buf3;
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_ptr_op(str,OP_EQ, NULL);
   tor_free(k); tor_free(v);
 
   str = buf4;
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_ptr_op(str,OP_EQ, NULL);
   tor_free(k); tor_free(v);
 
 #if 0
   str = buf5;
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_ptr_op(str, OP_EQ, NULL);
   tor_free(k); tor_free(v);
 #endif
 
   str = buf6;
 
-  str = parse_config_line_from_str(str, &k, &v);
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
   tt_ptr_op(str,OP_EQ, NULL);
   tor_free(k); tor_free(v);
+
+  /* more things to try. */
+  /* Bad hex: */
+  strlcpy(buf1, "Foo \"\\x9g\"\n", sizeof(buf1));
+  strlcpy(buf2, "Foo \"\\xg0\"\n", sizeof(buf2));
+  strlcpy(buf3, "Foo \"\\xf\"\n", sizeof(buf3));
+  /* bad escape */
+  strlcpy(buf4, "Foo \"\\q\"\n", sizeof(buf4));
+  /* missing endquote */
+  strlcpy(buf5, "Foo \"hello\n", sizeof(buf5));
+  /* extra stuff */
+  strlcpy(buf6, "Foo \"hello\" world\n", sizeof(buf6));
+
+  str=buf1;
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
+  tt_ptr_op(str,OP_EQ, NULL);
+  tor_free(k); tor_free(v);
+
+  str=buf2;
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
+  tt_ptr_op(str,OP_EQ, NULL);
+  tor_free(k); tor_free(v);
+
+  str=buf3;
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
+  tt_ptr_op(str,OP_EQ, NULL);
+  tor_free(k); tor_free(v);
+
+  str=buf4;
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
+  tt_ptr_op(str,OP_EQ, NULL);
+  tor_free(k); tor_free(v);
+
+  str=buf5;
+
+  str = parse_config_line_from_str_verbose(str, &k, &v, NULL);
+  tt_ptr_op(str,OP_EQ, NULL);
+  tor_free(k); tor_free(v);
+
+  str=buf6;
+  const char *err = NULL;
+  str = parse_config_line_from_str_verbose(str, &k, &v, &err);
+  tt_ptr_op(str,OP_EQ, NULL);
+  tor_free(k); tor_free(v);
+  tt_str_op(err,OP_EQ, "Excess data after quoted string");
 
  done:
   tor_free(k);
@@ -1428,6 +1779,11 @@ test_util_strmisc(void *arg)
   tt_int_op(-50L,OP_EQ, tor_parse_long("-50 plus garbage",10,-100,100,&i,&cp));
   tt_int_op(1,OP_EQ, i);
   tt_str_op(cp,OP_EQ, " plus garbage");
+  /* Illogical min max */
+  tt_int_op(0L,OP_EQ,  tor_parse_long("10",10,50,4,&i,NULL));
+  tt_int_op(0,OP_EQ, i);
+  tt_int_op(0L,OP_EQ,   tor_parse_long("-50",10,100,-100,&i,NULL));
+  tt_int_op(0,OP_EQ, i);
   /* Out of bounds */
   tt_int_op(0L,OP_EQ,  tor_parse_long("10",10,50,100,&i,NULL));
   tt_int_op(0,OP_EQ, i);
@@ -1472,24 +1828,24 @@ test_util_strmisc(void *arg)
 
   {
   /* Test parse_double */
-  double d = tor_parse_double("10", 0, UINT64_MAX,&i,NULL);
+  double d = tor_parse_double("10", 0, (double)UINT64_MAX,&i,NULL);
   tt_int_op(1,OP_EQ, i);
   tt_assert(DBL_TO_U64(d) == 10);
-  d = tor_parse_double("0", 0, UINT64_MAX,&i,NULL);
+  d = tor_parse_double("0", 0, (double)UINT64_MAX,&i,NULL);
   tt_int_op(1,OP_EQ, i);
   tt_assert(DBL_TO_U64(d) == 0);
-  d = tor_parse_double(" ", 0, UINT64_MAX,&i,NULL);
+  d = tor_parse_double(" ", 0, (double)UINT64_MAX,&i,NULL);
   tt_int_op(0,OP_EQ, i);
-  d = tor_parse_double(".0a", 0, UINT64_MAX,&i,NULL);
+  d = tor_parse_double(".0a", 0, (double)UINT64_MAX,&i,NULL);
   tt_int_op(0,OP_EQ, i);
-  d = tor_parse_double(".0a", 0, UINT64_MAX,&i,&cp);
+  d = tor_parse_double(".0a", 0, (double)UINT64_MAX,&i,&cp);
   tt_int_op(1,OP_EQ, i);
-  d = tor_parse_double("-.0", 0, UINT64_MAX,&i,NULL);
+  d = tor_parse_double("-.0", 0, (double)UINT64_MAX,&i,NULL);
   tt_int_op(1,OP_EQ, i);
   tt_assert(DBL_TO_U64(d) == 0);
   d = tor_parse_double("-10", -100.0, 100.0,&i,NULL);
   tt_int_op(1,OP_EQ, i);
-  tt_int_op(-10.0,OP_EQ, d);
+  tt_double_op(fabs(d - -10.0),OP_LT, 1E-12);
   }
 
   {
@@ -1583,6 +1939,17 @@ test_util_strmisc(void *arg)
   tt_str_op("\"z\\001abc\\277d\"",OP_EQ,  escaped("z\001abc\277d"));
   tt_str_op("\"z\\336\\255 ;foo\"",OP_EQ, escaped("z\xde\xad\x20;foo"));
 
+  /* Other cases of esc_for_log{,_len} */
+  cp_tmp = esc_for_log(NULL);
+  tt_str_op(cp_tmp, OP_EQ, "(null)");
+  tor_free(cp_tmp);
+  cp_tmp = esc_for_log_len("abcdefg", 3);
+  tt_str_op(cp_tmp, OP_EQ, "\"abc\"");
+  tor_free(cp_tmp);
+  cp_tmp = esc_for_log_len("abcdefg", 100);
+  tt_str_op(cp_tmp, OP_EQ, "\"abcdefg\"");
+  tor_free(cp_tmp);
+
   /* Test strndup and memdup */
   {
     const char *s = "abcdefghijklmnopqrstuvwxyz";
@@ -1642,9 +2009,9 @@ test_util_strmisc(void *arg)
   /* Test hex_str */
   {
     char binary_data[68];
-    size_t i;
-    for (i = 0; i < sizeof(binary_data); ++i)
-      binary_data[i] = i;
+    size_t idx;
+    for (idx = 0; idx < sizeof(binary_data); ++idx)
+      binary_data[idx] = idx;
     tt_str_op(hex_str(binary_data, 0),OP_EQ, "");
     tt_str_op(hex_str(binary_data, 1),OP_EQ, "00");
     tt_str_op(hex_str(binary_data, 17),OP_EQ,
@@ -1737,22 +2104,21 @@ test_util_gzip(void *arg)
   (void)arg;
   buf1 = tor_strdup("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAZAAAAAAAAAAAAAAAAAAAZ");
   tt_assert(detect_compression_method(buf1, strlen(buf1)) == UNKNOWN_METHOD);
-  if (is_gzip_supported()) {
-    tt_assert(!tor_gzip_compress(&buf2, &len1, buf1, strlen(buf1)+1,
-                                   GZIP_METHOD));
-    tt_assert(buf2);
-    tt_assert(len1 < strlen(buf1));
-    tt_assert(detect_compression_method(buf2, len1) == GZIP_METHOD);
 
-    tt_assert(!tor_gzip_uncompress(&buf3, &len2, buf2, len1,
-                                     GZIP_METHOD, 1, LOG_INFO));
-    tt_assert(buf3);
-    tt_int_op(strlen(buf1) + 1,OP_EQ, len2);
-    tt_str_op(buf1,OP_EQ, buf3);
+  tt_assert(!tor_gzip_compress(&buf2, &len1, buf1, strlen(buf1)+1,
+                               GZIP_METHOD));
+  tt_assert(buf2);
+  tt_assert(len1 < strlen(buf1));
+  tt_assert(detect_compression_method(buf2, len1) == GZIP_METHOD);
 
-    tor_free(buf2);
-    tor_free(buf3);
-  }
+  tt_assert(!tor_gzip_uncompress(&buf3, &len2, buf2, len1,
+                                 GZIP_METHOD, 1, LOG_INFO));
+  tt_assert(buf3);
+  tt_int_op(strlen(buf1) + 1,OP_EQ, len2);
+  tt_str_op(buf1,OP_EQ, buf3);
+
+  tor_free(buf2);
+  tor_free(buf3);
 
   tt_assert(!tor_gzip_compress(&buf2, &len1, buf1, strlen(buf1)+1,
                                  ZLIB_METHOD));
@@ -1834,6 +2200,52 @@ test_util_gzip(void *arg)
   tor_free(buf2);
   tor_free(buf3);
   tor_free(buf1);
+}
+
+static void
+test_util_gzip_compression_bomb(void *arg)
+{
+  /* A 'compression bomb' is a very small object that uncompresses to a huge
+   * one. Most compression formats support them, but they can be a DOS vector.
+   * In Tor we try not to generate them, and we don't accept them.
+   */
+  (void) arg;
+  size_t one_million = 1<<20;
+  char *one_mb = tor_malloc_zero(one_million);
+  char *result = NULL;
+  size_t result_len = 0;
+  tor_zlib_state_t *state = NULL;
+
+  /* Make sure we can't produce a compression bomb */
+  tt_int_op(-1, OP_EQ, tor_gzip_compress(&result, &result_len,
+                                         one_mb, one_million,
+                                         ZLIB_METHOD));
+
+  /* Here's a compression bomb that we made manually. */
+  const char compression_bomb[1039] =
+    { 0x78, 0xDA, 0xED, 0xC1, 0x31, 0x01, 0x00, 0x00, 0x00, 0xC2,
+      0xA0, 0xF5, 0x4F, 0x6D, 0x08, 0x5F, 0xA0 /* .... */ };
+  tt_int_op(-1, OP_EQ, tor_gzip_uncompress(&result, &result_len,
+                                           compression_bomb, 1039,
+                                           ZLIB_METHOD, 0, LOG_WARN));
+
+  /* Now try streaming that. */
+  state = tor_zlib_new(0, ZLIB_METHOD, HIGH_COMPRESSION);
+  tor_zlib_output_t r;
+  const char *inp = compression_bomb;
+  size_t inlen = 1039;
+  do {
+    char *outp = one_mb;
+    size_t outleft = 4096; /* small on purpose */
+    r = tor_zlib_process(state, &outp, &outleft, &inp, &inlen, 0);
+    tt_int_op(inlen, OP_NE, 0);
+  } while (r == TOR_ZLIB_BUF_FULL);
+
+  tt_int_op(r, OP_EQ, TOR_ZLIB_ERR);
+
+ done:
+  tor_free(one_mb);
+  tor_zlib_free(state);
 }
 
 /** Run unit tests for mmap() wrapper functionality. */
@@ -2842,18 +3254,39 @@ test_util_memarea(void *arg)
   p1 = memarea_alloc(area, 1);
   tt_ptr_op(p1,OP_EQ, p1_orig);
   memarea_clear(area);
+  size_t total = 0, initial_allocation, allocation2, dummy;
+  memarea_get_stats(area, &initial_allocation, &dummy);
 
   /* Check for running over an area's size. */
-  for (i = 0; i < 512; ++i) {
-    p1 = memarea_alloc(area, crypto_rand_int(5)+1);
+  for (i = 0; i < 4096; ++i) {
+    size_t n = crypto_rand_int(6);
+    p1 = memarea_alloc(area, n);
+    total += n;
     tt_assert(memarea_owns_ptr(area, p1));
   }
   memarea_assert_ok(area);
+  memarea_get_stats(area, &allocation2, &dummy);
   /* Make sure we can allocate a too-big object. */
   p1 = memarea_alloc_zero(area, 9000);
   p2 = memarea_alloc_zero(area, 16);
+  total += 9000;
+  total += 16;
   tt_assert(memarea_owns_ptr(area, p1));
   tt_assert(memarea_owns_ptr(area, p2));
+
+  /* Now test stats... */
+  size_t allocated = 0, used = 0;
+  memarea_get_stats(area, &allocated, &used);
+  tt_int_op(used, OP_LE, allocated);
+  tt_int_op(used, OP_GE, total); /* not EQ, because of alignment and headers*/
+  tt_int_op(allocated, OP_GT, allocation2);
+
+  tt_int_op(allocation2, OP_GT, initial_allocation);
+
+  memarea_clear(area);
+  memarea_get_stats(area, &allocated, &used);
+  tt_int_op(used, OP_LT, 128); /* Not 0, because of header */
+  tt_int_op(allocated, OP_EQ, initial_allocation);
 
  done:
   memarea_drop_all(area);
@@ -3242,6 +3675,21 @@ test_util_ftruncate(void *ptr)
   if (fd >= 0)
     close(fd);
   tor_free(buf);
+}
+
+static void
+test_util_num_cpus(void *arg)
+{
+  (void)arg;
+  int num = compute_num_cpus();
+  if (num < 0)
+    tt_skip();
+
+  tt_int_op(num, OP_GE, 1);
+  tt_int_op(num, OP_LE, 16);
+
+ done:
+  ;
 }
 
 #ifdef _WIN32
@@ -4209,6 +4657,31 @@ test_util_mathlog(void *arg)
 }
 
 static void
+test_util_fraction(void *arg)
+{
+  uint64_t a,b;
+  (void)arg;
+
+  a = 99; b = 30;
+  simplify_fraction64(&a,&b);
+  tt_u64_op(a, OP_EQ, 33);
+  tt_u64_op(b, OP_EQ, 10);
+
+  a = 3000000; b = 10000000;
+  simplify_fraction64(&a,&b);
+  tt_u64_op(a, OP_EQ, 3);
+  tt_u64_op(b, OP_EQ, 10);
+
+  a = 0; b = 15;
+  simplify_fraction64(&a,&b);
+  tt_u64_op(a, OP_EQ, 0);
+  tt_u64_op(b, OP_EQ, 1);
+
+ done:
+  ;
+}
+
+static void
 test_util_round_to_next_multiple_of(void *arg)
 {
   (void)arg;
@@ -4222,21 +4695,6 @@ test_util_round_to_next_multiple_of(void *arg)
 
   tt_u64_op(round_uint64_to_next_multiple_of(UINT64_MAX,2), ==,
             UINT64_MAX);
-
-  tt_i64_op(round_int64_to_next_multiple_of(0,1), ==, 0);
-  tt_i64_op(round_int64_to_next_multiple_of(0,7), ==, 0);
-
-  tt_i64_op(round_int64_to_next_multiple_of(99,1), ==, 99);
-  tt_i64_op(round_int64_to_next_multiple_of(99,7), ==, 105);
-  tt_i64_op(round_int64_to_next_multiple_of(99,9), ==, 99);
-
-  tt_i64_op(round_int64_to_next_multiple_of(-99,1), ==, -99);
-  tt_i64_op(round_int64_to_next_multiple_of(-99,7), ==, -98);
-  tt_i64_op(round_int64_to_next_multiple_of(-99,9), ==, -99);
-
-  tt_i64_op(round_int64_to_next_multiple_of(INT64_MIN,2), ==, INT64_MIN);
-  tt_i64_op(round_int64_to_next_multiple_of(INT64_MAX,2), ==,
-                                            INT64_MAX);
 
   tt_int_op(round_uint32_to_next_multiple_of(0,1), ==, 0);
   tt_int_op(round_uint32_to_next_multiple_of(0,7), ==, 0);
@@ -4407,7 +4865,7 @@ test_util_clamp_double_to_int64(void *arg)
 {
   (void)arg;
 
-  tt_i64_op(INT64_MIN, ==, clamp_double_to_int64(-INFINITY));
+  tt_i64_op(INT64_MIN, ==, clamp_double_to_int64(-INFINITY_DBL));
   tt_i64_op(INT64_MIN, ==,
             clamp_double_to_int64(-1.0 * pow(2.0, 64.0) - 1.0));
   tt_i64_op(INT64_MIN, ==,
@@ -4420,7 +4878,7 @@ test_util_clamp_double_to_int64(void *arg)
   tt_i64_op(0, ==, clamp_double_to_int64(-0.9));
   tt_i64_op(0, ==, clamp_double_to_int64(-0.1));
   tt_i64_op(0, ==, clamp_double_to_int64(0.0));
-  tt_i64_op(0, ==, clamp_double_to_int64(NAN));
+  tt_i64_op(0, ==, clamp_double_to_int64(NAN_DBL));
   tt_i64_op(0, ==, clamp_double_to_int64(0.1));
   tt_i64_op(0, ==, clamp_double_to_int64(0.9));
   tt_i64_op(1, ==, clamp_double_to_int64(1.0));
@@ -4432,7 +4890,7 @@ test_util_clamp_double_to_int64(void *arg)
             clamp_double_to_int64(pow(2.0, 63.0)));
   tt_i64_op(INT64_MAX, ==,
             clamp_double_to_int64(pow(2.0, 64.0)));
-  tt_i64_op(INT64_MAX, ==, clamp_double_to_int64(INFINITY));
+  tt_i64_op(INT64_MAX, ==, clamp_double_to_int64(INFINITY_DBL));
 
  done:
   ;
@@ -4756,6 +5214,7 @@ test_util_pwdb(void *arg)
   const struct passwd *me = NULL, *me2, *me3;
   char *name = NULL;
   char *dir = NULL;
+  int prev_level = -100;
 
   /* Uncached case. */
   /* Let's assume that we exist. */
@@ -4780,11 +5239,199 @@ test_util_pwdb(void *arg)
   dir = get_user_homedir(name);
   tt_assert(dir != NULL);
 
+  /* Try failing cases.  First find a user that doesn't exist by name */
+  char randbytes[4];
+  char badname[9];
+  int i, found=0;
+  for (i = 0; i < 100; ++i) {
+    crypto_rand(randbytes, sizeof(randbytes));
+    base16_encode(badname, sizeof(badname), randbytes, sizeof(randbytes));
+    if (tor_getpwnam(badname) == NULL) {
+      found = 1;
+      break;
+    }
+  }
+  tt_assert(found);
+  tor_free(dir);
+
+  prev_level = setup_capture_of_logs(LOG_ERR); /* We should do a LOG_ERR */
+  dir = get_user_homedir(badname);
+  tt_assert(dir == NULL);
+  tt_int_op(smartlist_len(mock_saved_logs()), OP_EQ, 1);
+  teardown_capture_of_logs(prev_level);
+  prev_level = -100;
+
+  /* Now try to find a user that doesn't exist by ID. */
+  found = 0;
+  for (i = 0; i < 1000; ++i) {
+    uid_t u;
+    crypto_rand((char*)&u, sizeof(u));
+    if (tor_getpwuid(u) == NULL) {
+      found = 1;
+      break;
+    }
+  }
+  tt_assert(found);
+
  done:
   tor_free(name);
   tor_free(dir);
+  if (prev_level >= 0)
+    teardown_capture_of_logs(prev_level);
 }
 #endif
+
+static void
+test_util_calloc_check(void *arg)
+{
+  (void) arg;
+  /* Easy cases that are good. */
+  tt_assert(size_mul_check__(0,0));
+  tt_assert(size_mul_check__(0,100));
+  tt_assert(size_mul_check__(100,0));
+  tt_assert(size_mul_check__(100,100));
+
+  /* Harder cases that are still good. */
+  tt_assert(size_mul_check__(SIZE_MAX, 1));
+  tt_assert(size_mul_check__(1, SIZE_MAX));
+  tt_assert(size_mul_check__(SIZE_MAX / 10, 9));
+  tt_assert(size_mul_check__(11, SIZE_MAX / 12));
+  const size_t sqrt_size_max_p1 = ((size_t)1) << (sizeof(size_t) * 4);
+  tt_assert(size_mul_check__(sqrt_size_max_p1, sqrt_size_max_p1 - 1));
+
+  /* Cases that overflow */
+  tt_assert(! size_mul_check__(SIZE_MAX, 2));
+  tt_assert(! size_mul_check__(2, SIZE_MAX));
+  tt_assert(! size_mul_check__(SIZE_MAX / 10, 11));
+  tt_assert(! size_mul_check__(11, SIZE_MAX / 10));
+  tt_assert(! size_mul_check__(SIZE_MAX / 8, 9));
+  tt_assert(! size_mul_check__(sqrt_size_max_p1, sqrt_size_max_p1));
+
+ done:
+  ;
+}
+
+static void
+test_util_monotonic_time(void *arg)
+{
+  (void)arg;
+
+  monotime_t mt1, mt2;
+  monotime_coarse_t mtc1, mtc2;
+  uint64_t nsec1, nsec2, usec1, msec1;
+  uint64_t nsecc1, nsecc2, usecc1, msecc1;
+
+  monotime_get(&mt1);
+  monotime_coarse_get(&mtc1);
+  nsec1 = monotime_absolute_nsec();
+  usec1 = monotime_absolute_usec();
+  msec1 = monotime_absolute_msec();
+  nsecc1 = monotime_coarse_absolute_nsec();
+  usecc1 = monotime_coarse_absolute_usec();
+  msecc1 = monotime_coarse_absolute_msec();
+
+  tor_sleep_msec(200);
+
+  monotime_get(&mt2);
+  monotime_coarse_get(&mtc2);
+  nsec2 = monotime_absolute_nsec();
+  nsecc2 = monotime_coarse_absolute_nsec();
+
+  /* We need to be a little careful here since we don't know the system load.
+   */
+  tt_i64_op(monotime_diff_msec(&mt1, &mt2), OP_GE, 175);
+  tt_i64_op(monotime_diff_msec(&mt1, &mt2), OP_LT, 1000);
+  tt_i64_op(monotime_coarse_diff_msec(&mtc1, &mtc2), OP_GE, 125);
+  tt_i64_op(monotime_coarse_diff_msec(&mtc1, &mtc2), OP_LT, 1000);
+  tt_u64_op(nsec2-nsec1, OP_GE, 175000000);
+  tt_u64_op(nsec2-nsec1, OP_LT, 1000000000);
+  tt_u64_op(nsecc2-nsecc1, OP_GE, 125000000);
+  tt_u64_op(nsecc2-nsecc1, OP_LT, 1000000000);
+
+  tt_u64_op(msec1, OP_GE, nsec1 / 1000000);
+  tt_u64_op(usec1, OP_GE, nsec1 / 1000);
+  tt_u64_op(msecc1, OP_GE, nsecc1 / 1000000);
+  tt_u64_op(usecc1, OP_GE, nsecc1 / 1000);
+  tt_u64_op(msec1, OP_LE, nsec1 / 1000000 + 1);
+  tt_u64_op(usec1, OP_LE, nsec1 / 1000 +10);
+  tt_u64_op(msecc1, OP_LE, nsecc1 / 1000000 + 1);
+  tt_u64_op(usecc1, OP_LE, nsecc1 / 1000 + 10);
+
+ done:
+  ;
+}
+
+static void
+test_util_monotonic_time_ratchet(void *arg)
+{
+  (void)arg;
+  monotime_reset_ratchets_for_testing();
+
+  /* win32, performance counter ratchet. */
+  tt_i64_op(100, OP_EQ, ratchet_performance_counter(100));
+  tt_i64_op(101, OP_EQ, ratchet_performance_counter(101));
+  tt_i64_op(2000, OP_EQ, ratchet_performance_counter(2000));
+  tt_i64_op(2000, OP_EQ, ratchet_performance_counter(100));
+  tt_i64_op(2005, OP_EQ, ratchet_performance_counter(105));
+  tt_i64_op(3005, OP_EQ, ratchet_performance_counter(1105));
+  tt_i64_op(3005, OP_EQ, ratchet_performance_counter(1000));
+  tt_i64_op(3010, OP_EQ, ratchet_performance_counter(1005));
+
+  /* win32, GetTickCounts32 ratchet-and-rollover-detector. */
+  const int64_t R = ((int64_t)1) << 32;
+  tt_i64_op(5, OP_EQ, ratchet_coarse_performance_counter(5));
+  tt_i64_op(1000, OP_EQ, ratchet_coarse_performance_counter(1000));
+  tt_i64_op(5+R, OP_EQ, ratchet_coarse_performance_counter(5));
+  tt_i64_op(10+R, OP_EQ, ratchet_coarse_performance_counter(10));
+  tt_i64_op(4+R*2, OP_EQ, ratchet_coarse_performance_counter(4));
+
+  /* gettimeofday regular ratchet. */
+  struct timeval tv_in = {0,0}, tv_out;
+  tv_in.tv_usec = 9000;
+
+  ratchet_timeval(&tv_in, &tv_out);
+  tt_int_op(tv_out.tv_usec, OP_EQ, 9000);
+  tt_i64_op(tv_out.tv_sec, OP_EQ, 0);
+
+  tv_in.tv_sec = 1337;
+  tv_in.tv_usec = 0;
+  ratchet_timeval(&tv_in, &tv_out);
+  tt_int_op(tv_out.tv_usec, OP_EQ, 0);
+  tt_i64_op(tv_out.tv_sec, OP_EQ, 1337);
+
+  tv_in.tv_sec = 1336;
+  tv_in.tv_usec = 500000;
+  ratchet_timeval(&tv_in, &tv_out);
+  tt_int_op(tv_out.tv_usec, OP_EQ, 0);
+  tt_i64_op(tv_out.tv_sec, OP_EQ, 1337);
+
+  tv_in.tv_sec = 1337;
+  tv_in.tv_usec = 0;
+  ratchet_timeval(&tv_in, &tv_out);
+  tt_int_op(tv_out.tv_usec, OP_EQ, 500000);
+  tt_i64_op(tv_out.tv_sec, OP_EQ, 1337);
+
+  tv_in.tv_sec = 1337;
+  tv_in.tv_usec = 600000;
+  ratchet_timeval(&tv_in, &tv_out);
+  tt_int_op(tv_out.tv_usec, OP_EQ, 100000);
+  tt_i64_op(tv_out.tv_sec, OP_EQ, 1338);
+
+  tv_in.tv_sec = 1000;
+  tv_in.tv_usec = 1000;
+  ratchet_timeval(&tv_in, &tv_out);
+  tt_int_op(tv_out.tv_usec, OP_EQ, 100000);
+  tt_i64_op(tv_out.tv_sec, OP_EQ, 1338);
+
+  tv_in.tv_sec = 2000;
+  tv_in.tv_usec = 2000;
+  ratchet_timeval(&tv_in, &tv_out);
+  tt_int_op(tv_out.tv_usec, OP_EQ, 101000);
+  tt_i64_op(tv_out.tv_sec, OP_EQ, 2338);
+
+ done:
+  ;
+}
 
 #define UTIL_LEGACY(name)                                               \
   { #name, test_util_ ## name , 0, NULL, NULL }
@@ -4815,11 +5462,12 @@ struct testcase_t util_tests[] = {
   UTIL_LEGACY(strmisc),
   UTIL_LEGACY(pow2),
   UTIL_LEGACY(gzip),
+  UTIL_LEGACY(gzip_compression_bomb),
   UTIL_LEGACY(datadir),
   UTIL_LEGACY(memarea),
   UTIL_LEGACY(control_formats),
   UTIL_LEGACY(mmap),
-  UTIL_LEGACY(sscanf),
+  UTIL_TEST(sscanf, TT_FORK),
   UTIL_LEGACY(format_time_interval),
   UTIL_LEGACY(path_is_relative),
   UTIL_LEGACY(strtok),
@@ -4834,6 +5482,7 @@ struct testcase_t util_tests[] = {
   UTIL_TEST(listdir, 0),
   UTIL_TEST(parent_dir, 0),
   UTIL_TEST(ftruncate, 0),
+  UTIL_TEST(num_cpus, 0),
   UTIL_TEST_WIN_ONLY(load_win_lib, 0),
   UTIL_TEST_NO_WIN(exit_status, 0),
   UTIL_TEST_NO_WIN(fgets_eagain, 0),
@@ -4855,6 +5504,7 @@ struct testcase_t util_tests[] = {
   UTIL_TEST(read_file_eof_zero_bytes, 0),
   UTIL_TEST(write_chunks_to_file, 0),
   UTIL_TEST(mathlog, 0),
+  UTIL_TEST(fraction, 0),
   UTIL_TEST(weak_random, 0),
   { "socket_ipv4", test_util_socket, TT_FORK, &passthrough_setup,
     (void*)"4" },
@@ -4871,6 +5521,9 @@ struct testcase_t util_tests[] = {
   UTIL_TEST(get_avail_disk_space, 0),
   UTIL_TEST(touch_file, 0),
   UTIL_TEST_NO_WIN(pwdb, TT_FORK),
+  UTIL_TEST(calloc_check, 0),
+  UTIL_TEST(monotonic_time, 0),
+  UTIL_TEST(monotonic_time_ratchet, TT_FORK),
   END_OF_TESTCASES
 };
 

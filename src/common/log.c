@@ -75,7 +75,7 @@ sev_to_string(int severity)
     case LOG_ERR:     return "err";
     default:          /* Call assert, not tor_assert, since tor_assert
                        * calls log on failure. */
-                      assert(0); return "UNKNOWN";
+                      assert(0); return "UNKNOWN"; // LCOV_EXCL_LINE
   }
 }
 
@@ -95,7 +95,7 @@ should_log_function_name(log_domain_mask_t domain, int severity)
       return (domain & (LD_BUG|LD_NOFUNCNAME)) == LD_BUG;
     default:
       /* Call assert, not tor_assert, since tor_assert calls log on failure. */
-      assert(0); return 0;
+      assert(0); return 0; // LCOV_EXCL_LINE
   }
 }
 
@@ -270,7 +270,7 @@ log_tor_version(logfile_t *lf, int reset)
   return 0;
 }
 
-const char bug_suffix[] = " (on Tor " VERSION
+static const char bug_suffix[] = " (on Tor " VERSION
 #ifndef _MSC_VER
   " "
 #include "micro-revision.i"
@@ -1071,13 +1071,13 @@ mark_logs_temp(void)
  */
 int
 add_file_log(const log_severity_list_t *severity, const char *filename,
-             const int truncate)
+             const int truncate_log)
 {
   int fd;
   logfile_t *lf;
 
   int open_flags = O_WRONLY|O_CREAT;
-  open_flags |= truncate ? O_TRUNC : O_APPEND;
+  open_flags |= truncate_log ? O_TRUNC : O_APPEND;
 
   fd = tor_open_cloexec(filename, open_flags, 0644);
   if (fd<0)

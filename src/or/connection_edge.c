@@ -1,4 +1,4 @@
-/* Copyright (c) 2001 Matej Pfajfar.
+ /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
  * Copyright (c) 2007-2016, The Tor Project, Inc. */
@@ -919,7 +919,7 @@ connection_ap_warn_and_unmark_if_pending_circ(entry_connection_t *entry_conn,
 
 /** Tell any AP streams that are waiting for a one-hop tunnel to
  * <b>failed_digest</b> that they are going to fail. */
-/* XXX024 We should get rid of this function, and instead attach
+/* XXXX We should get rid of this function, and instead attach
  * one-hop streams to circ->p_streams so they get marked in
  * circuit_mark_for_close like normal p_streams. */
 void
@@ -1442,7 +1442,7 @@ connection_ap_handshake_rewrite_and_attach(entry_connection_t *conn,
       connection_mark_unattached_ap(conn, END_STREAM_REASON_TORPROTOCOL);
       return -1;
     }
-    /* XXXX024-1090 Should we also allow foo.bar.exit if ExitNodes is set and
+    /* XXXX-1090 Should we also allow foo.bar.exit if ExitNodes is set and
        Bar is not listed in it?  I say yes, but our revised manpage branch
        implies no. */
   }
@@ -1691,7 +1691,7 @@ connection_ap_handshake_rewrite_and_attach(entry_connection_t *conn,
     rend_service_authorization_t *client_auth =
       rend_client_lookup_service_authorization(socks->address);
 
-    const char *cookie = NULL;
+    const uint8_t *cookie = NULL;
     rend_auth_type_t auth_type = REND_NO_AUTH;
     if (client_auth) {
       log_info(LD_REND, "Using previously configured client authorization "
@@ -1703,7 +1703,8 @@ connection_ap_handshake_rewrite_and_attach(entry_connection_t *conn,
     /* Fill in the rend_data field so we can start doing a connection to
      * a hidden service. */
     rend_data_t *rend_data = ENTRY_TO_EDGE_CONN(conn)->rend_data =
-      rend_data_client_create(socks->address, NULL, cookie, auth_type);
+      rend_data_client_create(socks->address, NULL, (char *) cookie,
+                              auth_type);
     if (rend_data == NULL) {
       return -1;
     }
@@ -2290,7 +2291,7 @@ connection_ap_handshake_send_begin(entry_connection_t *ap_conn)
 
   edge_conn->stream_id = get_unique_stream_id_by_circ(circ);
   if (edge_conn->stream_id==0) {
-    /* XXXX024 Instead of closing this stream, we should make it get
+    /* XXXX+ Instead of closing this stream, we should make it get
      * retried on another circuit. */
     connection_mark_unattached_ap(ap_conn, END_STREAM_REASON_INTERNAL);
 
@@ -2382,7 +2383,7 @@ connection_ap_handshake_send_resolve(entry_connection_t *ap_conn)
 
   edge_conn->stream_id = get_unique_stream_id_by_circ(circ);
   if (edge_conn->stream_id==0) {
-    /* XXXX024 Instead of closing this stream, we should make it get
+    /* XXXX+ Instead of closing this stream, we should make it get
      * retried on another circuit. */
     connection_mark_unattached_ap(ap_conn, END_STREAM_REASON_INTERNAL);
 
@@ -2433,7 +2434,7 @@ connection_ap_handshake_send_resolve(entry_connection_t *ap_conn)
 
   if (!base_conn->address) {
     /* This might be unnecessary. XXXX */
-    base_conn->address = tor_dup_addr(&base_conn->addr);
+    base_conn->address = tor_addr_to_str_dup(&base_conn->addr);
   }
   base_conn->state = AP_CONN_STATE_RESOLVE_WAIT;
   log_info(LD_APP,"Address sent for resolve, ap socket "TOR_SOCKET_T_FORMAT
@@ -2880,7 +2881,7 @@ connection_exit_begin_conn(cell_t *cell, circuit_t *circ)
   or_circuit_t *or_circ = NULL;
   const or_options_t *options = get_options();
   begin_cell_t bcell;
-  int r;
+  int rv;
   uint8_t end_reason=0;
 
   assert_circuit_ok(circ);
@@ -2905,10 +2906,10 @@ connection_exit_begin_conn(cell_t *cell, circuit_t *circ)
     return 0;
   }
 
-  r = begin_cell_parse(cell, &bcell, &end_reason);
-  if (r < -1) {
+  rv = begin_cell_parse(cell, &bcell, &end_reason);
+  if (rv < -1) {
     return -END_CIRC_REASON_TORPROTOCOL;
-  } else if (r == -1) {
+  } else if (rv == -1) {
     tor_free(bcell.address);
     relay_send_end_cell_from_edge(rh.stream_id, circ, end_reason, NULL);
     return 0;
@@ -3332,19 +3333,20 @@ connection_edge_is_rendezvous_stream(edge_connection_t *conn)
   return 0;
 }
 
-/** Return 1 if router <b>exit</b> is likely to allow stream <b>conn</b>
+/** Return 1 if router <b>exit_node</b> is likely to allow stream <b>conn</b>
  * to exit from it, or 0 if it probably will not allow it.
  * (We might be uncertain if conn's destination address has not yet been
  * resolved.)
  */
 int
-connection_ap_can_use_exit(const entry_connection_t *conn, const node_t *exit)
+connection_ap_can_use_exit(const entry_connection_t *conn,
+                           const node_t *exit_node)
 {
   const or_options_t *options = get_options();
 
   tor_assert(conn);
   tor_assert(conn->socks_request);
-  tor_assert(exit);
+  tor_assert(exit_node);
 
   /* If a particular exit node has been requested for the new connection,
    * make sure the exit node of the existing circuit matches exactly.
@@ -3353,7 +3355,7 @@ connection_ap_can_use_exit(const entry_connection_t *conn, const node_t *exit)
     const node_t *chosen_exit =
       node_get_by_nickname(conn->chosen_exit_name, 1);
     if (!chosen_exit || tor_memneq(chosen_exit->identity,
-                               exit->identity, DIGEST_LEN)) {
+                               exit_node->identity, DIGEST_LEN)) {
       /* doesn't match */
 //      log_debug(LD_APP,"Requested node '%s', considering node '%s'. No.",
 //                conn->chosen_exit_name, exit->nickname);
@@ -3378,7 +3380,8 @@ connection_ap_can_use_exit(const entry_connection_t *conn, const node_t *exit)
       tor_addr_make_null(&addr, AF_INET);
       addrp = &addr;
     }
-    r = compare_tor_addr_to_node_policy(addrp, conn->socks_request->port,exit);
+    r = compare_tor_addr_to_node_policy(addrp, conn->socks_request->port,
+                                        exit_node);
     if (r == ADDR_POLICY_REJECTED)
       return 0; /* We know the address, and the exit policy rejects it. */
     if (r == ADDR_POLICY_PROBABLY_REJECTED && !conn->chosen_exit_name)
@@ -3387,10 +3390,10 @@ connection_ap_can_use_exit(const entry_connection_t *conn, const node_t *exit)
                  * this node, err on the side of caution. */
   } else if (SOCKS_COMMAND_IS_RESOLVE(conn->socks_request->command)) {
     /* Don't send DNS requests to non-exit servers by default. */
-    if (!conn->chosen_exit_name && node_exit_policy_rejects_all(exit))
+    if (!conn->chosen_exit_name && node_exit_policy_rejects_all(exit_node))
       return 0;
   }
-  if (routerset_contains_node(options->ExcludeExitNodesUnion_, exit)) {
+  if (routerset_contains_node(options->ExcludeExitNodesUnion_, exit_node)) {
     /* Not a suitable exit. Refuse it. */
     return 0;
   }

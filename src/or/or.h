@@ -14,14 +14,6 @@
 
 #include "orconfig.h"
 
-#if defined(__clang_analyzer__) || defined(__COVERITY__)
-/* If we're building for a static analysis, turn on all the off-by-default
- * features. */
-#ifndef INSTRUMENT_DOWNLOADS
-#define INSTRUMENT_DOWNLOADS 1
-#endif
-#endif
-
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
@@ -784,7 +776,7 @@ typedef enum rend_auth_type_t {
 
 /** Client-side configuration of authorization for a hidden service. */
 typedef struct rend_service_authorization_t {
-  char descriptor_cookie[REND_DESC_COOKIE_LEN];
+  uint8_t descriptor_cookie[REND_DESC_COOKIE_LEN];
   char onion_address[REND_SERVICE_ADDRESS_LEN+1];
   rend_auth_type_t auth_type;
 } rend_service_authorization_t;
@@ -1294,21 +1286,26 @@ typedef struct connection_t {
 
   time_t timestamp_created; /**< When was this connection_t created? */
 
-  /* XXXX_IP6 make this IPv6-capable */
   int socket_family; /**< Address family of this connection's socket.  Usually
-                      * AF_INET, but it can also be AF_UNIX, or in the future
-                      * AF_INET6 */
-  tor_addr_t addr; /**< IP of the other side of the connection; used to
-                    * identify routers, along with port. */
-  uint16_t port; /**< If non-zero, port on the other end
-                  * of the connection. */
+                      * AF_INET, but it can also be AF_UNIX, or AF_INET6 */
+  tor_addr_t addr; /**< IP that socket "s" is directly connected to;
+                    * may be the IP address for a proxy or pluggable transport,
+                    * see "address" for the address of the final destination.
+                    */
+  uint16_t port; /**< If non-zero, port that socket "s" is directly connected
+                  * to; may be the port for a proxy or pluggable transport,
+                  * see "address" for the port at the final destination. */
   uint16_t marked_for_close; /**< Should we close this conn on the next
                               * iteration of the main loop? (If true, holds
                               * the line number where this connection was
                               * marked.) */
   const char *marked_for_close_file; /**< For debugging: in which file were
                                       * we marked for close? */
-  char *address; /**< FQDN (or IP) of the other end.
+  char *address; /**< FQDN (or IP) and port of the final destination for this
+                  * connection; this is always the remote address, it is
+                  * passed to a proxy or pluggable transport if one in use.
+                  * See "addr" and "port" for the address that socket "s" is
+                  * directly connected to.
                   * strdup into this, because free_connection() frees it. */
   /** Another connection that's connected to this one in lieu of a socket. */
   struct connection_t *linked_conn;
@@ -1990,6 +1987,15 @@ typedef enum {
 #define download_schedule_increment_bitfield_t \
                                         ENUM_BF(download_schedule_increment_t)
 
+/** Enumeration: do we want to use the random exponential backoff
+ * mechanism? */
+typedef enum {
+  DL_SCHED_DETERMINISTIC = 0,
+  DL_SCHED_RANDOM_EXPONENTIAL = 1,
+} download_schedule_backoff_t;
+#define download_schedule_backoff_bitfield_t \
+                                        ENUM_BF(download_schedule_backoff_t)
+
 /** Information about our plans for retrying downloads for a downloadable
  * directory object.
  * Each type of downloadable directory object has a corresponding retry
@@ -2036,6 +2042,15 @@ typedef struct download_status_t {
   download_schedule_increment_bitfield_t increment_on : 1; /**< does this
                                         * schedule increment on each attempt,
                                         * or after each failure? */
+  download_schedule_backoff_bitfield_t backoff : 1; /**< do we use the
+                                        * deterministic schedule, or random
+                                        * exponential backoffs? */
+  uint8_t last_backoff_position; /**< number of attempts/failures, depending
+                                  * on increment_on, when we last recalculated
+                                  * the delay.  Only updated if backoff
+                                  * == 1. */
+  int last_delay_used; /**< last delay used for random exponential backoff;
+                        * only updated if backoff == 1 */
 } download_status_t;
 
 /** If n_download_failures is this high, the download can never happen. */
@@ -2508,6 +2523,18 @@ typedef struct networkstatus_voter_info_t {
   smartlist_t *sigs;
 } networkstatus_voter_info_t;
 
+typedef struct networkstatus_sr_info_t {
+  /* Indicate if the dirauth partitipates in the SR protocol with its vote.
+   * This is tied to the SR flag in the vote. */
+  unsigned int participate:1;
+  /* Both vote and consensus: Current and previous SRV. If list is empty,
+   * this means none were found in either the consensus or vote. */
+  struct sr_srv_t *previous_srv;
+  struct sr_srv_t *current_srv;
+  /* Vote only: List of commitments. */
+  smartlist_t *commits;
+} networkstatus_sr_info_t;
+
 /** Enumerates the possible seriousness values of a networkstatus document. */
 typedef enum {
   NS_TYPE_VOTE,
@@ -2590,6 +2617,9 @@ typedef struct networkstatus_t {
   /** If present, a map from descriptor digest to elements of
    * routerstatus_list. */
   digestmap_t *desc_digest_map;
+
+  /** Contains the shared random protocol data from a vote or consensus. */
+  networkstatus_sr_info_t sr_info;
 } networkstatus_t;
 
 /** A set of signatures for a networkstatus consensus.  Unless otherwise
@@ -2958,17 +2988,17 @@ typedef struct circuit_t {
 
   /** When the circuit was first used, or 0 if the circuit is clean.
    *
-   * XXXX023 Note that some code will artifically adjust this value backward
+   * XXXX Note that some code will artifically adjust this value backward
    * in time in order to indicate that a circuit shouldn't be used for new
    * streams, but that it can stay alive as long as it has streams on it.
    * That's a kludge we should fix.
    *
-   * XXX023 The CBT code uses this field to record when HS-related
+   * XXX The CBT code uses this field to record when HS-related
    * circuits entered certain states.  This usage probably won't
    * interfere with this field's primary purpose, but we should
    * document it more thoroughly to make sure of that.
    *
-   * XXX027 The SocksPort option KeepaliveIsolateSOCKSAuth will artificially
+   * XXX The SocksPort option KeepaliveIsolateSOCKSAuth will artificially
    * adjust this value forward each time a suitable stream is attached to an
    * already constructed circuit, potentially keeping the circuit alive
    * indefinitely.
@@ -3558,7 +3588,13 @@ typedef struct {
   /** Bitmask; derived from AllowInvalidNodes. */
   invalid_router_usage_t AllowInvalid_;
   config_line_t *ExitPolicy; /**< Lists of exit policy components. */
-  int ExitPolicyRejectPrivate; /**< Should we not exit to local addresses? */
+  int ExitPolicyRejectPrivate; /**< Should we not exit to reserved private
+                                * addresses, and our own published addresses?
+                                */
+  int ExitPolicyRejectLocalInterfaces; /**< Should we not exit to local
+                                        * interface addresses?
+                                        * Includes OutboundBindAddresses and
+                                        * configured ports. */
   config_line_t *SocksPolicy; /**< Lists of socks policy components */
   config_line_t *DirPolicy; /**< Lists of dir policy components */
   /** Addresses to bind for listening for SOCKS connections. */
@@ -4483,6 +4519,17 @@ typedef struct {
 
   /** Autobool: Do we try to retain capabilities if we can? */
   int KeepBindCapabilities;
+
+  /** Maximum total size of unparseable descriptors to log during the
+   * lifetime of this Tor process.
+   */
+  uint64_t MaxUnparseableDescSizeToLog;
+
+  /** Bool (default: 1): Switch for the shared random protocol. Only
+   * relevant to a directory authority. If off, the authority won't
+   * participate in the protocol. If on (default), a flag is added to the
+   * vote indicating participation. */
+  int AuthDirSharedRandomness;
 } or_options_t;
 
 /** Persistent state for an onion router, as saved to disk. */
@@ -5032,7 +5079,7 @@ typedef enum {
 /** Hidden-service side configuration of client authorization. */
 typedef struct rend_authorized_client_t {
   char *client_name;
-  char descriptor_cookie[REND_DESC_COOKIE_LEN];
+  uint8_t descriptor_cookie[REND_DESC_COOKIE_LEN];
   crypto_pk_t *client_key;
 } rend_authorized_client_t;
 
@@ -5060,12 +5107,12 @@ typedef struct rend_encoded_v2_service_descriptor_t {
  * INTRO_POINT_LIFETIME_INTRODUCTIONS INTRODUCE2 cells, it may expire
  * sooner.)
  *
- * XXX023 Should this be configurable? */
+ * XXX Should this be configurable? */
 #define INTRO_POINT_LIFETIME_MIN_SECONDS (18*60*60)
 /** The maximum number of seconds that an introduction point will last
  * before expiring due to old age.
  *
- * XXX023 Should this be configurable? */
+ * XXX Should this be configurable? */
 #define INTRO_POINT_LIFETIME_MAX_SECONDS (24*60*60)
 
 /** The maximum number of circuit creation retry we do to an intro point

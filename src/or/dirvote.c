@@ -15,10 +15,12 @@
 #include "policies.h"
 #include "rephist.h"
 #include "router.h"
+#include "routerkeys.h"
 #include "routerlist.h"
 #include "routerparse.h"
 #include "entrynodes.h" /* needed for guardfraction methods */
 #include "torcert.h"
+#include "shared_random_state.h"
 
 /**
  * \file dirvote.c
@@ -73,6 +75,7 @@ format_networkstatus_vote(crypto_pk_t *private_signing_key,
   char digest[DIGEST_LEN];
   uint32_t addr;
   char *client_versions_line = NULL, *server_versions_line = NULL;
+  char *shared_random_vote_str = NULL;
   networkstatus_voter_info_t *voter;
   char *status = NULL;
 
@@ -106,12 +109,16 @@ format_networkstatus_vote(crypto_pk_t *private_signing_key,
     SMARTLIST_FOREACH(v3_ns->package_lines, const char *, p,
                       if (validate_recommended_package_line(p))
                         smartlist_add_asprintf(tmp, "package %s\n", p));
+    smartlist_sort_strings(tmp);
     packages = smartlist_join_strings(tmp, "", 0, NULL);
     SMARTLIST_FOREACH(tmp, char *, cp, tor_free(cp));
     smartlist_free(tmp);
   } else {
     packages = tor_strdup("");
   }
+
+    /* Get shared random commitments/reveals line(s). */
+  shared_random_vote_str = sr_get_string_for_vote();
 
   {
     char published[ISO_TIME_LEN+1];
@@ -152,7 +159,8 @@ format_networkstatus_vote(crypto_pk_t *private_signing_key,
                  "flag-thresholds %s\n"
                  "params %s\n"
                  "dir-source %s %s %s %s %d %d\n"
-                 "contact %s\n",
+                 "contact %s\n"
+                 "%s", /* shared randomness information */
                  v3_ns->type == NS_TYPE_VOTE ? "vote" : "opinion",
                  methods,
                  published, va, fu, vu,
@@ -165,12 +173,15 @@ format_networkstatus_vote(crypto_pk_t *private_signing_key,
                  params,
                  voter->nickname, fingerprint, voter->address,
                  fmt_addr32(addr), voter->dir_port, voter->or_port,
-                 voter->contact);
+                 voter->contact,
+                 shared_random_vote_str ?
+                           shared_random_vote_str : "");
 
     tor_free(params);
     tor_free(flags);
     tor_free(flag_thresholds);
     tor_free(methods);
+    tor_free(shared_random_vote_str);
 
     if (!tor_digest_is_zero(voter->legacy_id_digest)) {
       char fpbuf[HEX_DIGEST_LEN+1];
@@ -607,15 +618,47 @@ compute_consensus_versions_list(smartlist_t *lst, int n_versioning)
   return result;
 }
 
+/** Given a list of K=V values, return the int32_t value corresponding to
+ * KEYWORD=, or default_val if no such value exists, or if the value is
+ * corrupt.
+ */
+STATIC int32_t
+dirvote_get_intermediate_param_value(const smartlist_t *param_list,
+                                     const char *keyword,
+                                     int32_t default_val)
+{
+  unsigned int n_found = 0;
+  int32_t value = default_val;
+
+  SMARTLIST_FOREACH_BEGIN(param_list, const char *, k_v_pair) {
+    if (!strcmpstart(k_v_pair, keyword) && k_v_pair[strlen(keyword)] == '=') {
+      const char *integer_str = &k_v_pair[strlen(keyword)+1];
+      int ok;
+      value = (int32_t)
+        tor_parse_long(integer_str, 10, INT32_MIN, INT32_MAX, &ok, NULL);
+      if (BUG(! ok))
+        return default_val;
+      ++n_found;
+    }
+  } SMARTLIST_FOREACH_END(k_v_pair);
+
+  if (n_found == 1)
+    return value;
+  else if (BUG(n_found > 1))
+    return default_val;
+  else
+    return default_val;
+}
+
 /** Minimum number of directory authorities voting for a parameter to
  * include it in the consensus, if consensus method 12 or later is to be
  * used. See proposal 178 for details. */
 #define MIN_VOTES_FOR_PARAM 3
 
-/** Helper: given a list of valid networkstatus_t, return a new string
+/** Helper: given a list of valid networkstatus_t, return a new smartlist
  * containing the contents of the consensus network parameter set.
  */
-STATIC char *
+STATIC smartlist_t *
 dirvote_compute_params(smartlist_t *votes, int method, int total_authorities)
 {
   int i;
@@ -624,7 +667,6 @@ dirvote_compute_params(smartlist_t *votes, int method, int total_authorities)
   int cur_param_len;
   const char *cur_param;
   const char *eq;
-  char *result;
 
   const int n_votes = smartlist_len(votes);
   smartlist_t *output;
@@ -646,8 +688,7 @@ dirvote_compute_params(smartlist_t *votes, int method, int total_authorities)
 
   if (smartlist_len(param_list) == 0) {
     tor_free(vals);
-    smartlist_free(param_list);
-    return NULL;
+    return param_list;
   }
 
   smartlist_sort_strings(param_list);
@@ -695,12 +736,9 @@ dirvote_compute_params(smartlist_t *votes, int method, int total_authorities)
     }
   } SMARTLIST_FOREACH_END(param);
 
-  result = smartlist_join_strings(output, " ", 0, NULL);
-  SMARTLIST_FOREACH(output, char *, cp, tor_free(cp));
-  smartlist_free(output);
   smartlist_free(param_list);
   tor_free(vals);
-  return result;
+  return output;
 }
 
 #define RANGE_CHECK(a,b,c,d,e,f,g,mx) \
@@ -1147,6 +1185,8 @@ networkstatus_compute_consensus(smartlist_t *votes,
   char *packages = NULL;
   int added_weights = 0;
   dircollator_t *collator = NULL;
+  smartlist_t *param_list = NULL;
+
   tor_assert(flavor == FLAV_NS || flavor == FLAV_MICRODESC);
   tor_assert(total_authorities >= smartlist_len(votes));
   tor_assert(total_authorities > 0);
@@ -1291,12 +1331,29 @@ networkstatus_compute_consensus(smartlist_t *votes,
     tor_free(flaglist);
   }
 
-  params = dirvote_compute_params(votes, consensus_method,
-                                  total_authorities);
-  if (params) {
+  param_list = dirvote_compute_params(votes, consensus_method,
+                                      total_authorities);
+  if (smartlist_len(param_list)) {
+    params = smartlist_join_strings(param_list, " ", 0, NULL);
     smartlist_add(chunks, tor_strdup("params "));
     smartlist_add(chunks, params);
     smartlist_add(chunks, tor_strdup("\n"));
+  }
+
+  if (consensus_method >= MIN_METHOD_FOR_SHARED_RANDOM) {
+    int num_dirauth = get_n_authorities(V3_DIRINFO);
+    /* Default value of this is 2/3 of the total number of authorities. For
+     * instance, if we have 9 dirauth, the default value is 6. The following
+     * calculation will round it down. */
+    int32_t num_srv_agreements =
+      dirvote_get_intermediate_param_value(param_list,
+                                           "AuthDirNumSRVAgreements",
+                                           (num_dirauth * 2) / 3);
+    /* Add the shared random value. */
+    char *srv_lines = sr_get_string_for_consensus(votes, num_srv_agreements);
+    if (srv_lines != NULL) {
+      smartlist_add(chunks, srv_lines);
+    }
   }
 
   /* Sort the votes. */
@@ -1350,7 +1407,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
 
   if (consensus_method >= MIN_METHOD_TO_CLIP_UNMEASURED_BW) {
     char *max_unmeasured_param = NULL;
-    /* XXXX Extract this code into a common function */
+    /* XXXX Extract this code into a common function.  Or don't!  see #19011 */
     if (params) {
       if (strcmpstart(params, "maxunmeasuredbw=") == 0)
         max_unmeasured_param = params;
@@ -1374,7 +1431,6 @@ networkstatus_compute_consensus(smartlist_t *votes,
 
   /* Add the actual router entries. */
   {
-    int *index; /* index[j] is the current index into votes[j]. */
     int *size; /* size[j] is the number of routerstatuses in votes[j]. */
     int *flag_counts; /* The number of voters that list flag[j] for the
                        * currently considered router. */
@@ -1409,7 +1465,6 @@ networkstatus_compute_consensus(smartlist_t *votes,
     memset(conflict, 0, sizeof(conflict));
     memset(unknown, 0xff, sizeof(conflict));
 
-    index = tor_calloc(smartlist_len(votes), sizeof(int));
     size = tor_calloc(smartlist_len(votes), sizeof(int));
     n_voter_flags = tor_calloc(smartlist_len(votes), sizeof(int));
     n_flag_voters = tor_calloc(smartlist_len(flags), sizeof(int));
@@ -1875,7 +1930,6 @@ networkstatus_compute_consensus(smartlist_t *votes,
       /* And the loop is over and we move on to the next router */
     }
 
-    tor_free(index);
     tor_free(size);
     tor_free(n_voter_flags);
     tor_free(n_flag_voters);
@@ -1905,7 +1959,7 @@ networkstatus_compute_consensus(smartlist_t *votes,
     // Parse params, extract BW_WEIGHT_SCALE if present
     // DO NOT use consensus_param_bw_weight_scale() in this code!
     // The consensus is not formed yet!
-    /* XXXX Extract this code into a common function */
+    /* XXXX Extract this code into a common function. Or not: #19011. */
     if (params) {
       if (strcmpstart(params, "bwweightscale=") == 0)
         bw_weight_param = params;
@@ -2025,6 +2079,8 @@ networkstatus_compute_consensus(smartlist_t *votes,
   smartlist_free(flags);
   SMARTLIST_FOREACH(chunks, char *, cp, tor_free(cp));
   smartlist_free(chunks);
+  SMARTLIST_FOREACH(param_list, char *, cp, tor_free(cp));
+  smartlist_free(param_list);
 
   return result;
 }
@@ -2168,7 +2224,7 @@ networkstatus_add_detached_signatures(networkstatus_t *target,
       }
     }
     if (!n_matches) {
-      *msg_out = "No regognized digests for given consensus flavor";
+      *msg_out = "No recognized digests for given consensus flavor";
     }
   }
 
@@ -2363,15 +2419,15 @@ networkstatus_get_detached_signatures(smartlist_t *consensuses)
 
   /* Now get all the sigs for non-FLAV_NS consensuses */
   SMARTLIST_FOREACH_BEGIN(consensuses, networkstatus_t *, ns) {
-    char *sigs;
+    char *sigs_on_this_consensus;
     if (ns->flavor == FLAV_NS)
       continue;
-    sigs = networkstatus_format_signatures(ns, 1);
-    if (!sigs) {
+    sigs_on_this_consensus = networkstatus_format_signatures(ns, 1);
+    if (!sigs_on_this_consensus) {
       log_warn(LD_DIR, "Couldn't format signatures");
       goto err;
     }
-    smartlist_add(elements, sigs);
+    smartlist_add(elements, sigs_on_this_consensus);
   } SMARTLIST_FOREACH_END(ns);
 
   /* Now add the FLAV_NS consensus signatrures. */
@@ -2510,49 +2566,59 @@ dirvote_get_start_of_next_interval(time_t now, int interval, int offset)
   return next;
 }
 
-/** Scheduling information for a voting interval. */
-static struct {
-  /** When do we generate and distribute our vote for this interval? */
-  time_t voting_starts;
-  /** When do we send an HTTP request for any votes that we haven't
-   * been posted yet?*/
-  time_t fetch_missing_votes;
-  /** When do we give up on getting more votes and generate a consensus? */
-  time_t voting_ends;
-  /** When do we send an HTTP request for any signatures we're expecting to
-   * see on the consensus? */
-  time_t fetch_missing_signatures;
-  /** When do we publish the consensus? */
-  time_t interval_starts;
+/* Using the time <b>now</b>, return the next voting valid-after time. */
+time_t
+get_next_valid_after_time(time_t now)
+{
+  time_t next_valid_after_time;
+  const or_options_t *options = get_options();
+  voting_schedule_t *new_voting_schedule =
+    get_voting_schedule(options, now, LOG_INFO);
+  tor_assert(new_voting_schedule);
 
-  /* True iff we have generated and distributed our vote. */
-  int have_voted;
-  /* True iff we've requested missing votes. */
-  int have_fetched_missing_votes;
-  /* True iff we have built a consensus and sent the signatures around. */
-  int have_built_consensus;
-  /* True iff we've fetched missing signatures. */
-  int have_fetched_missing_signatures;
-  /* True iff we have published our consensus. */
-  int have_published_consensus;
-} voting_schedule = {0,0,0,0,0,0,0,0,0,0};
+  next_valid_after_time = new_voting_schedule->interval_starts;
+  tor_free(new_voting_schedule);
+
+  return next_valid_after_time;
+}
+
+static voting_schedule_t voting_schedule;
 
 /** Set voting_schedule to hold the timing for the next vote we should be
  * doing. */
 void
 dirvote_recalculate_timing(const or_options_t *options, time_t now)
 {
+  voting_schedule_t *new_voting_schedule;
+
+  if (!authdir_mode_v3(options)) {
+    return;
+  }
+
+  /* get the new voting schedule */
+  new_voting_schedule = get_voting_schedule(options, now, LOG_NOTICE);
+  tor_assert(new_voting_schedule);
+
+  /* Fill in the global static struct now */
+  memcpy(&voting_schedule, new_voting_schedule, sizeof(voting_schedule));
+  tor_free(new_voting_schedule);
+}
+
+/* Populate and return a new voting_schedule_t that can be used to schedule
+ * voting. The object is allocated on the heap and it's the responsibility of
+ * the caller to free it. Can't fail. */
+voting_schedule_t *
+get_voting_schedule(const or_options_t *options, time_t now, int severity)
+{
   int interval, vote_delay, dist_delay;
   time_t start;
   time_t end;
   networkstatus_t *consensus;
+  voting_schedule_t *new_voting_schedule;
 
-  if (!authdir_mode_v3(options))
-    return;
+  new_voting_schedule = tor_malloc_zero(sizeof(voting_schedule_t));
 
   consensus = networkstatus_get_live_consensus(now);
-
-  memset(&voting_schedule, 0, sizeof(voting_schedule));
 
   if (consensus) {
     interval = (int)( consensus->fresh_until - consensus->valid_after );
@@ -2569,7 +2635,7 @@ dirvote_recalculate_timing(const or_options_t *options, time_t now)
   if (vote_delay + dist_delay > interval/2)
     vote_delay = dist_delay = interval / 4;
 
-  start = voting_schedule.interval_starts =
+  start = new_voting_schedule->interval_starts =
     dirvote_get_start_of_next_interval(now,interval,
                                       options->TestingV3AuthVotingStartOffset);
   end = dirvote_get_start_of_next_interval(start+1, interval,
@@ -2577,18 +2643,21 @@ dirvote_recalculate_timing(const or_options_t *options, time_t now)
 
   tor_assert(end > start);
 
-  voting_schedule.fetch_missing_signatures = start - (dist_delay/2);
-  voting_schedule.voting_ends = start - dist_delay;
-  voting_schedule.fetch_missing_votes = start - dist_delay - (vote_delay/2);
-  voting_schedule.voting_starts = start - dist_delay - vote_delay;
+  new_voting_schedule->fetch_missing_signatures = start - (dist_delay/2);
+  new_voting_schedule->voting_ends = start - dist_delay;
+  new_voting_schedule->fetch_missing_votes =
+    start - dist_delay - (vote_delay/2);
+  new_voting_schedule->voting_starts = start - dist_delay - vote_delay;
 
   {
     char tbuf[ISO_TIME_LEN+1];
-    format_iso_time(tbuf, voting_schedule.interval_starts);
-    log_notice(LD_DIR,"Choosing expected valid-after time as %s: "
-               "consensus_set=%d, interval=%d",
-               tbuf, consensus?1:0, interval);
+    format_iso_time(tbuf, new_voting_schedule->interval_starts);
+    tor_log(severity, LD_DIR,"Choosing expected valid-after time as %s: "
+            "consensus_set=%d, interval=%d",
+            tbuf, consensus?1:0, interval);
   }
+
+  return new_voting_schedule;
 }
 
 /** Entry point: Take whatever voting actions are pending as of <b>now</b>. */
@@ -2637,6 +2706,9 @@ dirvote_act(const or_options_t *options, time_t now)
     dirvote_publish_consensus();
     dirvote_clear_votes(0);
     voting_schedule.have_published_consensus = 1;
+    /* Update our shared random state with the consensus just published. */
+    sr_act_post_consensus(
+                networkstatus_get_latest_consensus_by_flavor(FLAV_NS));
     /* XXXX We will want to try again later if we haven't got enough
      * signatures yet.  Implement this if it turns out to ever happen. */
     dirvote_recalculate_timing(options, now);
@@ -2916,7 +2988,8 @@ dirvote_add_vote(const char *vote_body, const char **msg_out, int *status_out)
     /* Hey, it's a new cert! */
     trusted_dirs_load_certs_from_string(
                                vote->cert->cache_info.signed_descriptor_body,
-                               TRUSTED_DIRS_CERTS_SRC_FROM_VOTE, 1 /*flush*/);
+                               TRUSTED_DIRS_CERTS_SRC_FROM_VOTE, 1 /*flush*/,
+                               NULL);
     if (!authority_cert_get_by_digests(vote->cert->cache_info.identity_digest,
                                        vote->cert->signing_key_digest)) {
       log_warn(LD_BUG, "We added a cert, but still couldn't find it.");
@@ -2975,6 +3048,10 @@ dirvote_add_vote(const char *vote_body, const char **msg_out, int *status_out)
       }
   } SMARTLIST_FOREACH_END(v);
 
+  /* This a valid vote, update our shared random state. */
+  sr_handle_received_commits(vote->sr_info.commits,
+                             vote->cert->identity_key);
+
   pending_vote = tor_malloc_zero(sizeof(pending_vote_t));
   pending_vote->vote_body = new_cached_dir(tor_strndup(vote_body,
                                                        end_of_vote-vote_body),
@@ -3019,6 +3096,30 @@ dirvote_add_vote(const char *vote_body, const char **msg_out, int *status_out)
   return any_failed ? NULL : pending_vote;
 }
 
+/* Write the votes in <b>pending_vote_list</b> to disk. */
+static void
+write_v3_votes_to_disk(const smartlist_t *pending_votes)
+{
+  smartlist_t *votestrings = smartlist_new();
+  char *votefile = NULL;
+
+  SMARTLIST_FOREACH(pending_votes, pending_vote_t *, v,
+    {
+      sized_chunk_t *c = tor_malloc(sizeof(sized_chunk_t));
+      c->bytes = v->vote_body->dir;
+      c->len = v->vote_body->dir_len;
+      smartlist_add(votestrings, c); /* collect strings to write to disk */
+    });
+
+  votefile = get_datadir_fname("v3-status-votes");
+  write_chunks_to_file(votefile, votestrings, 0, 0);
+  log_debug(LD_DIR, "Wrote votes to disk (%s)!", votefile);
+
+  tor_free(votefile);
+  SMARTLIST_FOREACH(votestrings, sized_chunk_t *, c, tor_free(c));
+  smartlist_free(votestrings);
+}
+
 /** Try to compute a v3 networkstatus consensus from the currently pending
  * votes.  Return 0 on success, -1 on failure.  Store the consensus in
  * pending_consensus: it won't be ready to be published until we have
@@ -3028,8 +3129,8 @@ dirvote_compute_consensuses(void)
 {
   /* Have we got enough votes to try? */
   int n_votes, n_voters, n_vote_running = 0;
-  smartlist_t *votes = NULL, *votestrings = NULL;
-  char *consensus_body = NULL, *signatures = NULL, *votefile;
+  smartlist_t *votes = NULL;
+  char *consensus_body = NULL, *signatures = NULL;
   networkstatus_t *consensus = NULL;
   authority_cert_t *my_cert;
   pending_consensus_t pending[N_CONSENSUS_FLAVORS];
@@ -3040,6 +3141,17 @@ dirvote_compute_consensuses(void)
   if (!pending_vote_list)
     pending_vote_list = smartlist_new();
 
+  /* Write votes to disk */
+  write_v3_votes_to_disk(pending_vote_list);
+
+  /* Setup votes smartlist */
+  votes = smartlist_new();
+  SMARTLIST_FOREACH(pending_vote_list, pending_vote_t *, v,
+    {
+      smartlist_add(votes, v->vote); /* collect votes to compute consensus */
+    });
+
+  /* See if consensus managed to achieve majority */
   n_voters = get_n_authorities(V3_DIRINFO);
   n_votes = smartlist_len(pending_vote_list);
   if (n_votes <= n_voters/2) {
@@ -3065,24 +3177,6 @@ dirvote_compute_consensuses(void)
     log_warn(LD_DIR, "Can't generate consensus without a certificate.");
     goto err;
   }
-
-  votes = smartlist_new();
-  votestrings = smartlist_new();
-  SMARTLIST_FOREACH(pending_vote_list, pending_vote_t *, v,
-    {
-      sized_chunk_t *c = tor_malloc(sizeof(sized_chunk_t));
-      c->bytes = v->vote_body->dir;
-      c->len = v->vote_body->dir_len;
-      smartlist_add(votestrings, c); /* collect strings to write to disk */
-
-      smartlist_add(votes, v->vote); /* collect votes to compute consensus */
-    });
-
-  votefile = get_datadir_fname("v3-status-votes");
-  write_chunks_to_file(votefile, votestrings, 0, 0);
-  tor_free(votefile);
-  SMARTLIST_FOREACH(votestrings, sized_chunk_t *, c, tor_free(c));
-  smartlist_free(votestrings);
 
   {
     char legacy_dbuf[DIGEST_LEN];
@@ -3373,7 +3467,7 @@ dirvote_publish_consensus(void)
       continue;
     }
 
-    if (networkstatus_set_current_consensus(pending->body, name, 0))
+    if (networkstatus_set_current_consensus(pending->body, name, 0, NULL))
       log_warn(LD_DIR, "Error publishing %s consensus", name);
     else
       log_notice(LD_DIR, "Published %s consensus", name);
@@ -3515,7 +3609,7 @@ dirvote_create_microdescriptor(const routerinfo_t *ri, int consensus_method)
 
   if (consensus_method >= MIN_METHOD_FOR_P6_LINES &&
       ri->ipv6_exit_policy) {
-    /* XXXX024 This doesn't match proposal 208, which says these should
+    /* XXXX+++ This doesn't match proposal 208, which says these should
      * be taken unchanged from the routerinfo.  That's bogosity, IMO:
      * the proposal should have said to do this instead.*/
     char *p6 = write_short_policy(ri->ipv6_exit_policy);

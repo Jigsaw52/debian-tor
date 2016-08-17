@@ -203,7 +203,7 @@ circuit_is_better(const origin_circuit_t *oa, const origin_circuit_t *ob,
             timercmp(&a->timestamp_began, &b->timestamp_began, OP_GT))
           return 1;
         if (ob->build_state->is_internal)
-          /* XXX023 what the heck is this internal thing doing here. I
+          /* XXXX++ what the heck is this internal thing doing here. I
            * think we can get rid of it. circuit_is_acceptable() already
            * makes sure that is_internal is exactly what we need it to
            * be. -RD */
@@ -222,7 +222,7 @@ circuit_is_better(const origin_circuit_t *oa, const origin_circuit_t *ob,
       break;
   }
 
-  /* XXXX023 Maybe this check should get a higher priority to avoid
+  /* XXXX Maybe this check should get a higher priority to avoid
    *   using up circuits too rapidly. */
 
   a_bits = connection_edge_update_circuit_isolation(conn,
@@ -1067,7 +1067,7 @@ circuit_predict_and_launch_new(void)
   if (rep_hist_get_predicted_internal(now, &hidserv_needs_uptime,
                                       &hidserv_needs_capacity) &&
       ((num_uptime_internal<2 && hidserv_needs_uptime) ||
-        num_internal<2)
+        num_internal<3)
         && router_have_consensus_path() != CONSENSUS_PATH_UNKNOWN) {
     if (hidserv_needs_uptime)
       flags |= CIRCLAUNCH_NEED_UPTIME;
@@ -1936,8 +1936,8 @@ circuit_get_open_circ_or_launch(entry_connection_t *conn,
         return -1;
       }
     } else {
-      /* XXXX024 Duplicates checks in connection_ap_handshake_attach_circuit:
-       * refactor into a single function? */
+      /* XXXX Duplicates checks in connection_ap_handshake_attach_circuit:
+       * refactor into a single function. */
       const node_t *node = node_get_by_nickname(conn->chosen_exit_name, 1);
       int opt = conn->chosen_exit_optional;
       if (node && !connection_ap_can_use_exit(conn, node)) {
@@ -2028,7 +2028,8 @@ circuit_get_open_circ_or_launch(entry_connection_t *conn,
             char *hexdigest = conn->chosen_exit_name+1;
             tor_addr_t addr;
             if (strlen(hexdigest) < HEX_DIGEST_LEN ||
-                base16_decode(digest,DIGEST_LEN,hexdigest,HEX_DIGEST_LEN)<0) {
+                base16_decode(digest,DIGEST_LEN,
+                              hexdigest,HEX_DIGEST_LEN) != DIGEST_LEN) {
               log_info(LD_DIR, "Broken exit digest on tunnel conn. Closing.");
               return -1;
             }
@@ -2146,10 +2147,11 @@ optimistic_data_enabled(void)
 {
   const or_options_t *options = get_options();
   if (options->OptimisticData < 0) {
-    /* XXX023 consider having auto default to 1 rather than 0 before
-     * the 0.2.3 branch goes stable. See bug 3617. -RD */
+    /* Note: this default was 0 before #18815 was merged. We can't take the
+     * parameter out of the consensus until versions before that are all
+     * obsolete. */
     const int32_t enabled =
-      networkstatus_get_param(NULL, "UseOptimisticData", 0, 0, 1);
+      networkstatus_get_param(NULL, "UseOptimisticData", /*default*/ 1, 0, 1);
     return (int)enabled;
   }
   return options->OptimisticData;
@@ -2415,7 +2417,7 @@ connection_ap_handshake_attach_circuit(entry_connection_t *conn)
     /* find the circuit that we should use, if there is one. */
     retval = circuit_get_open_circ_or_launch(
         conn, CIRCUIT_PURPOSE_C_GENERAL, &circ);
-    if (retval < 1) // XXX023 if we totally fail, this still returns 0 -RD
+    if (retval < 1) // XXXX++ if we totally fail, this still returns 0 -RD
       return retval;
 
     log_debug(LD_APP|LD_CIRC,
@@ -2590,7 +2592,7 @@ mark_circuit_unusable_for_new_conns(origin_circuit_t *circ)
   const or_options_t *options = get_options();
   tor_assert(circ);
 
-  /* XXXX025 This is a kludge; we're only keeping it around in case there's
+  /* XXXX This is a kludge; we're only keeping it around in case there's
    * something that doesn't check unusable_for_new_conns, and to avoid
    * deeper refactoring of our expiration logic. */
   if (! circ->base_.timestamp_dirty)

@@ -469,6 +469,23 @@ rend_client_introduction_acked(origin_circuit_t *circ,
 /** The period for which a hidden service directory cannot be queried for
  * the same descriptor ID again. */
 #define REND_HID_SERV_DIR_REQUERY_PERIOD (15 * 60)
+/** Test networks generate a new consensus every 5 or 10 seconds.
+ * So allow them to requery HSDirs much faster. */
+#define REND_HID_SERV_DIR_REQUERY_PERIOD_TESTING (5)
+
+/** Return the period for which a hidden service directory cannot be queried
+ * for the same descriptor ID again, taking TestingTorNetwork into account. */
+static time_t
+hsdir_requery_period(const or_options_t *options)
+{
+  tor_assert(options);
+
+  if (options->TestingTorNetwork) {
+    return REND_HID_SERV_DIR_REQUERY_PERIOD_TESTING;
+  } else {
+    return REND_HID_SERV_DIR_REQUERY_PERIOD;
+  }
+}
 
 /** Contains the last request times to hidden service directories for
  * certain queries; each key is a string consisting of the
@@ -510,7 +527,7 @@ lookup_last_hid_serv_request(routerstatus_t *hs_dir,
   tor_snprintf(hsdir_desc_comb_id, sizeof(hsdir_desc_comb_id), "%s%s",
                hsdir_id_base32,
                desc_id_base32);
-  /* XXX023 tor_assert(strlen(hsdir_desc_comb_id) ==
+  /* XXX++?? tor_assert(strlen(hsdir_desc_comb_id) ==
                        LAST_HID_SERV_REQUEST_KEY_LEN); */
   if (set) {
     time_t *oldptr;
@@ -532,7 +549,7 @@ static void
 directory_clean_last_hid_serv_requests(time_t now)
 {
   strmap_iter_t *iter;
-  time_t cutoff = now - REND_HID_SERV_DIR_REQUERY_PERIOD;
+  time_t cutoff = now - hsdir_requery_period(get_options());
   strmap_t *last_hid_serv_requests = get_last_hid_serv_requests();
   for (iter = strmap_iter_init(last_hid_serv_requests);
        !strmap_iter_done(iter); ) {
@@ -572,7 +589,7 @@ purge_hid_serv_from_last_hid_serv_requests(const char *desc_id)
     const char *key;
     void *val;
     strmap_iter_get(iter, &key, &val);
-    /* XXX023 tor_assert(strlen(key) == LAST_HID_SERV_REQUEST_KEY_LEN); */
+    /* XXX++?? tor_assert(strlen(key) == LAST_HID_SERV_REQUEST_KEY_LEN); */
     if (tor_memeq(key + LAST_HID_SERV_REQUEST_KEY_LEN -
                   REND_DESC_ID_V2_LEN_BASE32,
                   desc_id_base32,
@@ -635,7 +652,7 @@ pick_hsdir(const char *desc_id, const char *desc_id_base32)
     time_t last = lookup_last_hid_serv_request(dir, desc_id_base32,
                                                0, 0);
     const node_t *node = node_get_by_id(dir->identity_digest);
-    if (last + REND_HID_SERV_DIR_REQUERY_PERIOD >= now ||
+    if (last + hsdir_requery_period(options) >= now ||
         !node || !node_has_descriptor(node)) {
       SMARTLIST_DEL_CURRENT(responsible_dirs, dir);
       continue;
@@ -813,9 +830,9 @@ fetch_v2_desc_by_addr(rend_data_t *query, smartlist_t *hsdirs)
 
   tries_left = REND_NUMBER_OF_NON_CONSECUTIVE_REPLICAS;
   while (tries_left > 0) {
-    int rand = crypto_rand_int(tries_left);
-    int chosen_replica = replicas_left_to_try[rand];
-    replicas_left_to_try[rand] = replicas_left_to_try[--tries_left];
+    int rand_val = crypto_rand_int(tries_left);
+    int chosen_replica = replicas_left_to_try[rand_val];
+    replicas_left_to_try[rand_val] = replicas_left_to_try[--tries_left];
 
     ret = rend_compute_v2_desc_id(descriptor_id, query->onion_address,
                                   query->auth_type == REND_STEALTH_AUTH ?
@@ -895,17 +912,17 @@ rend_client_refetch_v2_renddesc(rend_data_t *rend_query)
   rend_cache_entry_t *e = NULL;
 
   tor_assert(rend_query);
-  /* Are we configured to fetch descriptors? */
-  if (!get_options()->FetchHidServDescriptors) {
-    log_warn(LD_REND, "We received an onion address for a v2 rendezvous "
-        "service descriptor, but are not fetching service descriptors.");
-    return;
-  }
   /* Before fetching, check if we already have a usable descriptor here. */
   if (rend_cache_lookup_entry(rend_query->onion_address, -1, &e) == 0 &&
       rend_client_any_intro_points_usable(e)) {
     log_info(LD_REND, "We would fetch a v2 rendezvous descriptor, but we "
                       "already have a usable descriptor here. Not fetching.");
+    return;
+  }
+  /* Are we configured to fetch descriptors? */
+  if (!get_options()->FetchHidServDescriptors) {
+    log_warn(LD_REND, "We received an onion address for a v2 rendezvous "
+        "service descriptor, but are not fetching service descriptors.");
     return;
   }
   log_debug(LD_REND, "Fetching v2 rendezvous descriptor for service %s",
@@ -1099,7 +1116,7 @@ rend_client_rendezvous_acked(origin_circuit_t *circ, const uint8_t *request,
    * service and never reply to the client's rend requests */
   pathbias_mark_use_success(circ);
 
-  /* XXXX This is a pretty brute-force approach. It'd be better to
+  /* XXXX++ This is a pretty brute-force approach. It'd be better to
    * attach only the connections that are waiting on this circuit, rather
    * than trying to attach them all. See comments bug 743. */
   /* If we already have the introduction circuit built, make sure we send
@@ -1466,12 +1483,10 @@ rend_parse_service_authorization(const or_options_t *options,
   strmap_t *parsed = strmap_new();
   smartlist_t *sl = smartlist_new();
   rend_service_authorization_t *auth = NULL;
-  char descriptor_cookie_tmp[REND_DESC_COOKIE_LEN+2];
-  char descriptor_cookie_base64ext[REND_DESC_COOKIE_LEN_BASE64+2+1];
+  char *err_msg = NULL;
 
   for (line = options->HidServAuth; line; line = line->next) {
     char *onion_address, *descriptor_cookie;
-    int auth_type_val = 0;
     auth = NULL;
     SMARTLIST_FOREACH(sl, char *, c, tor_free(c););
     smartlist_clear(sl);
@@ -1500,31 +1515,13 @@ rend_parse_service_authorization(const or_options_t *options,
     }
     /* Parse descriptor cookie. */
     descriptor_cookie = smartlist_get(sl, 1);
-    if (strlen(descriptor_cookie) != REND_DESC_COOKIE_LEN_BASE64) {
-      log_warn(LD_CONFIG, "Authorization cookie has wrong length: '%s'",
-               descriptor_cookie);
+    if (rend_auth_decode_cookie(descriptor_cookie, auth->descriptor_cookie,
+                                &auth->auth_type, &err_msg) < 0) {
+      tor_assert(err_msg);
+      log_warn(LD_CONFIG, "%s", err_msg);
+      tor_free(err_msg);
       goto err;
     }
-    /* Add trailing zero bytes (AA) to make base64-decoding happy. */
-    tor_snprintf(descriptor_cookie_base64ext,
-                 REND_DESC_COOKIE_LEN_BASE64+2+1,
-                 "%sAA", descriptor_cookie);
-    if (base64_decode(descriptor_cookie_tmp, sizeof(descriptor_cookie_tmp),
-                      descriptor_cookie_base64ext,
-                      strlen(descriptor_cookie_base64ext)) < 0) {
-      log_warn(LD_CONFIG, "Decoding authorization cookie failed: '%s'",
-               descriptor_cookie);
-      goto err;
-    }
-    auth_type_val = (((uint8_t)descriptor_cookie_tmp[16]) >> 4) + 1;
-    if (auth_type_val < 1 || auth_type_val > 2) {
-      log_warn(LD_CONFIG, "Authorization cookie has unknown authorization "
-                          "type encoded.");
-      goto err;
-    }
-    auth->auth_type = auth_type_val == 1 ? REND_BASIC_AUTH : REND_STEALTH_AUTH;
-    memcpy(auth->descriptor_cookie, descriptor_cookie_tmp,
-           REND_DESC_COOKIE_LEN);
     if (strmap_get(parsed, auth->onion_address)) {
       log_warn(LD_CONFIG, "Duplicate authorization for the same hidden "
                           "service.");
@@ -1547,8 +1544,6 @@ rend_parse_service_authorization(const or_options_t *options,
   } else {
     strmap_free(parsed, rend_service_authorization_strmap_item_free);
   }
-  memwipe(descriptor_cookie_tmp, 0, sizeof(descriptor_cookie_tmp));
-  memwipe(descriptor_cookie_base64ext, 0, sizeof(descriptor_cookie_base64ext));
   return res;
 }
 

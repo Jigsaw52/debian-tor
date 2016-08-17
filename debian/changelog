@@ -1,3 +1,9 @@
+tor (0.2.9.1-alpha-1) experimental; urgency=medium
+
+  * New upstream tree.
+
+ -- Peter Palfrader <weasel@debian.org>  Wed, 17 Aug 2016 21:05:37 +0200
+
 tor (0.2.8.6-3) unstable; urgency=medium
 
   * Raise TimeoutStartSec from 120 to 300 secs for slower systems.

@@ -32,7 +32,9 @@
 #include "router.h"
 #include "routerlist.h"
 #include "routerparse.h"
+#include "shared_random.h"
 #include "transports.h"
+#include "torcert.h"
 
 /** Map from lowercase nickname to identity digest of named server, if any. */
 static strmap_t *named_server_map = NULL;
@@ -86,9 +88,9 @@ static time_t time_to_download_next_consensus[N_CONSENSUS_FLAVORS];
 static download_status_t consensus_dl_status[N_CONSENSUS_FLAVORS] =
   {
     { 0, 0, 0, DL_SCHED_CONSENSUS, DL_WANT_ANY_DIRSERVER,
-                                   DL_SCHED_INCREMENT_FAILURE },
+      DL_SCHED_INCREMENT_FAILURE, DL_SCHED_RANDOM_EXPONENTIAL, 0, 0 },
     { 0, 0, 0, DL_SCHED_CONSENSUS, DL_WANT_ANY_DIRSERVER,
-                                   DL_SCHED_INCREMENT_FAILURE },
+      DL_SCHED_INCREMENT_FAILURE, DL_SCHED_RANDOM_EXPONENTIAL, 0, 0 },
   };
 
 #define N_CONSENSUS_BOOTSTRAP_SCHEDULES 2
@@ -105,10 +107,10 @@ static download_status_t
               consensus_bootstrap_dl_status[N_CONSENSUS_BOOTSTRAP_SCHEDULES] =
   {
     { 0, 0, 0, DL_SCHED_CONSENSUS, DL_WANT_AUTHORITY,
-                                   DL_SCHED_INCREMENT_ATTEMPT },
+      DL_SCHED_INCREMENT_ATTEMPT, DL_SCHED_RANDOM_EXPONENTIAL, 0, 0 },
     /* During bootstrap, DL_WANT_ANY_DIRSERVER means "use fallbacks". */
     { 0, 0, 0, DL_SCHED_CONSENSUS, DL_WANT_ANY_DIRSERVER,
-                                   DL_SCHED_INCREMENT_ATTEMPT },
+      DL_SCHED_INCREMENT_ATTEMPT, DL_SCHED_RANDOM_EXPONENTIAL, 0, 0 },
   };
 
 /** True iff we have logged a warning about this OR's version being older than
@@ -173,7 +175,7 @@ router_reload_consensus_networkstatus(void)
     }
     s = read_file_to_str(filename, RFTS_IGNORE_MISSING, NULL);
     if (s) {
-      if (networkstatus_set_current_consensus(s, flavor, flags) < -1) {
+      if (networkstatus_set_current_consensus(s, flavor, flags, NULL) < -1) {
         log_warn(LD_FS, "Couldn't load consensus %s networkstatus from \"%s\"",
                  flavor, filename);
       }
@@ -191,7 +193,8 @@ router_reload_consensus_networkstatus(void)
     s = read_file_to_str(filename, RFTS_IGNORE_MISSING, NULL);
     if (s) {
       if (networkstatus_set_current_consensus(s, flavor,
-                                     flags|NSSET_WAS_WAITING_FOR_CERTS)) {
+                                     flags|NSSET_WAS_WAITING_FOR_CERTS,
+                                     NULL)) {
       log_info(LD_FS, "Couldn't load consensus %s networkstatus from \"%s\"",
                flavor, filename);
     }
@@ -318,6 +321,14 @@ networkstatus_vote_free(networkstatus_t *ns)
   }
 
   digestmap_free(ns->desc_digest_map, NULL);
+
+  if (ns->sr_info.commits) {
+    SMARTLIST_FOREACH(ns->sr_info.commits, sr_commit_t *, c,
+                      sr_commit_free(c));
+    smartlist_free(ns->sr_info.commits);
+  }
+  tor_free(ns->sr_info.previous_srv);
+  tor_free(ns->sr_info.current_srv);
 
   memwipe(ns, 11, sizeof(*ns));
   tor_free(ns);
@@ -656,6 +667,43 @@ router_get_consensus_status_by_descriptor_digest(networkstatus_t *consensus,
 {
   return router_get_mutable_consensus_status_by_descriptor_digest(
                                                           consensus, digest);
+}
+
+/** Return a smartlist of all router descriptor digests in a consensus */
+static smartlist_t *
+router_get_descriptor_digests_in_consensus(networkstatus_t *consensus)
+{
+  smartlist_t *result = smartlist_new();
+  digestmap_iter_t *i;
+  const char *digest;
+  void *rs;
+  char *digest_tmp;
+
+  for (i = digestmap_iter_init(consensus->desc_digest_map);
+       !(digestmap_iter_done(i));
+       i = digestmap_iter_next(consensus->desc_digest_map, i)) {
+    digestmap_iter_get(i, &digest, &rs);
+    digest_tmp = tor_malloc(DIGEST_LEN);
+    memcpy(digest_tmp, digest, DIGEST_LEN);
+    smartlist_add(result, digest_tmp);
+  }
+
+  return result;
+}
+
+/** Return a smartlist of all router descriptor digests in the current
+ * consensus */
+MOCK_IMPL(smartlist_t *,
+router_get_descriptor_digests,(void))
+{
+  smartlist_t *result = NULL;
+
+  if (current_ns_consensus) {
+    result =
+      router_get_descriptor_digests_in_consensus(current_ns_consensus);
+  }
+
+  return result;
 }
 
 /** Given the digest of a router descriptor, return its current download
@@ -1160,13 +1208,13 @@ update_certificate_downloads(time_t now)
   for (i = 0; i < N_CONSENSUS_FLAVORS; ++i) {
     if (consensus_waiting_for_certs[i].consensus)
       authority_certs_fetch_missing(consensus_waiting_for_certs[i].consensus,
-                                    now);
+                                    now, NULL);
   }
 
   if (current_ns_consensus)
-    authority_certs_fetch_missing(current_ns_consensus, now);
+    authority_certs_fetch_missing(current_ns_consensus, now, NULL);
   if (current_md_consensus)
-    authority_certs_fetch_missing(current_md_consensus, now);
+    authority_certs_fetch_missing(current_md_consensus, now, NULL);
 }
 
 /** Return 1 if we have a consensus but we don't have enough certificates
@@ -1178,10 +1226,56 @@ consensus_is_waiting_for_certs(void)
     ? 1 : 0;
 }
 
+/** Look up the currently active (depending on bootstrap status) download
+ * status for this consensus flavor and return a pointer to it.
+ */
+MOCK_IMPL(download_status_t *,
+networkstatus_get_dl_status_by_flavor,(consensus_flavor_t flavor))
+{
+  download_status_t *dl = NULL;
+  const int we_are_bootstrapping =
+    networkstatus_consensus_is_bootstrapping(time(NULL));
+
+  if ((int)flavor <= N_CONSENSUS_FLAVORS) {
+    dl = &((we_are_bootstrapping ?
+           consensus_bootstrap_dl_status : consensus_dl_status)[flavor]);
+  }
+
+  return dl;
+}
+
+/** Look up the bootstrap download status for this consensus flavor
+ * and return a pointer to it. */
+MOCK_IMPL(download_status_t *,
+networkstatus_get_dl_status_by_flavor_bootstrap,(consensus_flavor_t flavor))
+{
+  download_status_t *dl = NULL;
+
+  if ((int)flavor <= N_CONSENSUS_FLAVORS) {
+    dl = &(consensus_bootstrap_dl_status[flavor]);
+  }
+
+  return dl;
+}
+
+/** Look up the running (non-bootstrap) download status for this consensus
+ * flavor and return a pointer to it. */
+MOCK_IMPL(download_status_t *,
+networkstatus_get_dl_status_by_flavor_running,(consensus_flavor_t flavor))
+{
+  download_status_t *dl = NULL;
+
+  if ((int)flavor <= N_CONSENSUS_FLAVORS) {
+    dl = &(consensus_dl_status[flavor]);
+  }
+
+  return dl;
+}
+
 /** Return the most recent consensus that we have downloaded, or NULL if we
  * don't have one. */
-networkstatus_t *
-networkstatus_get_latest_consensus(void)
+MOCK_IMPL(networkstatus_t *,
+networkstatus_get_latest_consensus,(void))
 {
   return current_consensus;
 }
@@ -1203,8 +1297,8 @@ networkstatus_get_latest_consensus_by_flavor,(consensus_flavor_t f))
 
 /** Return the most recent consensus that we have downloaded, or NULL if it is
  * no longer live. */
-networkstatus_t *
-networkstatus_get_live_consensus(time_t now)
+MOCK_IMPL(networkstatus_t *,
+networkstatus_get_live_consensus,(time_t now))
 {
   if (current_consensus &&
       current_consensus->valid_after <= now &&
@@ -1460,6 +1554,10 @@ networkstatus_set_current_consensus_from_ns(networkstatus_t *c,
  * If flags & NSSET_ACCEPT_OBSOLETE, then we should be willing to take this
  * consensus, even if it comes from many days in the past.
  *
+ * If source_dir is non-NULL, it's the identity digest for a directory that
+ * we've just successfully retrieved a consensus or certificates from, so try
+ * it first to fetch any missing certificates.
+ *
  * Return 0 on success, <0 on failure.  On failure, caller should increment
  * the failure count as appropriate.
  *
@@ -1469,7 +1567,8 @@ networkstatus_set_current_consensus_from_ns(networkstatus_t *c,
 int
 networkstatus_set_current_consensus(const char *consensus,
                                     const char *flavor,
-                                    unsigned flags)
+                                    unsigned flags,
+                                    const char *source_dir)
 {
   networkstatus_t *c=NULL;
   int r, result = -1;
@@ -1591,7 +1690,7 @@ networkstatus_set_current_consensus(const char *consensus,
           write_str_to_file(unverified_fname, consensus, 0);
         }
         if (dl_certs)
-          authority_certs_fetch_missing(c, now);
+          authority_certs_fetch_missing(c, now, source_dir);
         /* This case is not a success or a failure until we get the certs
          * or fail to get the certs. */
         result = 0;
@@ -1629,7 +1728,7 @@ networkstatus_set_current_consensus(const char *consensus,
 
   /* Are we missing any certificates at all? */
   if (r != 1 && dl_certs)
-    authority_certs_fetch_missing(c, now);
+    authority_certs_fetch_missing(c, now, source_dir);
 
   if (flav == usable_consensus_flavor()) {
     notify_control_networkstatus_changed(current_consensus, c);
@@ -1703,7 +1802,7 @@ networkstatus_set_current_consensus(const char *consensus,
       channel_set_cmux_policy_everywhere(NULL);
     }
 
-    /* XXXX024 this call might be unnecessary here: can changing the
+    /* XXXX this call might be unnecessary here: can changing the
      * current consensus really alter our view of any OR's rate limits? */
     connection_or_update_token_buckets(get_connection_array(), options);
 
@@ -1752,9 +1851,14 @@ networkstatus_set_current_consensus(const char *consensus,
 }
 
 /** Called when we have gotten more certificates: see whether we can
- * now verify a pending consensus. */
+ * now verify a pending consensus.
+ *
+ * If source_dir is non-NULL, it's the identity digest for a directory that
+ * we've just successfully retrieved certificates from, so try it first to
+ * fetch any missing certificates.
+ */
 void
-networkstatus_note_certs_arrived(void)
+networkstatus_note_certs_arrived(const char *source_dir)
 {
   int i;
   for (i=0; i<N_CONSENSUS_FLAVORS; ++i) {
@@ -1766,7 +1870,8 @@ networkstatus_note_certs_arrived(void)
       if (!networkstatus_set_current_consensus(
                                  waiting_body,
                                  networkstatus_get_flavor_name(i),
-                                 NSSET_WAS_WAITING_FOR_CERTS)) {
+                                 NSSET_WAS_WAITING_FOR_CERTS,
+                                 source_dir)) {
         tor_free(waiting_body);
       }
     }
@@ -2204,7 +2309,7 @@ getinfo_helper_networkstatus(control_connection_t *conn,
     if (*q == '$')
       ++q;
 
-    if (base16_decode(d, DIGEST_LEN, q, strlen(q))) {
+    if (base16_decode(d, DIGEST_LEN, q, strlen(q)) != DIGEST_LEN) {
       *errmsg = "Data not decodeable as hex";
       return -1;
     }
