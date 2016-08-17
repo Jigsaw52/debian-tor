@@ -1,9 +1,9 @@
-tor (0.2.8.6-2.1) unstable; urgency=medium
+tor (0.2.8.6-3) unstable; urgency=medium
 
   * Raise TimeoutStartSec from 120 to 300 secs for slower systems.
   * tor-instance-create and tor-instance-create.8.txt: fix some typos.
 
- -- Peter Palfrader <weasel@debian.org>  Sat, 06 Aug 2016 22:31:56 +0200
+ -- Peter Palfrader <weasel@debian.org>  Wed, 17 Aug 2016 17:16:22 +0200
 
 tor (0.2.8.6-2) unstable; urgency=medium
 
