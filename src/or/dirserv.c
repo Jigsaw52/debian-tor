@@ -19,6 +19,7 @@
 #include "dirvote.h"
 #include "hibernate.h"
 #include "keypin.h"
+#include "main.h"
 #include "microdesc.h"
 #include "networkstatus.h"
 #include "nodelist.h"
@@ -43,10 +44,6 @@
 /** If we're a cache, keep this many networkstatuses around from non-trusted
  * directory authorities. */
 #define MAX_UNTRUSTED_NETWORKSTATUSES 16
-
-extern time_t time_of_process_start; /* from main.c */
-
-extern long stats_n_seconds_working; /* from main.c */
 
 /** Total number of routers with measured bandwidth; this is set by
  * dirserv_count_measured_bws() before the loop in
@@ -125,7 +122,8 @@ add_fingerprint_to_dir(const char *fp, authdir_config_t *list,
 
   fingerprint = tor_strdup(fp);
   tor_strstrip(fingerprint, " ");
-  if (base16_decode(d, DIGEST_LEN, fingerprint, strlen(fingerprint))) {
+  if (base16_decode(d, DIGEST_LEN,
+                    fingerprint, strlen(fingerprint)) != DIGEST_LEN) {
     log_warn(LD_DIRSERV, "Couldn't decode fingerprint \"%s\"",
              escaped(fp));
     tor_free(fingerprint);
@@ -202,7 +200,7 @@ dirserv_load_fingerprint_file(void)
     tor_strstrip(fingerprint, " "); /* remove spaces */
     if (strlen(fingerprint) != HEX_DIGEST_LEN ||
         base16_decode(digest_tmp, sizeof(digest_tmp),
-                      fingerprint, HEX_DIGEST_LEN) < 0) {
+                      fingerprint, HEX_DIGEST_LEN) != sizeof(digest_tmp)) {
       log_notice(LD_CONFIG,
                  "Invalid fingerprint (nickname '%s', "
                  "fingerprint %s). Skipping.",
@@ -349,7 +347,7 @@ dirserv_get_status_impl(const char *id_digest, const char *nickname,
 
   if (result & FP_REJECT) {
     if (msg)
-      *msg = "Fingerprint is marked rejected";
+      *msg = "Fingerprint is marked rejected -- please contact us?";
     return FP_REJECT;
   } else if (result & FP_INVALID) {
     if (msg)
@@ -367,7 +365,7 @@ dirserv_get_status_impl(const char *id_digest, const char *nickname,
     log_fn(severity, LD_DIRSERV, "Rejecting '%s' because of address '%s'",
                nickname, fmt_addr32(addr));
     if (msg)
-      *msg = "Authdir is rejecting routers in this range.";
+      *msg = "Suspicious relay address range -- please contact us?";
     return FP_REJECT;
   }
   if (!authdir_policy_valid_address(addr, or_port)) {
@@ -823,7 +821,7 @@ running_long_enough_to_decide_unreachable(void)
 void
 dirserv_set_router_is_running(routerinfo_t *router, time_t now)
 {
-  /*XXXX024 This function is a mess.  Separate out the part that calculates
+  /*XXXX This function is a mess.  Separate out the part that calculates
     whether it's reachable and the part that tells rephist that the router was
     unreachable.
    */
@@ -983,94 +981,6 @@ router_is_active(const routerinfo_t *ri, const node_t *node, time_t now)
     }
   }
   return 1;
-}
-
-/** Generate a new v1 directory and write it into a newly allocated string.
- * Point *<b>dir_out</b> to the allocated string.  Sign the
- * directory with <b>private_key</b>.  Return 0 on success, -1 on
- * failure. If <b>complete</b> is set, give us all the descriptors;
- * otherwise leave out non-running and non-valid ones.
- */
-int
-dirserv_dump_directory_to_string(char **dir_out,
-                                 crypto_pk_t *private_key)
-{
-  /* XXXX 024 Get rid of this function if we can confirm that nobody's
-   * fetching these any longer */
-  char *cp;
-  char *identity_pkey; /* Identity key, DER64-encoded. */
-  char *recommended_versions;
-  char digest[DIGEST_LEN];
-  char published[ISO_TIME_LEN+1];
-  char *buf = NULL;
-  size_t buf_len;
-  size_t identity_pkey_len;
-  time_t now = time(NULL);
-
-  tor_assert(dir_out);
-  *dir_out = NULL;
-
-  if (crypto_pk_write_public_key_to_string(private_key,&identity_pkey,
-                                           &identity_pkey_len)<0) {
-    log_warn(LD_BUG,"write identity_pkey to string failed!");
-    return -1;
-  }
-
-  recommended_versions =
-    format_versions_list(get_options()->RecommendedVersions);
-
-  format_iso_time(published, now);
-
-  buf_len = 2048+strlen(recommended_versions);
-
-  buf = tor_malloc(buf_len);
-  /* We'll be comparing against buf_len throughout the rest of the
-     function, though strictly speaking we shouldn't be able to exceed
-     it.  This is C, after all, so we may as well check for buffer
-     overruns.*/
-
-  tor_snprintf(buf, buf_len,
-               "signed-directory\n"
-               "published %s\n"
-               "recommended-software %s\n"
-               "router-status %s\n"
-               "dir-signing-key\n%s\n",
-               published, recommended_versions, "",
-               identity_pkey);
-
-  tor_free(recommended_versions);
-  tor_free(identity_pkey);
-
-  cp = buf + strlen(buf);
-  *cp = '\0';
-
-  /* These multiple strlcat calls are inefficient, but dwarfed by the RSA
-     signature. */
-  if (strlcat(buf, "directory-signature ", buf_len) >= buf_len)
-    goto truncated;
-  if (strlcat(buf, get_options()->Nickname, buf_len) >= buf_len)
-    goto truncated;
-  if (strlcat(buf, "\n", buf_len) >= buf_len)
-    goto truncated;
-
-  if (router_get_dir_hash(buf,digest)) {
-    log_warn(LD_BUG,"couldn't compute digest");
-    tor_free(buf);
-    return -1;
-  }
-  note_crypto_pk_op(SIGN_DIR);
-  if (router_append_dirobj_signature(buf,buf_len,digest,DIGEST_LEN,
-                                     private_key)<0) {
-    tor_free(buf);
-    return -1;
-  }
-
-  *dir_out = buf;
-  return 0;
- truncated:
-  log_warn(LD_BUG,"tried to exceed string length.");
-  tor_free(buf);
-  return -1;
 }
 
 /********************************************************************/
@@ -1329,7 +1239,7 @@ dirserv_thinks_router_is_unreliable(time_t now,
 {
   if (need_uptime) {
     if (!enough_mtbf_info) {
-      /* XXX024 Once most authorities are on v3, we should change the rule from
+      /* XXXX We should change the rule from
        * "use uptime if we don't have mtbf data" to "don't advertise Stable on
        * v3 if we don't have enough mtbf data."  Or maybe not, since if we ever
        * hit a point where we need to reset a lot of authorities at once,
@@ -2152,8 +2062,8 @@ routers_make_ed_keys_unique(smartlist_t *routers)
       const time_t ri2_pub = ri2->cache_info.published_on;
       if (ri2_pub < ri_pub ||
           (ri2_pub == ri_pub &&
-           memcmp(ri->cache_info.signed_descriptor_digest,
-                  ri2->cache_info.signed_descriptor_digest,DIGEST_LEN)<0)) {
+           fast_memcmp(ri->cache_info.signed_descriptor_digest,
+                     ri2->cache_info.signed_descriptor_digest,DIGEST_LEN)<0)) {
         digest256map_set(by_ed_key, pk, ri);
         ri2->omit_from_vote = 1;
       } else {
@@ -2206,7 +2116,7 @@ set_routerstatus_from_routerinfo(routerstatus_t *rs,
 
   rs->is_valid = node->is_valid;
 
-  if (node->is_fast &&
+  if (node->is_fast && node->is_stable &&
       ((options->AuthDirGuardBWGuarantee &&
         routerbw_kb >= options->AuthDirGuardBWGuarantee/1000) ||
        routerbw_kb >= MIN(guard_bandwidth_including_exits_kb,
@@ -2365,7 +2275,8 @@ guardfraction_file_parse_guard_line(const char *guard_line,
 
   inputs_tmp = smartlist_get(sl, 0);
   if (strlen(inputs_tmp) != HEX_DIGEST_LEN ||
-      base16_decode(guard_id, DIGEST_LEN, inputs_tmp, HEX_DIGEST_LEN)) {
+      base16_decode(guard_id, DIGEST_LEN,
+                    inputs_tmp, HEX_DIGEST_LEN) != DIGEST_LEN) {
     tor_asprintf(err_msg, "bad digest '%s'", inputs_tmp);
     goto done;
   }
@@ -2669,7 +2580,8 @@ measured_bw_line_parse(measured_bw_line_t *out, const char *orig_line)
       cp+=strlen("node_id=$");
 
       if (strlen(cp) != HEX_DIGEST_LEN ||
-          base16_decode(out->node_id, DIGEST_LEN, cp, HEX_DIGEST_LEN)) {
+          base16_decode(out->node_id, DIGEST_LEN,
+                        cp, HEX_DIGEST_LEN) != DIGEST_LEN) {
         log_warn(LD_DIRSERV, "Invalid node_id in bandwidth file line: %s",
                  escaped(orig_line));
         tor_free(line);
@@ -3340,7 +3252,7 @@ lookup_cached_dir_by_fp(const char *fp)
     d = strmap_get(cached_consensuses, "ns");
   } else if (memchr(fp, '\0', DIGEST_LEN) && cached_consensuses &&
            (d = strmap_get(cached_consensuses, fp))) {
-    /* this here interface is a nasty hack XXXX024 */;
+    /* this here interface is a nasty hack XXXX */;
   }
   return d;
 }

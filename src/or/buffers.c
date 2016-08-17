@@ -107,7 +107,7 @@ chunk_repack(chunk_t *chunk)
 /** Keep track of total size of allocated chunks for consistency asserts */
 static size_t total_bytes_allocated_in_chunks = 0;
 static void
-chunk_free_unchecked(chunk_t *chunk)
+buf_chunk_free_unchecked(chunk_t *chunk)
 {
   if (!chunk)
     return;
@@ -228,7 +228,7 @@ buf_pullup(buf_t *buf, size_t bytes)
       dest->next = src->next;
       if (buf->tail == src)
         buf->tail = dest;
-      chunk_free_unchecked(src);
+      buf_chunk_free_unchecked(src);
     } else {
       memcpy(CHUNK_WRITE_PTR(dest), src->data, n);
       dest->datalen += n;
@@ -274,7 +274,7 @@ buf_remove_from_front(buf_t *buf, size_t n)
       buf->head = victim->next;
       if (buf->tail == victim)
         buf->tail = NULL;
-      chunk_free_unchecked(victim);
+      buf_chunk_free_unchecked(victim);
     }
   }
   check();
@@ -314,7 +314,7 @@ buf_clear(buf_t *buf)
   buf->datalen = 0;
   for (chunk = buf->head; chunk; chunk = next) {
     next = chunk->next;
-    chunk_free_unchecked(chunk);
+    buf_chunk_free_unchecked(chunk);
   }
   buf->head = buf->tail = NULL;
 }
@@ -405,7 +405,7 @@ static chunk_t *
 buf_add_chunk_with_capacity(buf_t *buf, size_t capacity, int capped)
 {
   chunk_t *chunk;
-  struct timeval now;
+
   if (CHUNK_ALLOC_SIZE(capacity) < buf->default_chunk_size) {
     chunk = chunk_new_with_alloc_size(buf->default_chunk_size);
   } else if (capped && CHUNK_ALLOC_SIZE(capacity) > MAX_CHUNK_ALLOC) {
@@ -414,8 +414,7 @@ buf_add_chunk_with_capacity(buf_t *buf, size_t capacity, int capped)
     chunk = chunk_new_with_alloc_size(preferred_chunk_size(capacity));
   }
 
-  tor_gettimeofday_cached_monotonic(&now);
-  chunk->inserted_time = (uint32_t)tv_to_msec(&now);
+  chunk->inserted_time = (uint32_t)monotime_coarse_absolute_msec();
 
   if (buf->tail) {
     tor_assert(buf->head);
@@ -430,8 +429,8 @@ buf_add_chunk_with_capacity(buf_t *buf, size_t capacity, int capped)
 }
 
 /** Return the age of the oldest chunk in the buffer <b>buf</b>, in
- * milliseconds.  Requires the current time, in truncated milliseconds since
- * the epoch, as its input <b>now</b>.
+ * milliseconds.  Requires the current monotonic time, in truncated msec,
+ * as its input <b>now</b>.
  */
 uint32_t
 buf_get_oldest_chunk_timestamp(const buf_t *buf, uint32_t now)
@@ -509,12 +508,12 @@ read_to_chunk_tls(buf_t *buf, chunk_t *chunk, tor_tls_t *tls,
  * (because of EOF), set *<b>reached_eof</b> to 1 and return 0. Return -1 on
  * error; else return the number of bytes read.
  */
-/* XXXX024 indicate "read blocked" somehow? */
+/* XXXX indicate "read blocked" somehow? */
 int
 read_to_buf(tor_socket_t s, size_t at_most, buf_t *buf, int *reached_eof,
             int *socket_error)
 {
-  /* XXXX024 It's stupid to overload the return values for these functions:
+  /* XXXX It's stupid to overload the return values for these functions:
    * "error status" and "number of bytes read" are not mutually exclusive.
    */
   int r = 0;
@@ -687,7 +686,7 @@ flush_chunk_tls(tor_tls_t *tls, buf_t *buf, chunk_t *chunk,
 int
 flush_buf(tor_socket_t s, buf_t *buf, size_t sz, size_t *buf_flushlen)
 {
-  /* XXXX024 It's stupid to overload the return values for these functions:
+  /* XXXX It's stupid to overload the return values for these functions:
    * "error status" and "number of bytes flushed" are not mutually exclusive.
    */
   int r;

@@ -69,7 +69,7 @@ microdesc_eq_(microdesc_t *a, microdesc_t *b)
 }
 
 HT_PROTOTYPE(microdesc_map, microdesc_t, node,
-             microdesc_hash_, microdesc_eq_);
+             microdesc_hash_, microdesc_eq_)
 HT_GENERATE2(microdesc_map, microdesc_t, node,
              microdesc_hash_, microdesc_eq_, 0.6,
              tor_reallocarray_, tor_free_)
@@ -925,7 +925,7 @@ we_use_microdescriptors_for_circuits(const or_options_t *options)
       return 0;
     /* Otherwise, we decide that we'll use microdescriptors iff we are
      * not a server, and we're not autofetching everything. */
-    /* XXX023 what does not being a server have to do with it? also there's
+    /* XXXX++ what does not being a server have to do with it? also there's
      * a partitioning issue here where bridges differ from clients. */
     ret = !server_mode(options) && !options->FetchUselessDescriptors;
   }

@@ -6,9 +6,6 @@
 #include "crypto.h"
 #include "compat.h"
 
-#undef MIN
-#define MIN(a,b) ( ((a)<(b)) ? (a) : (b) )
-
 static unsigned fill_a_buffer_memset(void) __attribute__((noinline));
 static unsigned fill_a_buffer_memwipe(void) __attribute__((noinline));
 static unsigned fill_a_buffer_nothing(void) __attribute__((noinline));
@@ -17,6 +14,7 @@ static unsigned fill_heap_buffer_memwipe(void) __attribute__((noinline));
 static unsigned fill_heap_buffer_nothing(void) __attribute__((noinline));
 static unsigned check_a_buffer(void) __attribute__((noinline));
 
+extern const char *s; /* Make the linkage global */
 const char *s = NULL;
 
 #define BUF_LEN 2048

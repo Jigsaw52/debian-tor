@@ -17,14 +17,10 @@
 #include "control.h"
 #include "main.h"
 #include "policies.h"
-#ifdef HAVE_EVENT2_DNS_H
 #include <event2/dns.h>
 #include <event2/dns_compat.h>
 /* XXXX this implies we want an improved evdns  */
 #include <event2/dns_struct.h>
-#else
-#include "eventdns.h"
-#endif
 
 /** Helper function: called by evdns whenever the client sends a request to our
  * DNSPort.  We need to eventually answer the request <b>req</b>.
@@ -130,7 +126,7 @@ evdns_server_callback(struct evdns_server_request *req, void *data_)
 
   tor_addr_copy(&TO_CONN(conn)->addr, &tor_addr);
   TO_CONN(conn)->port = port;
-  TO_CONN(conn)->address = tor_dup_addr(&tor_addr);
+  TO_CONN(conn)->address = tor_addr_to_str_dup(&tor_addr);
 
   if (q->type == EVDNS_TYPE_A || q->type == EVDNS_TYPE_AAAA ||
       q->type == EVDNS_QTYPE_ALL) {
@@ -205,7 +201,7 @@ dnsserv_launch_request(const char *name, int reverse,
   tor_addr_copy(&TO_CONN(conn)->addr, &control_conn->base_.addr);
 #ifdef AF_UNIX
   /*
-   * The control connection can be AF_UNIX and if so tor_dup_addr will
+   * The control connection can be AF_UNIX and if so tor_addr_to_str_dup will
    * unhelpfully say "<unknown address type>"; say "(Tor_internal)"
    * instead.
    */
@@ -214,11 +210,11 @@ dnsserv_launch_request(const char *name, int reverse,
     TO_CONN(conn)->address = tor_strdup("(Tor_internal)");
   } else {
     TO_CONN(conn)->port = control_conn->base_.port;
-    TO_CONN(conn)->address = tor_dup_addr(&control_conn->base_.addr);
+    TO_CONN(conn)->address = tor_addr_to_str_dup(&control_conn->base_.addr);
   }
 #else
   TO_CONN(conn)->port = control_conn->base_.port;
-  TO_CONN(conn)->address = tor_dup_addr(&control_conn->base_.addr);
+  TO_CONN(conn)->address = tor_addr_to_str_dup(&control_conn->base_.addr);
 #endif
 
   if (reverse)

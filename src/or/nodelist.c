@@ -77,7 +77,7 @@ node_id_eq(const node_t *node1, const node_t *node2)
   return tor_memeq(node1->identity, node2->identity, DIGEST_LEN);
 }
 
-HT_PROTOTYPE(nodelist_map, node_t, ht_ent, node_id_hash, node_id_eq);
+HT_PROTOTYPE(nodelist_map, node_t, ht_ent, node_id_hash, node_id_eq)
 HT_GENERATE2(nodelist_map, node_t, ht_ent, node_id_hash, node_id_eq,
              0.6, tor_reallocarray_, tor_free_)
 
@@ -542,13 +542,15 @@ node_get_by_hex_id(const char *hex_id)
 MOCK_IMPL(const node_t *,
 node_get_by_nickname,(const char *nickname, int warn_if_unnamed))
 {
-  const node_t *node;
   if (!the_nodelist)
     return NULL;
 
   /* Handle these cases: DIGEST, $DIGEST, $DIGEST=name, $DIGEST~name. */
-  if ((node = node_get_by_hex_id(nickname)) != NULL)
+  {
+    const node_t *node;
+    if ((node = node_get_by_hex_id(nickname)) != NULL)
       return node;
+  }
 
   if (!strcasecmp(nickname, UNNAMED_ROUTER_NICKNAME))
     return NULL;

@@ -12,17 +12,6 @@
  * the platform.
  **/
 
-/* This is required on rh7 to make strptime not complain.
- * We also need it to make memmem get defined (where available)
- */
-/* XXXX024 We should just  use AC_USE_SYSTEM_EXTENSIONS in our autoconf,
- * and get this (and other important stuff!) automatically. Once we do that,
- * make sure to also change the extern char **environ detection in
- * configure.ac, because whether that is declared or not depends on whether
- * we have _GNU_SOURCE defined! Maybe that means that once we take this out,
- * we can also take out the configure check. */
-#define _GNU_SOURCE
-
 #define COMPAT_PRIVATE
 #include "compat.h"
 
@@ -43,6 +32,12 @@
 #endif
 #ifdef HAVE_SYS_STAT_H
 #include <sys/stat.h>
+#endif
+#ifdef HAVE_UTIME_H
+#include <utime.h>
+#endif
+#ifdef HAVE_SYS_UTIME_H
+#include <sys/utime.h>
 #endif
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
@@ -100,12 +95,6 @@ SecureZeroMemory(PVOID ptr, SIZE_T cnt)
 #include "tor_readpassphrase.h"
 #endif
 
-#ifndef HAVE_GETTIMEOFDAY
-#ifdef HAVE_FTIME
-#include <sys/timeb.h>
-#endif
-#endif
-
 /* Includes for the process attaching prevention */
 #if defined(HAVE_SYS_PRCTL_H) && defined(__linux__)
 /* Only use the linux prctl;  the IRIX prctl is totally different */
@@ -127,12 +116,6 @@ SecureZeroMemory(PVOID ptr, SIZE_T cnt)
 #ifdef HAVE_SIGNAL_H
 #include <signal.h>
 #endif
-#ifdef HAVE_UTIME_H
-#include <utime.h>
-#endif
-#ifdef HAVE_SYS_UTIME_H
-#include <sys/utime.h>
-#endif
 #ifdef HAVE_SYS_MMAN_H
 #include <sys/mman.h>
 #endif
@@ -141,12 +124,6 @@ SecureZeroMemory(PVOID ptr, SIZE_T cnt)
 #endif
 #ifdef HAVE_SYS_FILE_H
 #include <sys/file.h>
-#endif
-#ifdef TOR_UNIT_TESTS
-#if !defined(HAVE_USLEEP) && defined(HAVE_SYS_SELECT_H)
-/* as fallback implementation for tor_sleep_msec */
-#include <sys/select.h>
-#endif
 #endif
 
 #include "torlog.h"
@@ -525,8 +502,10 @@ tor_asprintf(char **strp, const char *fmt, ...)
   r = tor_vasprintf(strp, fmt, args);
   va_end(args);
   if (!*strp || r < 0) {
+    /* LCOV_EXCL_START */
     log_err(LD_BUG, "Internal error in asprintf");
     tor_assert(0);
+    /* LCOV_EXCL_STOP */
   }
   return r;
 }
@@ -1154,14 +1133,12 @@ tor_close_socket(tor_socket_t s)
       --n_sockets_open;
 #else
     if (r != EBADF)
-      --n_sockets_open;
+      --n_sockets_open; // LCOV_EXCL_LINE -- EIO and EINTR too hard to force.
 #endif
     r = -1;
   }
 
-  if (n_sockets_open < 0)
-    log_warn(LD_BUG, "Our socket count is below zero: %d. Please submit a "
-             "bug report.", n_sockets_open);
+  tor_assert_nonfatal(n_sockets_open >= 0);
   socket_accounting_unlock();
   return r;
 }
@@ -1204,10 +1181,10 @@ tor_open_socket,(int domain, int type, int protocol))
 
 /** Mockable wrapper for connect(). */
 MOCK_IMPL(tor_socket_t,
-tor_connect_socket,(tor_socket_t socket,const struct sockaddr *address,
+tor_connect_socket,(tor_socket_t sock, const struct sockaddr *address,
                      socklen_t address_len))
 {
-  return connect(socket,address,address_len);
+  return connect(sock,address,address_len);
 }
 
 /** As socket(), but creates a nonblocking socket and
@@ -1382,31 +1359,31 @@ get_n_open_sockets(void)
 
 /** Mockable wrapper for getsockname(). */
 MOCK_IMPL(int,
-tor_getsockname,(tor_socket_t socket, struct sockaddr *address,
+tor_getsockname,(tor_socket_t sock, struct sockaddr *address,
                  socklen_t *address_len))
 {
-   return getsockname(socket, address, address_len);
+   return getsockname(sock, address, address_len);
 }
 
 /** Turn <b>socket</b> into a nonblocking socket. Return 0 on success, -1
  * on failure.
  */
 int
-set_socket_nonblocking(tor_socket_t socket)
+set_socket_nonblocking(tor_socket_t sock)
 {
 #if defined(_WIN32)
   unsigned long nonblocking = 1;
-  ioctlsocket(socket, FIONBIO, (unsigned long*) &nonblocking);
+  ioctlsocket(sock, FIONBIO, (unsigned long*) &nonblocking);
 #else
   int flags;
 
-  flags = fcntl(socket, F_GETFL, 0);
+  flags = fcntl(sock, F_GETFL, 0);
   if (flags == -1) {
     log_warn(LD_NET, "Couldn't get file status flags: %s", strerror(errno));
     return -1;
   }
   flags |= O_NONBLOCK;
-  if (fcntl(socket, F_SETFL, flags) == -1) {
+  if (fcntl(sock, F_SETFL, flags) == -1) {
     log_warn(LD_NET, "Couldn't set file status flags: %s", strerror(errno));
     return -1;
   }
@@ -1941,7 +1918,7 @@ tor_getpwnam(const char *username)
     return NULL;
 
   if (! strcmp(username, passwd_cached->pw_name))
-    return passwd_cached;
+    return passwd_cached; // LCOV_EXCL_LINE - would need to make getpwnam flaky
 
   return NULL;
 }
@@ -1967,7 +1944,7 @@ tor_getpwuid(uid_t uid)
     return NULL;
 
   if (uid == passwd_cached->pw_uid)
-    return passwd_cached;
+    return passwd_cached; // LCOV_EXCL_LINE - would need to make getpwnam flaky
 
   return NULL;
 }
@@ -2350,28 +2327,15 @@ get_parent_directory(char *fname)
 static char *
 alloc_getcwd(void)
 {
-    int saved_errno = errno;
-/* We use this as a starting path length. Not too large seems sane. */
-#define START_PATH_LENGTH 128
-/* Nobody has a maxpath longer than this, as far as I know.  And if they
- * do, they shouldn't. */
-#define MAX_SANE_PATH_LENGTH 4096
-    size_t path_length = START_PATH_LENGTH;
-    char *path = tor_malloc(path_length);
+#ifdef PATH_MAX
+#define MAX_CWD PATH_MAX
+#else
+#define MAX_CWD 4096
+#endif
 
-    errno = 0;
-    while (getcwd(path, path_length) == NULL) {
-      if (errno == ERANGE && path_length < MAX_SANE_PATH_LENGTH) {
-        path_length*=2;
-        path = tor_realloc(path, path_length);
-      } else {
-        tor_free(path);
-        path = NULL;
-        break;
-      }
-    }
-    errno = saved_errno;
-    return path;
+  char path_buf[MAX_CWD];
+  char *path = getcwd(path_buf, sizeof(path_buf));
+  return path ? tor_strdup(path) : NULL;
 }
 #endif
 
@@ -2402,11 +2366,13 @@ make_path_absolute(char *fname)
       tor_asprintf(&absfname, "%s/%s", path, fname);
       tor_free(path);
     } else {
+      /* LCOV_EXCL_START Can't make getcwd fail. */
       /* If getcwd failed, the best we can do here is keep using the
        * relative path.  (Perhaps / isn't readable by this UID/GID.) */
       log_warn(LD_GENERAL, "Unable to find current working directory: %s",
                strerror(errno));
       absfname = tor_strdup(fname);
+      /* LCOV_EXCL_STOP */
     }
   }
   return absfname;
@@ -2770,7 +2736,9 @@ MOCK_IMPL(const char *, get_uname, (void))
       }
 #endif
 #else
+        /* LCOV_EXCL_START -- can't provoke uname failure */
         strlcpy(uname_result, "Unknown platform", sizeof(uname_result));
+        /* LCOV_EXCL_STOP */
 #endif
       }
     uname_result_is_set = 1;
@@ -2844,57 +2812,16 @@ compute_num_cpus(void)
   if (num_cpus == -2) {
     num_cpus = compute_num_cpus_impl();
     tor_assert(num_cpus != -2);
-    if (num_cpus > MAX_DETECTABLE_CPUS)
+    if (num_cpus > MAX_DETECTABLE_CPUS) {
+      /* LCOV_EXCL_START */
       log_notice(LD_GENERAL, "Wow!  I detected that you have %d CPUs. I "
                  "will not autodetect any more than %d, though.  If you "
                  "want to configure more, set NumCPUs in your torrc",
                  num_cpus, MAX_DETECTABLE_CPUS);
+      /* LCOV_EXCL_STOP */
+    }
   }
   return num_cpus;
-}
-
-/** Set *timeval to the current time of day.  On error, log and terminate.
- * (Same as gettimeofday(timeval,NULL), but never returns -1.)
- */
-void
-tor_gettimeofday(struct timeval *timeval)
-{
-#ifdef _WIN32
-  /* Epoch bias copied from perl: number of units between windows epoch and
-   * Unix epoch. */
-#define EPOCH_BIAS U64_LITERAL(116444736000000000)
-#define UNITS_PER_SEC U64_LITERAL(10000000)
-#define USEC_PER_SEC U64_LITERAL(1000000)
-#define UNITS_PER_USEC U64_LITERAL(10)
-  union {
-    uint64_t ft_64;
-    FILETIME ft_ft;
-  } ft;
-  /* number of 100-nsec units since Jan 1, 1601 */
-  GetSystemTimeAsFileTime(&ft.ft_ft);
-  if (ft.ft_64 < EPOCH_BIAS) {
-    log_err(LD_GENERAL,"System time is before 1970; failing.");
-    exit(1);
-  }
-  ft.ft_64 -= EPOCH_BIAS;
-  timeval->tv_sec = (unsigned) (ft.ft_64 / UNITS_PER_SEC);
-  timeval->tv_usec = (unsigned) ((ft.ft_64 / UNITS_PER_USEC) % USEC_PER_SEC);
-#elif defined(HAVE_GETTIMEOFDAY)
-  if (gettimeofday(timeval, NULL)) {
-    log_err(LD_GENERAL,"gettimeofday failed.");
-    /* If gettimeofday dies, we have either given a bad timezone (we didn't),
-       or segfaulted.*/
-    exit(1);
-  }
-#elif defined(HAVE_FTIME)
-  struct timeb tb;
-  ftime(&tb);
-  timeval->tv_sec = tb.time;
-  timeval->tv_usec = tb.millitm * 1000;
-#else
-#error "No way to get time."
-#endif
-  return;
 }
 
 #if !defined(_WIN32)
@@ -2975,11 +2902,12 @@ correct_tm(int islocal, const time_t *timep, struct tm *resultbuf,
 
   /* If we get here, then gmtime/localtime failed without getting an extreme
    * value for *timep */
-
+  /* LCOV_EXCL_START */
   tor_fragile_assert();
   r = resultbuf;
   memset(resultbuf, 0, sizeof(struct tm));
   outcome="can't recover";
+  /* LCOV_EXCL_STOP */
  done:
   log_warn(LD_BUG, "%s("I64_FORMAT") failed with error %s: %s",
            islocal?"localtime":"gmtime",
@@ -3373,9 +3301,11 @@ get_total_system_memory_impl(void)
   return result * 1024;
 
  err:
+  /* LCOV_EXCL_START Can't reach this unless proc is broken. */
   tor_free(s);
   close(fd);
   return 0;
+  /* LCOV_EXCL_STOP */
 #elif defined (_WIN32)
   /* Windows has MEMORYSTATUSEX; pretty straightforward. */
   MEMORYSTATUSEX ms;
@@ -3424,6 +3354,7 @@ get_total_system_memory(size_t *mem_out)
   static size_t mem_cached=0;
   uint64_t m = get_total_system_memory_impl();
   if (0 == m) {
+    /* LCOV_EXCL_START -- can't make this happen without mocking. */
     /* We couldn't find our memory total */
     if (0 == mem_cached) {
       /* We have no cached value either */
@@ -3433,6 +3364,7 @@ get_total_system_memory(size_t *mem_out)
 
     *mem_out = mem_cached;
     return 0;
+    /* LCOV_EXCL_STOP */
   }
 
 #if SIZE_MAX != UINT64_MAX
@@ -3448,26 +3380,6 @@ get_total_system_memory(size_t *mem_out)
 
   return 0;
 }
-
-#ifdef TOR_UNIT_TESTS
-/** Delay for <b>msec</b> milliseconds.  Only used in tests. */
-void
-tor_sleep_msec(int msec)
-{
-#ifdef _WIN32
-  Sleep(msec);
-#elif defined(HAVE_USLEEP)
-  sleep(msec / 1000);
-  /* Some usleep()s hate sleeping more than 1 sec */
-  usleep((msec % 1000) * 1000);
-#elif defined(HAVE_SYS_SELECT_H)
-  struct timeval tv = { msec / 1000, (msec % 1000) * 1000};
-  select(0, NULL, NULL, NULL, &tv);
-#else
-  sleep(CEIL_DIV(msec, 1000));
-#endif
-}
-#endif
 
 /** Emit the password prompt <b>prompt</b>, then read up to <b>buflen</b>
  * bytes of passphrase into <b>output</b>. Return the number of bytes in

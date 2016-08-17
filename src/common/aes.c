@@ -23,18 +23,7 @@
 #error "We require OpenSSL >= 1.0.0"
 #endif
 
-#ifdef __GNUC__
-#define GCC_VERSION (__GNUC__ * 100 + __GNUC_MINOR__)
-#endif
-
-#if __GNUC__ && GCC_VERSION >= 402
-#if GCC_VERSION >= 406
-#pragma GCC diagnostic push
-#endif
-/* Some versions of OpenSSL declare SSL_get_selected_srtp_profile twice in
- * srtp.h. Suppress the GCC warning so we can build with -Wredundant-decl. */
-#pragma GCC diagnostic ignored "-Wredundant-decls"
-#endif
+DISABLE_GCC_WARNING(redundant-decls)
 
 #include <assert.h>
 #include <stdlib.h>
@@ -44,13 +33,7 @@
 #include <openssl/engine.h>
 #include <openssl/modes.h>
 
-#if __GNUC__ && GCC_VERSION >= 402
-#if GCC_VERSION >= 406
-#pragma GCC diagnostic pop
-#else
-#pragma GCC diagnostic warning "-Wredundant-decls"
-#endif
-#endif
+ENABLE_GCC_WARNING(redundant-decls)
 
 #include "compat.h"
 #include "aes.h"
@@ -255,9 +238,11 @@ evaluate_ctr_for_aes(void)
 
   if (fast_memneq(output, encrypt_zero, 16)) {
     /* Counter mode is buggy */
+    /* LCOV_EXCL_START */
     log_err(LD_CRYPTO, "This OpenSSL has a buggy version of counter mode; "
                   "quitting tor.");
     exit(1);
+    /* LCOV_EXCL_STOP */
   }
   return 0;
 }
@@ -300,7 +285,7 @@ aes_set_key(aes_cnt_cipher_t *cipher, const char *key, int key_bits)
       case 128: c = EVP_aes_128_ecb(); break;
       case 192: c = EVP_aes_192_ecb(); break;
       case 256: c = EVP_aes_256_ecb(); break;
-      default: tor_assert(0);
+      default: tor_assert(0); // LCOV_EXCL_LINE
     }
     EVP_EncryptInit(&cipher->key.evp, c, (const unsigned char*)key, NULL);
     cipher->using_evp = 1;

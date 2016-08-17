@@ -584,7 +584,7 @@ connection_or_process_inbuf(or_connection_t *conn)
    * check would otherwise just let data accumulate.  It serves no purpose
    * in 0.2.3.
    *
-   * XXX024 Remove this check once we verify that the above paragraph is
+   * XXXX Remove this check once we verify that the above paragraph is
    * 100% true. */
   if (buf_datalen(conn->base_.inbuf) > MAX_OR_INBUF_WHEN_NONOPEN) {
     log_fn(LOG_PROTOCOL_WARN, LD_NET, "Accumulated too much data (%d bytes) "
@@ -935,7 +935,7 @@ connection_or_init_conn_from_address(or_connection_t *conn,
     }
     conn->nickname = tor_strdup(node_get_nickname(r));
     tor_free(conn->base_.address);
-    conn->base_.address = tor_dup_addr(&node_ap.addr);
+    conn->base_.address = tor_addr_to_str_dup(&node_ap.addr);
   } else {
     conn->nickname = tor_malloc(HEX_DIGEST_LEN+2);
     conn->nickname[0] = '$';
@@ -943,7 +943,7 @@ connection_or_init_conn_from_address(or_connection_t *conn,
                   conn->identity_digest, DIGEST_LEN);
 
     tor_free(conn->base_.address);
-    conn->base_.address = tor_dup_addr(addr);
+    conn->base_.address = tor_addr_to_str_dup(addr);
   }
 
   /*
@@ -1282,11 +1282,9 @@ connection_or_connect, (const tor_addr_t *_addr, uint16_t port,
   switch (connection_connect(TO_CONN(conn), conn->base_.address,
                              &addr, port, &socket_error)) {
     case -1:
-      /* If the connection failed immediately, and we're using
-       * a proxy, our proxy is down. Don't blame the Tor server. */
-      if (conn->base_.proxy_state == PROXY_INFANT)
-        entry_guard_register_connect_status(conn->identity_digest,
-                                            0, 1, time(NULL));
+      /* We failed to establish a connection probably because of a local
+       * error. No need to blame the guard in this case. Notify the networking
+       * system of this failure. */
       connection_or_connect_failed(conn,
                                    errno_to_orconn_end_reason(socket_error),
                                    tor_socket_strerror(socket_error));
@@ -2277,14 +2275,13 @@ connection_or_send_certs_cell(or_connection_t *conn)
   var_cell_t *cell;
   size_t cell_len;
   ssize_t pos;
-  int server_mode;
 
   tor_assert(conn->base_.state == OR_CONN_STATE_OR_HANDSHAKING_V3);
 
   if (! conn->handshake_state)
     return -1;
-  server_mode = ! conn->handshake_state->started_here;
-  if (tor_tls_get_my_certs(server_mode, &link_cert, &id_cert) < 0)
+  const int conn_in_server_mode = ! conn->handshake_state->started_here;
+  if (tor_tls_get_my_certs(conn_in_server_mode, &link_cert, &id_cert) < 0)
     return -1;
   tor_x509_cert_get_der(link_cert, &link_encoded, &link_len);
   tor_x509_cert_get_der(id_cert, &id_encoded, &id_len);
@@ -2297,7 +2294,7 @@ connection_or_send_certs_cell(or_connection_t *conn)
   cell->payload[0] = 2;
   pos = 1;
 
-  if (server_mode)
+  if (conn_in_server_mode)
     cell->payload[pos] = OR_CERT_TYPE_TLS_LINK; /* Link cert  */
   else
     cell->payload[pos] = OR_CERT_TYPE_AUTH_1024; /* client authentication */

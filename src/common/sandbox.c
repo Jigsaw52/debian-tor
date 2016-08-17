@@ -39,8 +39,6 @@
 
 #if defined(USE_LIBSECCOMP)
 
-#define _GNU_SOURCE
-
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
@@ -1260,7 +1258,7 @@ prot_strings(scmp_filter_ctx ctx, sandbox_cfg_t* cfg)
 
 /**
  * Auxiliary function used in order to allocate a sandbox_cfg_t element and set
- * it's values according the the parameter list. All elements are initialised
+ * its values according the parameter list. All elements are initialised
  * with the 'prot' field set to false, as the pointer is not protected at this
  * point.
  */
@@ -1462,7 +1460,7 @@ static HT_HEAD(getaddrinfo_cache, cached_getaddrinfo_item_t)
 
 HT_PROTOTYPE(getaddrinfo_cache, cached_getaddrinfo_item_t, node,
              cached_getaddrinfo_item_hash,
-             cached_getaddrinfo_items_eq);
+             cached_getaddrinfo_items_eq)
 HT_GENERATE2(getaddrinfo_cache, cached_getaddrinfo_item_t, node,
              cached_getaddrinfo_item_hash,
              cached_getaddrinfo_items_eq,

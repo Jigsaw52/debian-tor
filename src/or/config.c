@@ -65,9 +65,6 @@
 #include <systemd/sd-daemon.h>
 #endif
 
-/* From main.c */
-extern int quiet_level;
-
 /* Prefix used to indicate a Unix socket in a FooPort configuration. */
 static const char unix_socket_prefix[] = "unix:";
 
@@ -99,7 +96,7 @@ static config_abbrev_t option_abbrevs_[] = {
   { "BandwidthRateBytes", "BandwidthRate", 0, 0},
   { "BandwidthBurstBytes", "BandwidthBurst", 0, 0},
   { "DirFetchPostPeriod", "StatusFetchPeriod", 0, 0},
-  { "DirServer", "DirAuthority", 0, 0}, /* XXXX024 later, make this warn? */
+  { "DirServer", "DirAuthority", 0, 0}, /* XXXX later, make this warn? */
   { "MaxConn", "ConnLimit", 0, 1},
   { "MaxMemInCellQueues", "MaxMemInQueues", 0, 0},
   { "ORBindAddress", "ORListenAddress", 0, 0},
@@ -247,6 +244,7 @@ static config_var_t option_vars_[] = {
   V(ExitNodes,                   ROUTERSET, NULL),
   V(ExitPolicy,                  LINELIST, NULL),
   V(ExitPolicyRejectPrivate,     BOOL,     "1"),
+  V(ExitPolicyRejectLocalInterfaces, BOOL, "0"),
   V(ExitPortStatistics,          BOOL,     "0"),
   V(ExtendAllowPrivateAddresses, BOOL,     "0"),
   V(ExitRelay,                   AUTOBOOL, "auto"),
@@ -328,6 +326,7 @@ static config_var_t option_vars_[] = {
   VAR("MaxMemInQueues",          MEMUNIT,   MaxMemInQueues_raw, "0"),
   OBSOLETE("MaxOnionsPending"),
   V(MaxOnionQueueDelay,          MSEC_INTERVAL, "1750 msec"),
+  V(MaxUnparseableDescSizeToLog, MEMUNIT, "10 MB"),
   V(MinMeasuredBWsForAuthToIgnoreAdvertised, INT, "500"),
   V(MyFamily,                    STRING,   NULL),
   V(NewCircuitPeriod,            INTERVAL, "30 seconds"),
@@ -442,6 +441,7 @@ static config_var_t option_vars_[] = {
   V(UseNTorHandshake,            AUTOBOOL, "1"),
   V(User,                        STRING,   NULL),
   V(UserspaceIOCPBuffers,        BOOL,     "0"),
+  V(AuthDirSharedRandomness,     BOOL,     "1"),
   OBSOLETE("V1AuthoritativeDirectory"),
   OBSOLETE("V2AuthoritativeDirectory"),
   VAR("V3AuthoritativeDirectory",BOOL, V3AuthoritativeDir,   "0"),
@@ -1999,11 +1999,6 @@ static const struct {
   { "--list-fingerprint",     TAKES_NO_ARGUMENT },
   { "--keygen",               TAKES_NO_ARGUMENT },
   { "--newpass",              TAKES_NO_ARGUMENT },
-#if 0
-/* XXXX028: This is not working yet in 0.2.7, so disabling with the
- * minimal code modification. */
-  { "--master-key",           ARGUMENT_NECESSARY },
-#endif
   { "--no-passphrase",        TAKES_NO_ARGUMENT },
   { "--passphrase-fd",        ARGUMENT_NECESSARY },
   { "--verify-config",        TAKES_NO_ARGUMENT },
@@ -2077,7 +2072,7 @@ config_parse_commandline(int argc, char **argv, int ignore_errors,
 
     if (want_arg == ARGUMENT_NECESSARY && is_last) {
       if (ignore_errors) {
-        arg = strdup("");
+        arg = tor_strdup("");
       } else {
         log_warn(LD_CONFIG,"Command-line option '%s' with no value. Failing.",
             argv[i]);
@@ -2484,7 +2479,6 @@ is_local_addr, (const tor_addr_t *addr))
   if (get_options()->EnforceDistinctSubnets == 0)
     return 0;
   if (tor_addr_family(addr) == AF_INET) {
-    /*XXXX023 IP6 what corresponds to an /24? */
     uint32_t ip = tor_addr_to_ipv4h(addr);
 
     /* It's possible that this next check will hit before the first time
@@ -2678,7 +2672,7 @@ options_validate_cb(void *old_options, void *options, void *default_options,
 
 #define REJECT(arg) \
   STMT_BEGIN *msg = tor_strdup(arg); return -1; STMT_END
-#ifdef __GNUC__
+#if defined(__GNUC__) && __GNUC__ <= 3
 #define COMPLAIN(args...) \
   STMT_BEGIN log_warn(LD_CONFIG, args); STMT_END
 #else
@@ -2791,7 +2785,8 @@ options_validate(or_options_t *old_options, or_options_t *options,
   } else {
     if (!is_legal_nickname(options->Nickname)) {
       tor_asprintf(msg,
-          "Nickname '%s' is wrong length or contains illegal characters.",
+          "Nickname '%s', nicknames must be between 1 and 19 characters "
+          "inclusive, and must contain only the characters [a-zA-Z0-9].",
           options->Nickname);
       return -1;
     }
@@ -3494,10 +3489,10 @@ options_validate(or_options_t *old_options, or_options_t *options,
   }
 
   if (server_mode(options)) {
-    char *msg = NULL;
-    if (have_enough_mem_for_dircache(options, 0, &msg)) {
-      log_warn(LD_CONFIG, "%s", msg);
-      tor_free(msg);
+    char *dircache_msg = NULL;
+    if (have_enough_mem_for_dircache(options, 0, &dircache_msg)) {
+      log_warn(LD_CONFIG, "%s", dircache_msg);
+      tor_free(dircache_msg);
     }
   }
 
@@ -4127,11 +4122,11 @@ have_enough_mem_for_dircache(const or_options_t *options, size_t total_mem,
   if (options->DirCache) {
     if (total_mem < DIRCACHE_MIN_BANDWIDTH) {
       if (options->BridgeRelay) {
-        *msg = strdup("Running a Bridge with less than "
+        *msg = tor_strdup("Running a Bridge with less than "
                       STRINGIFY(DIRCACHE_MIN_MB_BANDWIDTH) " MB of memory is "
                       "not recommended.");
       } else {
-        *msg = strdup("Being a directory cache (default) with less than "
+        *msg = tor_strdup("Being a directory cache (default) with less than "
                       STRINGIFY(DIRCACHE_MIN_MB_BANDWIDTH) " MB of memory is "
                       "not recommended and may consume most of the available "
                       "resources, consider disabling this functionality by "
@@ -4140,7 +4135,7 @@ have_enough_mem_for_dircache(const or_options_t *options, size_t total_mem,
     }
   } else {
     if (total_mem >= DIRCACHE_MIN_BANDWIDTH) {
-      *msg = strdup("DirCache is disabled and we are configured as a "
+      *msg = tor_strdup("DirCache is disabled and we are configured as a "
                "relay. This may disqualify us from becoming a guard in the "
                "future.");
     }
@@ -4322,6 +4317,8 @@ options_transition_affects_descriptor(const or_options_t *old_options,
       old_options->ExitRelay != new_options->ExitRelay ||
       old_options->ExitPolicyRejectPrivate !=
         new_options->ExitPolicyRejectPrivate ||
+      old_options->ExitPolicyRejectLocalInterfaces !=
+        new_options->ExitPolicyRejectLocalInterfaces ||
       old_options->IPv6Exit != new_options->IPv6Exit ||
       !config_lines_eq(old_options->ORPort_lines,
                        new_options->ORPort_lines) ||
@@ -4826,7 +4823,7 @@ options_init_from_string(const char *cf_defaults, const char *cf,
 {
   or_options_t *oldoptions, *newoptions, *newdefaultoptions=NULL;
   config_line_t *cl;
-  int retval, i;
+  int retval;
   setopt_err_t err = SETOPT_ERR_MISC;
   tor_assert(msg);
 
@@ -4839,7 +4836,7 @@ options_init_from_string(const char *cf_defaults, const char *cf,
   newoptions->command = command;
   newoptions->command_arg = command_arg ? tor_strdup(command_arg) : NULL;
 
-  for (i = 0; i < 2; ++i) {
+  for (int i = 0; i < 2; ++i) {
     const char *body = i==0 ? cf_defaults : cf;
     if (!body)
       continue;
@@ -4883,8 +4880,7 @@ options_init_from_string(const char *cf_defaults, const char *cf,
      * let's clean it up.  -NM */
 
     /* Change defaults. */
-    int i;
-    for (i = 0; testing_tor_network_defaults[i].name; ++i) {
+    for (int i = 0; testing_tor_network_defaults[i].name; ++i) {
       const config_var_t *new_var = &testing_tor_network_defaults[i];
       config_var_t *old_var =
           config_find_option_mutable(&options_format, new_var->name);
@@ -4904,7 +4900,7 @@ options_init_from_string(const char *cf_defaults, const char *cf,
     newoptions->command_arg = command_arg ? tor_strdup(command_arg) : NULL;
 
     /* Assign all options a second time. */
-    for (i = 0; i < 2; ++i) {
+    for (int i = 0; i < 2; ++i) {
       const char *body = i==0 ? cf_defaults : cf;
       if (!body)
         continue;
@@ -5025,7 +5021,7 @@ config_register_addressmaps(const or_options_t *options)
 
 /** As addressmap_register(), but detect the wildcarded status of "from" and
  * "to", and do not steal a reference to <b>to</b>. */
-/* XXXX024 move to connection_edge.c */
+/* XXXX move to connection_edge.c */
 int
 addressmap_register_auto(const char *from, const char *to,
                          time_t expires,
@@ -5077,7 +5073,7 @@ options_init_logs(const or_options_t *old_options, or_options_t *options,
   config_line_t *opt;
   int ok;
   smartlist_t *elts;
-  int daemon =
+  int run_as_daemon =
 #ifdef _WIN32
                0;
 #else
@@ -5138,7 +5134,7 @@ options_init_logs(const or_options_t *old_options, or_options_t *options,
       int err = smartlist_len(elts) &&
         !strcasecmp(smartlist_get(elts,0), "stderr");
       if (!validate_only) {
-        if (daemon) {
+        if (run_as_daemon) {
           log_warn(LD_CONFIG,
                    "Can't log to %s with RunAsDaemon set; skipping stdout",
                    err?"stderr":"stdout");
@@ -5167,19 +5163,19 @@ options_init_logs(const or_options_t *old_options, or_options_t *options,
         char *fname = expand_filename(smartlist_get(elts, 1));
         /* Truncate if TruncateLogFile is set and we haven't seen this option
            line before. */
-        int truncate = 0;
+        int truncate_log = 0;
         if (options->TruncateLogFile) {
-          truncate = 1;
+          truncate_log = 1;
           if (old_options) {
             config_line_t *opt2;
             for (opt2 = old_options->Logs; opt2; opt2 = opt2->next)
               if (!strcmp(opt->value, opt2->value)) {
-                truncate = 0;
+                truncate_log = 0;
                 break;
               }
           }
         }
-        if (add_file_log(severity, fname, truncate) < 0) {
+        if (add_file_log(severity, fname, truncate_log) < 0) {
           log_warn(LD_CONFIG, "Couldn't open file for 'Log %s': %s",
                    opt->value, strerror(errno));
           ok = 0;
@@ -5333,7 +5329,7 @@ parse_bridge_line(const char *line)
       goto err;
     }
     if (base16_decode(bridge_line->digest, DIGEST_LEN,
-                      fingerprint, HEX_DIGEST_LEN)<0) {
+                      fingerprint, HEX_DIGEST_LEN) != DIGEST_LEN) {
       log_warn(LD_CONFIG, "Unable to decode Bridge key digest.");
       goto err;
     }
@@ -5776,7 +5772,7 @@ parse_dir_authority_line(const char *line, dirinfo_type_t required_type,
     } else if (!strcmpstart(flag, "weight=")) {
       int ok;
       const char *wstring = flag + strlen("weight=");
-      weight = tor_parse_double(wstring, 0, UINT64_MAX, &ok, NULL);
+      weight = tor_parse_double(wstring, 0, (double)UINT64_MAX, &ok, NULL);
       if (!ok) {
         log_warn(LD_CONFIG, "Invalid weight '%s' on DirAuthority line.",flag);
         weight=1.0;
@@ -5784,7 +5780,8 @@ parse_dir_authority_line(const char *line, dirinfo_type_t required_type,
     } else if (!strcasecmpstart(flag, "v3ident=")) {
       char *idstr = flag + strlen("v3ident=");
       if (strlen(idstr) != HEX_DIGEST_LEN ||
-          base16_decode(v3_digest, DIGEST_LEN, idstr, HEX_DIGEST_LEN)<0) {
+          base16_decode(v3_digest, DIGEST_LEN,
+                        idstr, HEX_DIGEST_LEN) != DIGEST_LEN) {
         log_warn(LD_CONFIG, "Bad v3 identity digest '%s' on DirAuthority line",
                  flag);
       } else {
@@ -5833,7 +5830,8 @@ parse_dir_authority_line(const char *line, dirinfo_type_t required_type,
              fingerprint, (int)strlen(fingerprint));
     goto err;
   }
-  if (base16_decode(digest, DIGEST_LEN, fingerprint, HEX_DIGEST_LEN)<0) {
+  if (base16_decode(digest, DIGEST_LEN,
+                    fingerprint, HEX_DIGEST_LEN) != DIGEST_LEN) {
     log_warn(LD_CONFIG, "Unable to decode DirAuthority key digest.");
     goto err;
   }
@@ -5901,8 +5899,8 @@ parse_dir_fallback_line(const char *line,
       orport = (int)tor_parse_long(cp+strlen("orport="), 10,
                                    1, 65535, &ok, NULL);
     } else if (!strcmpstart(cp, "id=")) {
-      ok = !base16_decode(id, DIGEST_LEN,
-                          cp+strlen("id="), strlen(cp)-strlen("id="));
+      ok = base16_decode(id, DIGEST_LEN, cp+strlen("id="),
+                         strlen(cp)-strlen("id=")) == DIGEST_LEN;
     } else if (!strcasecmpstart(cp, "ipv6=")) {
       if (ipv6_addrport_ptr) {
         log_warn(LD_CONFIG, "Redundant ipv6 addr/port on FallbackDir line");
@@ -5918,10 +5916,10 @@ parse_dir_fallback_line(const char *line,
         ipv6_addrport_ptr = &ipv6_addrport;
       }
     } else if (!strcmpstart(cp, "weight=")) {
-      int ok;
+      int num_ok;
       const char *wstring = cp + strlen("weight=");
-      weight = tor_parse_double(wstring, 0, UINT64_MAX, &ok, NULL);
-      if (!ok) {
+      weight = tor_parse_double(wstring, 0, (double)UINT64_MAX, &num_ok, NULL);
+      if (!num_ok) {
         log_warn(LD_CONFIG, "Invalid weight '%s' on FallbackDir line.", cp);
         weight=1.0;
       }
@@ -7203,8 +7201,6 @@ init_libevent(const or_options_t *options)
    */
   suppress_libevent_log_msg("Function not implemented");
 
-  tor_check_libevent_header_compatibility();
-
   memset(&cfg, 0, sizeof(cfg));
   cfg.disable_iocp = options->DisableIOCP;
   cfg.num_cpus = get_num_cpus(options);
@@ -7229,10 +7225,10 @@ init_libevent(const or_options_t *options)
  *
  * Note: Consider using the get_datadir_fname* macros in or.h.
  */
-char *
-options_get_datadir_fname2_suffix(const or_options_t *options,
-                                  const char *sub1, const char *sub2,
-                                  const char *suffix)
+MOCK_IMPL(char *,
+options_get_datadir_fname2_suffix,(const or_options_t *options,
+                                   const char *sub1, const char *sub2,
+                                   const char *suffix))
 {
   char *fname = NULL;
   size_t len;
@@ -7413,8 +7409,8 @@ getinfo_helper_config(control_connection_t *conn,
     smartlist_free(sl);
   } else if (!strcmp(question, "config/defaults")) {
     smartlist_t *sl = smartlist_new();
-    int i, dirauth_lines_seen = 0, fallback_lines_seen = 0;
-    for (i = 0; option_vars_[i].name; ++i) {
+    int dirauth_lines_seen = 0, fallback_lines_seen = 0;
+    for (int i = 0; option_vars_[i].name; ++i) {
       const config_var_t *var = &option_vars_[i];
       if (var->initvalue != NULL) {
         if (strcmp(option_vars_[i].name, "DirAuthority") == 0) {
@@ -7442,14 +7438,13 @@ getinfo_helper_config(control_connection_t *conn,
        * We didn't see any directory authorities with default values,
        * so add the list of default authorities manually.
        */
-      const char **i;
 
       /*
        * default_authorities is defined earlier in this file and
        * is a const char ** NULL-terminated array of dirauth config
        * lines.
        */
-      for (i = default_authorities; *i != NULL; ++i) {
+      for (const char **i = default_authorities; *i != NULL; ++i) {
         char *val = esc_for_log(*i);
         smartlist_add_asprintf(sl, "DirAuthority %s\n", val);
         tor_free(val);
@@ -7566,7 +7561,7 @@ static void
 config_maybe_load_geoip_files_(const or_options_t *options,
                                const or_options_t *old_options)
 {
-  /* XXXX024 Reload GeoIPFile on SIGHUP. -NM */
+  /* XXXX Reload GeoIPFile on SIGHUP. -NM */
 
   if (options->GeoIPFile &&
       ((!old_options || !opt_streq(old_options->GeoIPFile,

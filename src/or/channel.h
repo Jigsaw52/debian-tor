@@ -18,7 +18,7 @@ typedef void (*channel_cell_handler_fn_ptr)(channel_t *, cell_t *);
 typedef void (*channel_var_cell_handler_fn_ptr)(channel_t *, var_cell_t *);
 
 struct cell_queue_entry_s;
-TOR_SIMPLEQ_HEAD(chan_cell_queue, cell_queue_entry_s) incoming_queue;
+TOR_SIMPLEQ_HEAD(chan_cell_queue, cell_queue_entry_s);
 typedef struct chan_cell_queue chan_cell_queue_t;
 
 /**
@@ -468,6 +468,10 @@ void channel_notify_flushed(channel_t *chan);
 
 /* Handle stuff we need to do on open like notifying circuits */
 void channel_do_open_actions(channel_t *chan);
+
+#ifdef TOR_UNIT_TESTS
+extern uint64_t estimated_total_queue_size;
+#endif
 
 #endif
 
