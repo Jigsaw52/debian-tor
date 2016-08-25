@@ -84,6 +84,10 @@ COMMAND-LINE OPTIONS
 [[opt-list-torrc-options]] **--list-torrc-options**::
     List all valid options.
 
+[[opt-list-deprecated-options]] **--list-deprecated-options**::
+    List all valid options that are scheduled to become obsolete in a
+    future version. (This is a warning, not a promise.)
+
 [[opt-version]] **--version**::
     Display Tor version and exit.
 
@@ -705,26 +709,6 @@ GENERAL OPTIONS
     networkstatus. This is an advanced option; you generally shouldn't have
     to mess with it. (Default: not set)
 
-[[DisableIOCP]] **DisableIOCP** **0**|**1**::
-    If Tor was built to use the Libevent's "bufferevents" networking code
-    and you're running on Windows, setting this option to 1 will tell Libevent
-    not to use the Windows IOCP networking API.  (Default: 1)
-
-[[UserspaceIOCPBuffers]] **UserspaceIOCPBuffers** **0**|**1**::
-    If IOCP is enabled (see DisableIOCP above), setting this option to 1
-    will tell Tor to disable kernel-space TCP buffers, in order to avoid
-    needless copy operations and try not to run out of non-paged RAM.
-    This feature is experimental; don't use it yet unless you're eager to
-    help tracking down bugs. (Default: 0)
-
-[[UseFilteringSSLBufferevents]] **UseFilteringSSLBufferevents** **0**|**1**::
-    Tells Tor to do its SSL communication using a chain of
-    bufferevents: one for SSL and one for networking.  This option has no
-    effect if bufferevents are disabled (in which case it can't turn on), or
-    if IOCP bufferevents are enabled (in which case it can't turn off).  This
-    option is useful for debugging only; most users shouldn't touch it.
-    (Default: 0)
-
 [[CountPrivateBandwidth]] **CountPrivateBandwidth** **0**|**1**::
     If this option is set, then Tor's rate-limiting applies not only to
     remote connections, but also to connections to private addresses like
@@ -1271,7 +1255,7 @@ The following options are useful only for clients (that is, if
  +
     When providing proxy server service to a network of computers using a tool
     like dns-proxy-tor, change the IPv4 network to "10.192.0.0/10" or
-    "172.16.0.0/12" and change the IPv6 network to "[FC00]/7".
+    "172.16.0.0/12" and change the IPv6 network to "[FC00::]/7".
     The default **VirtualAddrNetwork** address ranges on a
     properly configured machine will route to the loopback or link-local
     interface. For

@@ -113,7 +113,6 @@ static config_abbrev_t option_abbrevs_[] = {
   { "BridgeAuthoritativeDirectory", "BridgeAuthoritativeDir", 0, 0},
   { "HashedControlPassword", "__HashedControlSessionPassword", 1, 0},
   { "VirtualAddrNetwork", "VirtualAddrNetworkIPv4", 0, 0},
-  { "_UseFilteringSSLBufferevents", "UseFilteringSSLBufferevents", 0, 1},
   { NULL, NULL, 0, 0},
 };
 
@@ -225,7 +224,7 @@ static config_var_t option_vars_[] = {
   V(DirAuthorityFallbackRate,    DOUBLE,   "1.0"),
   V(DisableAllSwap,              BOOL,     "0"),
   V(DisableDebuggerAttachment,   BOOL,     "1"),
-  V(DisableIOCP,                 BOOL,     "1"),
+  OBSOLETE("DisableIOCP"),
   OBSOLETE("DisableV2DirectoryInfo_"),
   OBSOLETE("DynamicDHGroups"),
   VPORT(DNSPort,                     LINELIST, NULL),
@@ -440,7 +439,7 @@ static config_var_t option_vars_[] = {
   V(UseMicrodescriptors,         AUTOBOOL, "auto"),
   V(UseNTorHandshake,            AUTOBOOL, "1"),
   V(User,                        STRING,   NULL),
-  V(UserspaceIOCPBuffers,        BOOL,     "0"),
+  OBSOLETE("UserspaceIOCPBuffers"),
   V(AuthDirSharedRandomness,     BOOL,     "1"),
   OBSOLETE("V1AuthoritativeDirectory"),
   OBSOLETE("V2AuthoritativeDirectory"),
@@ -461,7 +460,8 @@ static config_var_t option_vars_[] = {
   V(VirtualAddrNetworkIPv4,      STRING,   "127.192.0.0/10"),
   V(VirtualAddrNetworkIPv6,      STRING,   "[FE80::]/10"),
   V(WarnPlaintextPorts,          CSV,      "23,109,110,143"),
-  V(UseFilteringSSLBufferevents, BOOL,    "0"),
+  OBSOLETE("UseFilteringSSLBufferevents"),
+  OBSOLETE("__UseFilteringSSLBufferevents"),
   VAR("__ReloadTorrcOnSIGHUP",   BOOL,  ReloadTorrcOnSIGHUP,      "1"),
   VAR("__AllDirActionsPrivate",  BOOL,  AllDirActionsPrivate,     "0"),
   VAR("__DisablePredictedCircuits",BOOL,DisablePredictedCircuits, "0"),
@@ -545,7 +545,7 @@ static const config_var_t testing_tor_network_defaults[] = {
     "0, 1, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 8, 16, 32, 60"),
   V(ClientBootstrapConsensusMaxDownloadTries, UINT, "80"),
   V(ClientBootstrapConsensusAuthorityOnlyMaxDownloadTries, UINT, "80"),
-  V(ClientDNSRejectInternalAddresses, BOOL,"0"),
+  V(ClientDNSRejectInternalAddresses, BOOL,"0"), // deprecated in 0.2.9.2-alpha
   V(ClientRejectInternalAddresses, BOOL,   "0"),
   V(CountPrivateBandwidth,       BOOL,     "1"),
   V(ExitPolicyRejectPrivate,     BOOL,     "0"),
@@ -587,6 +587,45 @@ static const config_var_t testing_tor_network_defaults[] = {
 #undef VAR
 #undef V
 #undef OBSOLETE
+
+static const config_deprecation_t option_deprecation_notes_[] = {
+  /* Deprecated since 0.2.9.2-alpha... */
+  { "AllowDotExit", "Unrestricted use of the .exit notation can be used for "
+    "a wide variety of application-level attacks." },
+  { "AllowInvalidNodes", "There is no reason to enable this option; at best "
+    "it will make you easier to track." },
+  { "AllowSingleHopCircuits", "Almost no relays actually allow single-hop "
+    "exits, making this option pointless." },
+  { "AllowSingleHopExits", "Turning this on will make your relay easier "
+    "to abuse." },
+  { "ClientDNSRejectInternalAddresses", "Turning this on makes your client "
+    "easier to fingerprint, and may open you to esoteric attacks." },
+  { "ExcludeSingleHopRelays", "Turning it on makes your client easier to "
+    "fingerprint." },
+  { "FastFirstHopPK", "Changing this option does not make your client more "
+    "secure, but does make it easier to fingerprint." },
+  { "CloseHSClientCircuitsImmediatelyOnTimeout", "This option makes your "
+    "client easier to fingerprint." },
+  { "CloseHSServiceRendCircuitsImmediatelyOnTimeout", "This option makes "
+    "your hidden services easier to fingerprint." },
+  { "WarnUnsafeSocks", "Changing this option makes it easier for you "
+    "to accidentally lose your anonymity by leaking DNS information" },
+  { "TLSECGroup", "The default is a nice secure choice; the other option "
+    "is less secure." },
+  { "UseNTorHandshake", "The ntor handshake should always be used." },
+  { "ControlListenAddress", "Use ControlPort instead." },
+  { "DirListenAddress", "Use DirPort instead, possibly with the "
+    "NoAdvertise sub-option" },
+  { "DNSListenAddress", "Use DNSPort instead." },
+  { "SocksListenAddress", "Use SocksPort instead." },
+  { "TransListenAddress", "Use TransPort instead." },
+  { "NATDListenAddress", "Use NATDPort instead." },
+  { "ORListenAddress", "Use ORPort instead, possibly with the "
+    "NoAdvertise sub-option" },
+  /* End of options deprecated since 0.2.9.2-alpha. */
+
+  { NULL, NULL }
+};
 
 #ifdef _WIN32
 static char *get_windows_conf_root(void);
@@ -636,6 +675,7 @@ STATIC config_format_t options_format = {
   OR_OPTIONS_MAGIC,
   STRUCT_OFFSET(or_options_t, magic_),
   option_abbrevs_,
+  option_deprecation_notes_,
   option_vars_,
   options_validate_cb,
   NULL
@@ -746,7 +786,7 @@ set_options(or_options_t *new_val, char **msg)
   }
 
   if (old_options != global_options)
-    config_free(&options_format, old_options);
+    or_options_free(old_options);
 
   return 0;
 }
@@ -910,8 +950,8 @@ static const char *default_authorities[] = {
   "dizum orport=443 "
     "v3ident=E8A9C45EDE6D711294FADF8E7951F4DE6CA56B58 "
     "194.109.206.212:80 7EA6 EAD6 FD83 083C 538F 4403 8BBF A077 587D D755",
-  "Tonga orport=443 bridge "
-    "82.94.251.203:80 4A0C CD2D DC79 9508 3D73 F5D6 6710 0C8A 5831 F16D",
+  "Bifroest orport=443 bridge "
+    "37.218.247.217:80 1D8F 3A91 C37C 5D1C 4C19 B1AD 1D0C FBE8 BF72 D8E1",
   "gabelmoo orport=443 "
     "v3ident=ED03BB616EB2F60BEC80151114BB25CEF515B226 "
     "ipv6=[2001:638:a000:4140::ffff:189]:443 "
@@ -1674,17 +1714,6 @@ options_act(const or_options_t *old_options)
   if (accounting_is_enabled(options))
     configure_accounting(time(NULL));
 
-#ifdef USE_BUFFEREVENTS
-  /* If we're using the bufferevents implementation and our rate limits
-   * changed, we need to tell the rate-limiting system about it. */
-  if (!old_options ||
-      old_options->BandwidthRate != options->BandwidthRate ||
-      old_options->BandwidthBurst != options->BandwidthBurst ||
-      old_options->RelayBandwidthRate != options->RelayBandwidthRate ||
-      old_options->RelayBandwidthBurst != options->RelayBandwidthBurst)
-    connection_bucket_init();
-#endif
-
   old_ewma_enabled = cell_ewma_enabled();
   /* Change the cell EWMA settings */
   cell_ewma_set_scale_factor(options, networkstatus_get_latest_consensus());
@@ -2010,6 +2039,7 @@ static const struct {
   { "-h",                     TAKES_NO_ARGUMENT },
   { "--help",                 TAKES_NO_ARGUMENT },
   { "--list-torrc-options",   TAKES_NO_ARGUMENT },
+  { "--list-deprecated-options",TAKES_NO_ARGUMENT },
   { "--nt-service",           TAKES_NO_ARGUMENT },
   { "-nt-service",            TAKES_NO_ARGUMENT },
   { NULL, 0 },
@@ -2146,31 +2176,30 @@ option_get_assignment(const or_options_t *options, const char *key)
  * what went wrong.
  */
 setopt_err_t
-options_trial_assign(config_line_t *list, int use_defaults,
-                     int clear_first, char **msg)
+options_trial_assign(config_line_t *list, unsigned flags, char **msg)
 {
   int r;
   or_options_t *trial_options = config_dup(&options_format, get_options());
 
   if ((r=config_assign(&options_format, trial_options,
-                       list, use_defaults, clear_first, msg)) < 0) {
-    config_free(&options_format, trial_options);
+                       list, flags, msg)) < 0) {
+    or_options_free(trial_options);
     return r;
   }
 
   if (options_validate(get_options_mutable(), trial_options,
                        global_default_options, 1, msg) < 0) {
-    config_free(&options_format, trial_options);
+    or_options_free(trial_options);
     return SETOPT_ERR_PARSE; /*XXX make this a separate return value. */
   }
 
   if (options_transition_allowed(get_options(), trial_options, msg) < 0) {
-    config_free(&options_format, trial_options);
+    or_options_free(trial_options);
     return SETOPT_ERR_TRANSITION;
   }
 
   if (set_options(trial_options, msg)<0) {
-    config_free(&options_format, trial_options);
+    or_options_free(trial_options);
     return SETOPT_ERR_SETTING;
   }
 
@@ -2196,7 +2225,6 @@ static void
 list_torrc_options(void)
 {
   int i;
-  smartlist_t *lines = smartlist_new();
   for (i = 0; option_vars_[i].name; ++i) {
     const config_var_t *var = &option_vars_[i];
     if (var->type == CONFIG_TYPE_OBSOLETE ||
@@ -2204,7 +2232,16 @@ list_torrc_options(void)
       continue;
     printf("%s\n", var->name);
   }
-  smartlist_free(lines);
+}
+
+/** Print all deprecated but non-obsolete torrc options. */
+static void
+list_deprecated_options(void)
+{
+  const config_deprecation_t *d;
+  for (d = option_deprecation_notes_; d->name; ++d) {
+    printf("%s\n", d->name);
+  }
 }
 
 /** Last value actually set by resolve_my_address. */
@@ -4229,12 +4266,6 @@ options_transition_allowed(const or_options_t *old,
     return -1;
   }
 
-  if (old->DisableIOCP != new_val->DisableIOCP) {
-    *msg = tor_strdup("While Tor is running, changing DisableIOCP "
-                      "is not allowed.");
-    return -1;
-  }
-
   if (old->DisableDebuggerAttachment &&
       !new_val->DisableDebuggerAttachment) {
     *msg = tor_strdup("While Tor is running, disabling "
@@ -4664,8 +4695,13 @@ options_init_from_torrc(int argc, char **argv)
     exit(0);
   }
   if (config_line_find(cmdline_only_options, "--list-torrc-options")) {
-    /* For documenting validating whether we've documented everything. */
+    /* For validating whether we've documented everything. */
     list_torrc_options();
+    exit(0);
+  }
+  if (config_line_find(cmdline_only_options, "--list-deprecated-options")) {
+    /* For validating whether what we have deprecated really exists. */
+    list_deprecated_options();
     exit(0);
   }
 
@@ -4846,7 +4882,8 @@ options_init_from_string(const char *cf_defaults, const char *cf,
       err = SETOPT_ERR_PARSE;
       goto err;
     }
-    retval = config_assign(&options_format, newoptions, cl, 0, 0, msg);
+    retval = config_assign(&options_format, newoptions, cl,
+                           CAL_WARN_DEPRECATIONS, msg);
     config_free_lines(cl);
     if (retval < 0) {
       err = SETOPT_ERR_PARSE;
@@ -4862,7 +4899,7 @@ options_init_from_string(const char *cf_defaults, const char *cf,
 
   /* Go through command-line variables too */
   retval = config_assign(&options_format, newoptions,
-                         global_cmdline_options, 0, 0, msg);
+                         global_cmdline_options, CAL_WARN_DEPRECATIONS, msg);
   if (retval < 0) {
     err = SETOPT_ERR_PARSE;
     goto err;
@@ -4887,11 +4924,17 @@ options_init_from_string(const char *cf_defaults, const char *cf,
       tor_assert(new_var);
       tor_assert(old_var);
       old_var->initvalue = new_var->initvalue;
+
+      if ((config_find_deprecation(&options_format, new_var->name))) {
+        log_warn(LD_GENERAL, "Testing options override the deprecated "
+                 "option %s. Is that intentional?",
+                 new_var->name);
+      }
     }
 
     /* Clear newoptions and re-initialize them with new defaults. */
-    config_free(&options_format, newoptions);
-    config_free(&options_format, newdefaultoptions);
+    or_options_free(newoptions);
+    or_options_free(newdefaultoptions);
     newdefaultoptions = NULL;
     newoptions = tor_malloc_zero(sizeof(or_options_t));
     newoptions->magic_ = OR_OPTIONS_MAGIC;
@@ -4910,7 +4953,7 @@ options_init_from_string(const char *cf_defaults, const char *cf,
         err = SETOPT_ERR_PARSE;
         goto err;
       }
-      retval = config_assign(&options_format, newoptions, cl, 0, 0, msg);
+      retval = config_assign(&options_format, newoptions, cl, 0, msg);
       config_free_lines(cl);
       if (retval < 0) {
         err = SETOPT_ERR_PARSE;
@@ -4921,7 +4964,7 @@ options_init_from_string(const char *cf_defaults, const char *cf,
     }
     /* Assign command-line variables a second time too */
     retval = config_assign(&options_format, newoptions,
-                           global_cmdline_options, 0, 0, msg);
+                           global_cmdline_options, 0, msg);
     if (retval < 0) {
       err = SETOPT_ERR_PARSE;
       goto err;
@@ -4944,14 +4987,14 @@ options_init_from_string(const char *cf_defaults, const char *cf,
     err = SETOPT_ERR_SETTING;
     goto err; /* frees and replaces old options */
   }
-  config_free(&options_format, global_default_options);
+  or_options_free(global_default_options);
   global_default_options = newdefaultoptions;
 
   return SETOPT_OK;
 
  err:
-  config_free(&options_format, newoptions);
-  config_free(&options_format, newdefaultoptions);
+  or_options_free(newoptions);
+  or_options_free(newdefaultoptions);
   if (*msg) {
     char *old_msg = *msg;
     tor_asprintf(msg, "Failed to parse/validate config: %s", old_msg);
@@ -6133,6 +6176,20 @@ config_parse_unix_port(const char *addrport, char **path_out)
 }
 #endif /* defined(HAVE_SYS_UN_H) */
 
+static void
+warn_client_dns_cache(const char *option, int disabling)
+{
+  if (disabling)
+    return;
+
+  warn_deprecated_option(option,
+      "Client-side DNS cacheing enables a wide variety of route-"
+      "capture attacks. If a single bad exit node lies to you about "
+      "an IP address, cacheing that address would make you visit "
+      "an address of the attacker's choice every time you connected "
+      "to your destination.");
+}
+
 /**
  * Parse port configuration for a single port type.
  *
@@ -6501,21 +6558,27 @@ parse_port_config(smartlist_t *out,
           }
         }
         if (!strcasecmp(elt, "CacheIPv4DNS")) {
+          warn_client_dns_cache(elt, no); // since 0.2.9.2-alpha
           cache_ipv4 = ! no;
           continue;
         } else if (!strcasecmp(elt, "CacheIPv6DNS")) {
+          warn_client_dns_cache(elt, no); // since 0.2.9.2-alpha
           cache_ipv6 = ! no;
           continue;
         } else if (!strcasecmp(elt, "CacheDNS")) {
+          warn_client_dns_cache(elt, no); // since 0.2.9.2-alpha
           cache_ipv4 = cache_ipv6 = ! no;
           continue;
         } else if (!strcasecmp(elt, "UseIPv4Cache")) {
+          warn_client_dns_cache(elt, no); // since 0.2.9.2-alpha
           use_cached_ipv4 = ! no;
           continue;
         } else if (!strcasecmp(elt, "UseIPv6Cache")) {
+          warn_client_dns_cache(elt, no); // since 0.2.9.2-alpha
           use_cached_ipv6 = ! no;
           continue;
         } else if (!strcasecmp(elt, "UseDNSCache")) {
+          warn_client_dns_cache(elt, no); // since 0.2.9.2-alpha
           use_cached_ipv4 = use_cached_ipv6 = ! no;
           continue;
         } else if (!strcasecmp(elt, "PreferIPv6Automap")) {
@@ -6835,6 +6898,24 @@ parse_ports(or_options_t *options, int validate_only,
   return retval;
 }
 
+/* Does port bind to IPv4? */
+static int
+port_binds_ipv4(const port_cfg_t *port)
+{
+  return tor_addr_family(&port->addr) == AF_INET ||
+         (tor_addr_family(&port->addr) == AF_UNSPEC
+          && !port->server_cfg.bind_ipv6_only);
+}
+
+/* Does port bind to IPv6? */
+static int
+port_binds_ipv6(const port_cfg_t *port)
+{
+  return tor_addr_family(&port->addr) == AF_INET6 ||
+         (tor_addr_family(&port->addr) == AF_UNSPEC
+          && !port->server_cfg.bind_ipv4_only);
+}
+
 /** Given a list of <b>port_cfg_t</b> in <b>ports</b>, check them for internal
  * consistency and warn as appropriate.  Set *<b>n_low_ports_out</b> to the
  * number of sub-1024 ports we will be binding. */
@@ -6860,9 +6941,7 @@ check_server_ports(const smartlist_t *ports,
     } else if (port->type == CONN_TYPE_OR_LISTENER) {
       if (! port->server_cfg.no_advertise) {
         ++n_orport_advertised;
-        if (tor_addr_family(&port->addr) == AF_INET ||
-            (tor_addr_family(&port->addr) == AF_UNSPEC &&
-                !port->server_cfg.bind_ipv6_only))
+        if (port_binds_ipv4(port))
           ++n_orport_advertised_ipv4;
       }
       if (! port->server_cfg.no_listen)
@@ -6996,24 +7075,106 @@ get_first_listener_addrport_string(int listener_type)
 }
 
 /** Return the first advertised port of type <b>listener_type</b> in
-    <b>address_family</b>.  */
+ * <b>address_family</b>. Returns 0 when no port is found, and when passed
+ * AF_UNSPEC. */
 int
 get_first_advertised_port_by_type_af(int listener_type, int address_family)
 {
+  if (address_family == AF_UNSPEC)
+    return 0;
+
   const smartlist_t *conf_ports = get_configured_ports();
   SMARTLIST_FOREACH_BEGIN(conf_ports, const port_cfg_t *, cfg) {
     if (cfg->type == listener_type &&
-        !cfg->server_cfg.no_advertise &&
-        (tor_addr_family(&cfg->addr) == address_family ||
-         tor_addr_family(&cfg->addr) == AF_UNSPEC)) {
-      if (tor_addr_family(&cfg->addr) != AF_UNSPEC ||
-          (address_family == AF_INET && !cfg->server_cfg.bind_ipv6_only) ||
-          (address_family == AF_INET6 && !cfg->server_cfg.bind_ipv4_only)) {
+        !cfg->server_cfg.no_advertise) {
+      if ((address_family == AF_INET && port_binds_ipv4(cfg)) ||
+          (address_family == AF_INET6 && port_binds_ipv6(cfg))) {
         return cfg->port;
       }
     }
   } SMARTLIST_FOREACH_END(cfg);
   return 0;
+}
+
+/** Return the first advertised address of type <b>listener_type</b> in
+ * <b>address_family</b>. Returns NULL if there is no advertised address,
+ * and when passed AF_UNSPEC. */
+const tor_addr_t *
+get_first_advertised_addr_by_type_af(int listener_type, int address_family)
+{
+  if (address_family == AF_UNSPEC)
+    return NULL;
+  if (!configured_ports)
+    return NULL;
+  SMARTLIST_FOREACH_BEGIN(configured_ports, const port_cfg_t *, cfg) {
+    if (cfg->type == listener_type &&
+        !cfg->server_cfg.no_advertise) {
+      if ((address_family == AF_INET && port_binds_ipv4(cfg)) ||
+          (address_family == AF_INET6 && port_binds_ipv6(cfg))) {
+        return &cfg->addr;
+      }
+    }
+  } SMARTLIST_FOREACH_END(cfg);
+  return NULL;
+}
+
+/** Return 1 if a port exists of type <b>listener_type</b> on <b>addr</b> and
+ * <b>port</b>. If <b>check_wildcard</b> is true, INADDR[6]_ANY and AF_UNSPEC
+ * addresses match any address of the appropriate family; and port -1 matches
+ * any port.
+ * To match auto ports, pass CFG_PORT_AUTO. (Does not match on the actual
+ * automatically chosen listener ports.) */
+int
+port_exists_by_type_addr_port(int listener_type, const tor_addr_t *addr,
+                              int port, int check_wildcard)
+{
+  if (!configured_ports || !addr)
+    return 0;
+  SMARTLIST_FOREACH_BEGIN(configured_ports, const port_cfg_t *, cfg) {
+    if (cfg->type == listener_type) {
+      if (cfg->port == port || (check_wildcard && port == -1)) {
+        /* Exact match */
+        if (tor_addr_eq(&cfg->addr, addr)) {
+          return 1;
+        }
+        /* Skip wildcard matches if we're not doing them */
+        if (!check_wildcard) {
+          continue;
+        }
+        /* Wildcard matches IPv4 */
+        const int cfg_v4 = port_binds_ipv4(cfg);
+        const int cfg_any_v4 = tor_addr_is_null(&cfg->addr) && cfg_v4;
+        const int addr_v4 = tor_addr_family(addr) == AF_INET ||
+                            tor_addr_family(addr) == AF_UNSPEC;
+        const int addr_any_v4 = tor_addr_is_null(&cfg->addr) && addr_v4;
+        if ((cfg_any_v4 && addr_v4) || (cfg_v4 && addr_any_v4)) {
+          return 1;
+        }
+        /* Wildcard matches IPv6 */
+        const int cfg_v6 = port_binds_ipv6(cfg);
+        const int cfg_any_v6 = tor_addr_is_null(&cfg->addr) && cfg_v6;
+        const int addr_v6 = tor_addr_family(addr) == AF_INET6 ||
+                            tor_addr_family(addr) == AF_UNSPEC;
+        const int addr_any_v6 = tor_addr_is_null(&cfg->addr) && addr_v6;
+        if ((cfg_any_v6 && addr_v6) || (cfg_v6 && addr_any_v6)) {
+          return 1;
+        }
+      }
+    }
+  } SMARTLIST_FOREACH_END(cfg);
+  return 0;
+}
+
+/* Like port_exists_by_type_addr_port, but accepts a host-order IPv4 address
+ * instead. */
+int
+port_exists_by_type_addr32h_port(int listener_type, uint32_t addr_ipv4h,
+                                 int port, int check_wildcard)
+{
+  tor_addr_t ipv4;
+  tor_addr_from_ipv4h(&ipv4, addr_ipv4h);
+  return port_exists_by_type_addr_port(listener_type, &ipv4, port,
+                                       check_wildcard);
 }
 
 /** Adjust the value of options->DataDirectory, or fill it in if it's
@@ -7202,7 +7363,6 @@ init_libevent(const or_options_t *options)
   suppress_libevent_log_msg("Function not implemented");
 
   memset(&cfg, 0, sizeof(cfg));
-  cfg.disable_iocp = options->DisableIOCP;
   cfg.num_cpus = get_num_cpus(options);
   cfg.msec_per_tick = options->TokenBucketRefillInterval;
 

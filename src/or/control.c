@@ -871,7 +871,8 @@ control_setconf_helper(control_connection_t *conn, uint32_t len, char *body,
   config_line_t *lines=NULL;
   char *start = body;
   char *errstring = NULL;
-  const int clear_first = 1;
+  const unsigned flags =
+    CAL_CLEAR_FIRST | (use_defaults ? CAL_USE_DEFAULTS : 0);
 
   char *config;
   smartlist_t *entries = smartlist_new();
@@ -931,7 +932,7 @@ control_setconf_helper(control_connection_t *conn, uint32_t len, char *body,
   }
   tor_free(config);
 
-  opt_err = options_trial_assign(lines, use_defaults, clear_first, &errstring);
+  opt_err = options_trial_assign(lines, flags, &errstring);
   {
     const char *msg;
     switch (opt_err) {
@@ -4794,19 +4795,14 @@ is_valid_initial_command(control_connection_t *conn, const char *cmd)
  * interfaces is broken. */
 #define MAX_COMMAND_LINE_LENGTH (1024*1024)
 
-/** Wrapper around peek_(evbuffer|buf)_has_control0 command: presents the same
- * interface as those underlying functions, but takes a connection_t intead of
- * an evbuffer or a buf_t.
+/** Wrapper around peek_buf_has_control0 command: presents the same
+ * interface as that underlying functions, but takes a connection_t intead of
+ * a buf_t.
  */
 static int
 peek_connection_has_control0_command(connection_t *conn)
 {
-  IF_HAS_BUFFEREVENT(conn, {
-    struct evbuffer *input = bufferevent_get_input(conn->bufev);
-    return peek_evbuffer_has_control0_command(input);
-  }) ELSE_IF_NO_BUFFEREVENT {
-    return peek_buf_has_control0_command(conn->inbuf);
-  }
+  return peek_buf_has_control0_command(conn->inbuf);
 }
 
 /** Called when data has arrived on a v1 control connection: Try to fetch
