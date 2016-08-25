@@ -104,17 +104,17 @@
 #  endif
 #  if defined(__clang__) || GCC_VERSION >= 406
 /* we have push/pop support */
-#    define DISABLE_GCC_WARNING(warning) \
+#    define DISABLE_GCC_WARNING(warningopt) \
           PRAGMA_DIAGNOSTIC_(push) \
-          PRAGMA_DIAGNOSTIC_(ignored PRAGMA_JOIN_STRINGIFY_(-W,warning))
-#    define ENABLE_GCC_WARNING(warning) \
+          PRAGMA_DIAGNOSTIC_(ignored PRAGMA_JOIN_STRINGIFY_(-W,warningopt))
+#    define ENABLE_GCC_WARNING(warningopt) \
           PRAGMA_DIAGNOSTIC_(pop)
 #  else
 /* older version of gcc: no push/pop support. */
-#    define DISABLE_GCC_WARNING(warning) \
-         PRAGMA_DIAGNOSTIC_(ignored PRAGMA_JOIN_STRINGIFY_(-W,warning))
-#    define ENABLE_GCC_WARNING(warning) \
-         PRAGMA_DIAGNOSTIC_(warning PRAGMA_JOIN_STRINGIFY_(-W,warning))
+#    define DISABLE_GCC_WARNING(warningopt) \
+         PRAGMA_DIAGNOSTIC_(ignored PRAGMA_JOIN_STRINGIFY_(-W,warningopt))
+#    define ENABLE_GCC_WARNING(warningopt) \
+         PRAGMA_DIAGNOSTIC_(warning PRAGMA_JOIN_STRINGIFY_(-W,warningopt))
 #  endif
 #else /* ifdef __GNUC__ */
 /* not gcc at all */
@@ -360,8 +360,8 @@ DECLARE_CTYPE_FN(ISXDIGIT)
 DECLARE_CTYPE_FN(ISPRINT)
 DECLARE_CTYPE_FN(ISLOWER)
 DECLARE_CTYPE_FN(ISUPPER)
-extern const char TOR_TOUPPER_TABLE[];
-extern const char TOR_TOLOWER_TABLE[];
+extern const uint8_t TOR_TOUPPER_TABLE[];
+extern const uint8_t TOR_TOLOWER_TABLE[];
 #define TOR_TOLOWER(c) (TOR_TOLOWER_TABLE[(uint8_t)c])
 #define TOR_TOUPPER(c) (TOR_TOUPPER_TABLE[(uint8_t)c])
 
