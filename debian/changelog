@@ -1,3 +1,12 @@
+tor (0.2.5.12-2) stable; urgency=medium
+
+  * Update the set of authority directory servers to the one from
+    Tor 0.2.8.7, released in August 2016.  This updates the key
+    for dannenberg, replaces the Tonga bridge authority with Bifroest,
+    and drops urras.
+
+ -- Peter Palfrader <weasel@debian.org>  Tue, 30 Aug 2016 19:26:18 +0200
+
 tor (0.2.5.12-1) unstable; urgency=medium
 
   * New upstream version, fixing hidden service related Denial of
