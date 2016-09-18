@@ -1,8 +1,15 @@
 tor (0.2.9.3-alpha-1) experimental; urgency=medium
 
+  [ Peter Palfrader ]
   * New upstream version.
 
- -- Peter Palfrader <weasel@debian.org>  Fri, 23 Sep 2016 23:47:36 +0200
+  [ Iain R. Learmonth ]
+  * Removes dependency on hardening-wrapper, and
+    build-depend on version >= 9 of debhelper instead
+    so we can enable harding via DEB_BUILD_MAINT_OPTIONS
+    (closes: #836762).
+
+ -- Peter Palfrader <weasel@debian.org>  Fri, 23 Sep 2016 23:49:01 +0200
 
 tor (0.2.9.2-alpha-1) experimental; urgency=medium
 

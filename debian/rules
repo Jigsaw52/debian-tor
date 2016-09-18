@@ -5,6 +5,8 @@ DH_VERBOSE ?= 1
 
 DEB_HOST_ARCH_OS := $(shell dpkg-architecture -qDEB_HOST_ARCH_OS)
 
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
 # allow building against libdmalloc4 - it better be installed
 ifneq (,$(findstring with-dmalloc,$(DEB_BUILD_OPTIONS)))
 	confflags += --with-dmalloc
