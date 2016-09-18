@@ -1,8 +1,15 @@
 tor (0.2.8.8-1) unstable; urgency=medium
 
+  [ Peter Palfrader ]
   * New upstream version.
 
- -- Peter Palfrader <weasel@debian.org>  Fri, 23 Sep 2016 23:35:10 +0200
+  [ Iain R. Learmonth ]
+  * Removes dependency on hardening-wrapper, and
+    build-depend on version >= 9 of debhelper instead
+    so we can enable harding via DEB_BUILD_MAINT_OPTIONS
+    (closes: #836762).
+
+ -- Peter Palfrader <weasel@debian.org>  Fri, 23 Sep 2016 23:39:27 +0200
 
 tor (0.2.8.7-1) unstable; urgency=medium
 
