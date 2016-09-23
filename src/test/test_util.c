@@ -644,31 +644,57 @@ test_util_time(void *arg)
 
   /* Test tor_timegm out of range */
 
+  /* The below tests will all cause a BUG message, so we capture, suppress,
+   * and detect. */
+#define CAPTURE() do {                                          \
+    setup_full_capture_of_logs(LOG_WARN);                       \
+  } while (0)
+#define CHECK_TIMEGM_WARNING(msg) do { \
+    expect_log_msg_containing(msg);                                     \
+    tt_int_op(1, OP_EQ, smartlist_len(mock_saved_logs()));              \
+    teardown_capture_of_logs();                                         \
+  } while (0)
+
+#define CHECK_TIMEGM_ARG_OUT_OF_RANGE(msg) \
+    CHECK_TIMEGM_WARNING("Out-of-range argument to tor_timegm")
+
   /* year */
 
   /* Wrong year < 1970 */
   a_time.tm_year = 1969-1900;
+  CAPTURE();
   tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+  CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
   a_time.tm_year = -1-1900;
+  CAPTURE();
   tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+  CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
 #if SIZEOF_INT == 4 || SIZEOF_INT == 8
     a_time.tm_year = -1*(1 << 16);
+    CAPTURE();
     tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+    CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
     /* one of the smallest tm_year values my 64 bit system supports:
      * t_res = -9223372036854775LL without clamping */
     a_time.tm_year = -292275055-1900;
+    CAPTURE();
     tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+    CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
     a_time.tm_year = INT32_MIN;
+    CAPTURE();
     tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+    CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 #endif
 
 #if SIZEOF_INT == 8
     a_time.tm_year = -1*(1 << 48);
+    CAPTURE();
     tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+    CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
     /* while unlikely, the system's gmtime(_r) could return
      * a "correct" retrospective gregorian negative year value,
@@ -676,25 +702,35 @@ test_util_time(void *arg)
      * -1*(2^63)/60/60/24*2000/730485 + 1970 = -292277022657
      * 730485 is the number of days in two millenia, including leap days */
     a_time.tm_year = -292277022657-1900;
+    CAPTURE();
     tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+    CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
     a_time.tm_year = INT64_MIN;
+    CAPTURE();
     tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+    CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 #endif
 
   /* Wrong year >= INT32_MAX - 1900 */
 #if SIZEOF_INT == 4 || SIZEOF_INT == 8
     a_time.tm_year = INT32_MAX-1900;
+    CAPTURE();
     tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+    CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
     a_time.tm_year = INT32_MAX;
+    CAPTURE();
     tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+    CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 #endif
 
 #if SIZEOF_INT == 8
     /* one of the largest tm_year values my 64 bit system supports */
     a_time.tm_year = 292278994-1900;
+    CAPTURE();
     tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+    CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
     /* while unlikely, the system's gmtime(_r) could return
      * a "correct" proleptic gregorian year value,
@@ -702,72 +738,104 @@ test_util_time(void *arg)
      * (2^63-1)/60/60/24*2000/730485 + 1970 = 292277026596
      * 730485 is the number of days in two millenia, including leap days */
     a_time.tm_year = 292277026596-1900;
+    CAPTURE();
     tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+    CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
     a_time.tm_year = INT64_MAX-1900;
+    CAPTURE();
     tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+    CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
     a_time.tm_year = INT64_MAX;
+    CAPTURE();
     tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+    CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 #endif
 
   /* month */
   a_time.tm_year = 2007-1900;  /* restore valid year */
 
   a_time.tm_mon = 12;          /* Wrong month, it's 0-based */
+  CAPTURE();
   tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+  CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
   a_time.tm_mon = -1;          /* Wrong month */
+  CAPTURE();
   tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+  CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
   /* day */
   a_time.tm_mon = 6;            /* Try July */
   a_time.tm_mday = 32;          /* Wrong day */
+  CAPTURE();
   tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+  CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
   a_time.tm_mon = 5;            /* Try June */
   a_time.tm_mday = 31;          /* Wrong day */
+  CAPTURE();
   tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+  CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
   a_time.tm_year = 2008-1900;   /* Try a leap year */
   a_time.tm_mon = 1;            /* in feb. */
   a_time.tm_mday = 30;          /* Wrong day */
+  CAPTURE();
   tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+  CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
   a_time.tm_year = 2011-1900;   /* Try a non-leap year */
   a_time.tm_mon = 1;            /* in feb. */
   a_time.tm_mday = 29;          /* Wrong day */
+  CAPTURE();
   tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+  CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
   a_time.tm_mday = 0;           /* Wrong day, it's 1-based (to be different) */
+  CAPTURE();
   tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+  CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
   /* hour */
   a_time.tm_mday = 3;           /* restore valid month day */
 
   a_time.tm_hour = 24;          /* Wrong hour, it's 0-based */
+  CAPTURE();
   tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+  CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
   a_time.tm_hour = -1;          /* Wrong hour */
+  CAPTURE();
   tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+  CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
   /* minute */
   a_time.tm_hour = 22;          /* restore valid hour */
 
   a_time.tm_min = 60;           /* Wrong minute, it's 0-based */
+  CAPTURE();
   tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+  CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
   a_time.tm_min = -1;           /* Wrong minute */
+  CAPTURE();
   tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+  CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
   /* second */
   a_time.tm_min = 37;           /* restore valid minute */
 
   a_time.tm_sec = 61;           /* Wrong second: 0-based with leap seconds */
+  CAPTURE();
   tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+  CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
   a_time.tm_sec = -1;           /* Wrong second */
+  CAPTURE();
   tt_int_op((time_t) -1,OP_EQ, tor_timegm(&a_time));
+  CHECK_TIMEGM_ARG_OUT_OF_RANGE();
 
   /* Test tor_gmtime_r out of range */
 
@@ -807,9 +875,17 @@ test_util_time(void *arg)
      * 730485 is the number of days in two millenia, including leap days
      * (int64_t)b_time.tm_year == (-292277022657LL-1900LL) without clamping */
     t_res = INT64_MIN;
+    CAPTURE();
     tor_gmtime_r(&t_res, &b_time);
-    tt_assert(b_time.tm_year == (1970-1900) ||
-              b_time.tm_year == (1-1900));
+    if (! (b_time.tm_year == (1970-1900) ||
+           b_time.tm_year == (1-1900))) {
+      tt_int_op(b_time.tm_year, OP_EQ, 1970-1900);
+    }
+    if (b_time.tm_year != 1970-1900) {
+      CHECK_TIMEGM_WARNING("Rounding up to ");
+    } else {
+      teardown_capture_of_logs();
+    }
   }
 #endif
 
@@ -845,7 +921,10 @@ test_util_time(void *arg)
      * 730485 is the number of days in two millenia, including leap days
      * (int64_t)b_time.tm_year == (292277026596L-1900L) without clamping */
     t_res = INT64_MAX;
+    CAPTURE();
     tor_gmtime_r(&t_res, &b_time);
+    CHECK_TIMEGM_WARNING("Rounding down to ");
+
     tt_assert(b_time.tm_year == (2037-1900) ||
               b_time.tm_year == (9999-1900));
   }
@@ -1034,8 +1113,11 @@ test_util_time(void *arg)
 #endif
 #endif
 
+#undef CAPTURE
+#undef CHECK_TIMEGM_ARG_OUT_OF_RANGE
+
  done:
-  ;
+  teardown_capture_of_logs();
 }
 
 static void
@@ -1723,8 +1805,7 @@ static void
 test_util_strmisc(void *arg)
 {
   char buf[1024];
-  int i;
-  char *cp, *cp_tmp = NULL;
+  char *cp_tmp = NULL;
 
   /* Test strl operations */
   (void)arg;
@@ -1748,122 +1829,6 @@ test_util_strmisc(void *arg)
   strlcpy(buf, "!!!Testing 1 2 3??", sizeof(buf));
   tor_strstrip(buf, "!? ");
   tt_str_op(buf,OP_EQ, "Testing123");
-
-  /* Test parse_long */
-  /* Empty/zero input */
-  tt_int_op(0L,OP_EQ, tor_parse_long("",10,0,100,&i,NULL));
-  tt_int_op(0,OP_EQ, i);
-  tt_int_op(0L,OP_EQ, tor_parse_long("0",10,0,100,&i,NULL));
-  tt_int_op(1,OP_EQ, i);
-  /* Normal cases */
-  tt_int_op(10L,OP_EQ, tor_parse_long("10",10,0,100,&i,NULL));
-  tt_int_op(1,OP_EQ, i);
-  tt_int_op(10L,OP_EQ, tor_parse_long("10",10,0,10,&i,NULL));
-  tt_int_op(1,OP_EQ, i);
-  tt_int_op(10L,OP_EQ, tor_parse_long("10",10,10,100,&i,NULL));
-  tt_int_op(1,OP_EQ, i);
-  tt_int_op(-50L,OP_EQ, tor_parse_long("-50",10,-100,100,&i,NULL));
-  tt_int_op(1,OP_EQ, i);
-  tt_int_op(-50L,OP_EQ, tor_parse_long("-50",10,-100,0,&i,NULL));
-  tt_int_op(1,OP_EQ, i);
-  tt_int_op(-50L,OP_EQ, tor_parse_long("-50",10,-50,0,&i,NULL));
-  tt_int_op(1,OP_EQ, i);
-  /* Extra garbage */
-  tt_int_op(0L,OP_EQ, tor_parse_long("10m",10,0,100,&i,NULL));
-  tt_int_op(0,OP_EQ, i);
-  tt_int_op(0L,OP_EQ, tor_parse_long("-50 plus garbage",10,-100,100,&i,NULL));
-  tt_int_op(0,OP_EQ, i);
-  tt_int_op(10L,OP_EQ, tor_parse_long("10m",10,0,100,&i,&cp));
-  tt_int_op(1,OP_EQ, i);
-  tt_str_op(cp,OP_EQ, "m");
-  tt_int_op(-50L,OP_EQ, tor_parse_long("-50 plus garbage",10,-100,100,&i,&cp));
-  tt_int_op(1,OP_EQ, i);
-  tt_str_op(cp,OP_EQ, " plus garbage");
-  /* Illogical min max */
-  tt_int_op(0L,OP_EQ,  tor_parse_long("10",10,50,4,&i,NULL));
-  tt_int_op(0,OP_EQ, i);
-  tt_int_op(0L,OP_EQ,   tor_parse_long("-50",10,100,-100,&i,NULL));
-  tt_int_op(0,OP_EQ, i);
-  /* Out of bounds */
-  tt_int_op(0L,OP_EQ,  tor_parse_long("10",10,50,100,&i,NULL));
-  tt_int_op(0,OP_EQ, i);
-  tt_int_op(0L,OP_EQ,   tor_parse_long("-50",10,0,100,&i,NULL));
-  tt_int_op(0,OP_EQ, i);
-  /* Base different than 10 */
-  tt_int_op(2L,OP_EQ,   tor_parse_long("10",2,0,100,NULL,NULL));
-  tt_int_op(0L,OP_EQ,   tor_parse_long("2",2,0,100,NULL,NULL));
-  tt_int_op(0L,OP_EQ,   tor_parse_long("10",-2,0,100,NULL,NULL));
-  tt_int_op(68284L,OP_EQ, tor_parse_long("10abc",16,0,70000,NULL,NULL));
-  tt_int_op(68284L,OP_EQ, tor_parse_long("10ABC",16,0,70000,NULL,NULL));
-  tt_int_op(0,OP_EQ, tor_parse_long("10ABC",-1,0,70000,&i,NULL));
-  tt_int_op(i,OP_EQ, 0);
-
-  /* Test parse_ulong */
-  tt_int_op(0UL,OP_EQ, tor_parse_ulong("",10,0,100,NULL,NULL));
-  tt_int_op(0UL,OP_EQ, tor_parse_ulong("0",10,0,100,NULL,NULL));
-  tt_int_op(10UL,OP_EQ, tor_parse_ulong("10",10,0,100,NULL,NULL));
-  tt_int_op(0UL,OP_EQ, tor_parse_ulong("10",10,50,100,NULL,NULL));
-  tt_int_op(10UL,OP_EQ, tor_parse_ulong("10",10,0,10,NULL,NULL));
-  tt_int_op(10UL,OP_EQ, tor_parse_ulong("10",10,10,100,NULL,NULL));
-  tt_int_op(0UL,OP_EQ, tor_parse_ulong("8",8,0,100,NULL,NULL));
-  tt_int_op(50UL,OP_EQ, tor_parse_ulong("50",10,50,100,NULL,NULL));
-  tt_int_op(0UL,OP_EQ, tor_parse_ulong("-50",10,-100,100,NULL,NULL));
-  tt_int_op(0UL,OP_EQ, tor_parse_ulong("50",-1,50,100,&i,NULL));
-  tt_int_op(0,OP_EQ, i);
-
-  /* Test parse_uint64 */
-  tt_assert(U64_LITERAL(10) == tor_parse_uint64("10 x",10,0,100, &i, &cp));
-  tt_int_op(1,OP_EQ, i);
-  tt_str_op(cp,OP_EQ, " x");
-  tt_assert(U64_LITERAL(12345678901) ==
-              tor_parse_uint64("12345678901",10,0,UINT64_MAX, &i, &cp));
-  tt_int_op(1,OP_EQ, i);
-  tt_str_op(cp,OP_EQ, "");
-  tt_assert(U64_LITERAL(0) ==
-              tor_parse_uint64("12345678901",10,500,INT32_MAX, &i, &cp));
-  tt_int_op(0,OP_EQ, i);
-  tt_assert(U64_LITERAL(0) ==
-              tor_parse_uint64("123",-1,0,INT32_MAX, &i, &cp));
-  tt_int_op(0,OP_EQ, i);
-
-  {
-  /* Test parse_double */
-  double d = tor_parse_double("10", 0, (double)UINT64_MAX,&i,NULL);
-  tt_int_op(1,OP_EQ, i);
-  tt_assert(DBL_TO_U64(d) == 10);
-  d = tor_parse_double("0", 0, (double)UINT64_MAX,&i,NULL);
-  tt_int_op(1,OP_EQ, i);
-  tt_assert(DBL_TO_U64(d) == 0);
-  d = tor_parse_double(" ", 0, (double)UINT64_MAX,&i,NULL);
-  tt_int_op(0,OP_EQ, i);
-  d = tor_parse_double(".0a", 0, (double)UINT64_MAX,&i,NULL);
-  tt_int_op(0,OP_EQ, i);
-  d = tor_parse_double(".0a", 0, (double)UINT64_MAX,&i,&cp);
-  tt_int_op(1,OP_EQ, i);
-  d = tor_parse_double("-.0", 0, (double)UINT64_MAX,&i,NULL);
-  tt_int_op(1,OP_EQ, i);
-  tt_assert(DBL_TO_U64(d) == 0);
-  d = tor_parse_double("-10", -100.0, 100.0,&i,NULL);
-  tt_int_op(1,OP_EQ, i);
-  tt_double_op(fabs(d - -10.0),OP_LT, 1E-12);
-  }
-
-  {
-    /* Test tor_parse_* where we overflow/underflow the underlying type. */
-    /* This string should overflow 64-bit ints. */
-#define TOOBIG "100000000000000000000000000"
-    tt_int_op(0L, OP_EQ,
-              tor_parse_long(TOOBIG, 10, LONG_MIN, LONG_MAX, &i, NULL));
-    tt_int_op(i,OP_EQ, 0);
-    tt_int_op(0L,OP_EQ,
-              tor_parse_long("-"TOOBIG, 10, LONG_MIN, LONG_MAX, &i, NULL));
-    tt_int_op(i,OP_EQ, 0);
-    tt_int_op(0UL,OP_EQ, tor_parse_ulong(TOOBIG, 10, 0, ULONG_MAX, &i, NULL));
-    tt_int_op(i,OP_EQ, 0);
-    tt_u64_op(U64_LITERAL(0), OP_EQ, tor_parse_uint64(TOOBIG, 10,
-                                             0, UINT64_MAX, &i, NULL));
-    tt_int_op(i,OP_EQ, 0);
-  }
 
   /* Test snprintf */
   /* Returning -1 when there's not enough room in the output buffer */
@@ -2054,6 +2019,144 @@ test_util_strmisc(void *arg)
 }
 
 static void
+test_util_parse_integer(void *arg)
+{
+  (void)arg;
+  int i;
+  char *cp;
+
+  /* Test parse_long */
+  /* Empty/zero input */
+  tt_int_op(0L,OP_EQ, tor_parse_long("",10,0,100,&i,NULL));
+  tt_int_op(0,OP_EQ, i);
+  tt_int_op(0L,OP_EQ, tor_parse_long("0",10,0,100,&i,NULL));
+  tt_int_op(1,OP_EQ, i);
+  /* Normal cases */
+  tt_int_op(10L,OP_EQ, tor_parse_long("10",10,0,100,&i,NULL));
+  tt_int_op(1,OP_EQ, i);
+  tt_int_op(10L,OP_EQ, tor_parse_long("10",10,0,10,&i,NULL));
+  tt_int_op(1,OP_EQ, i);
+  tt_int_op(10L,OP_EQ, tor_parse_long("10",10,10,100,&i,NULL));
+  tt_int_op(1,OP_EQ, i);
+  tt_int_op(-50L,OP_EQ, tor_parse_long("-50",10,-100,100,&i,NULL));
+  tt_int_op(1,OP_EQ, i);
+  tt_int_op(-50L,OP_EQ, tor_parse_long("-50",10,-100,0,&i,NULL));
+  tt_int_op(1,OP_EQ, i);
+  tt_int_op(-50L,OP_EQ, tor_parse_long("-50",10,-50,0,&i,NULL));
+  tt_int_op(1,OP_EQ, i);
+  /* Extra garbage */
+  tt_int_op(0L,OP_EQ, tor_parse_long("10m",10,0,100,&i,NULL));
+  tt_int_op(0,OP_EQ, i);
+  tt_int_op(0L,OP_EQ, tor_parse_long("-50 plus garbage",10,-100,100,&i,NULL));
+  tt_int_op(0,OP_EQ, i);
+  tt_int_op(10L,OP_EQ, tor_parse_long("10m",10,0,100,&i,&cp));
+  tt_int_op(1,OP_EQ, i);
+  tt_str_op(cp,OP_EQ, "m");
+  tt_int_op(-50L,OP_EQ, tor_parse_long("-50 plus garbage",10,-100,100,&i,&cp));
+  tt_int_op(1,OP_EQ, i);
+  tt_str_op(cp,OP_EQ, " plus garbage");
+  /* Illogical min max */
+  tor_capture_bugs_(1);
+  tt_int_op(0L,OP_EQ,  tor_parse_long("10",10,50,4,&i,NULL));
+  tt_int_op(0,OP_EQ, i);
+  tt_int_op(1, OP_EQ, smartlist_len(tor_get_captured_bug_log_()));
+  tt_str_op("!(max < min)", OP_EQ,
+            smartlist_get(tor_get_captured_bug_log_(), 0));
+  tor_end_capture_bugs_();
+  tor_capture_bugs_(1);
+  tt_int_op(0L,OP_EQ,   tor_parse_long("-50",10,100,-100,&i,NULL));
+  tt_int_op(0,OP_EQ, i);
+  tt_int_op(1, OP_EQ, smartlist_len(tor_get_captured_bug_log_()));
+  tt_str_op("!(max < min)", OP_EQ,
+            smartlist_get(tor_get_captured_bug_log_(), 0));
+  tor_end_capture_bugs_();
+  /* Out of bounds */
+  tt_int_op(0L,OP_EQ,  tor_parse_long("10",10,50,100,&i,NULL));
+  tt_int_op(0,OP_EQ, i);
+  tt_int_op(0L,OP_EQ,   tor_parse_long("-50",10,0,100,&i,NULL));
+  tt_int_op(0,OP_EQ, i);
+  /* Base different than 10 */
+  tt_int_op(2L,OP_EQ,   tor_parse_long("10",2,0,100,NULL,NULL));
+  tt_int_op(0L,OP_EQ,   tor_parse_long("2",2,0,100,NULL,NULL));
+  tt_int_op(0L,OP_EQ,   tor_parse_long("10",-2,0,100,NULL,NULL));
+  tt_int_op(68284L,OP_EQ, tor_parse_long("10abc",16,0,70000,NULL,NULL));
+  tt_int_op(68284L,OP_EQ, tor_parse_long("10ABC",16,0,70000,NULL,NULL));
+  tt_int_op(0,OP_EQ, tor_parse_long("10ABC",-1,0,70000,&i,NULL));
+  tt_int_op(i,OP_EQ, 0);
+
+  /* Test parse_ulong */
+  tt_int_op(0UL,OP_EQ, tor_parse_ulong("",10,0,100,NULL,NULL));
+  tt_int_op(0UL,OP_EQ, tor_parse_ulong("0",10,0,100,NULL,NULL));
+  tt_int_op(10UL,OP_EQ, tor_parse_ulong("10",10,0,100,NULL,NULL));
+  tt_int_op(0UL,OP_EQ, tor_parse_ulong("10",10,50,100,NULL,NULL));
+  tt_int_op(10UL,OP_EQ, tor_parse_ulong("10",10,0,10,NULL,NULL));
+  tt_int_op(10UL,OP_EQ, tor_parse_ulong("10",10,10,100,NULL,NULL));
+  tt_int_op(0UL,OP_EQ, tor_parse_ulong("8",8,0,100,NULL,NULL));
+  tt_int_op(50UL,OP_EQ, tor_parse_ulong("50",10,50,100,NULL,NULL));
+  tt_int_op(0UL,OP_EQ, tor_parse_ulong("-50",10,0,100,NULL,NULL));
+  tt_int_op(0UL,OP_EQ, tor_parse_ulong("50",-1,50,100,&i,NULL));
+  tt_int_op(0,OP_EQ, i);
+  tt_int_op(0UL,OP_EQ, tor_parse_ulong("-50",10,0,100,&i,NULL));
+  tt_int_op(0,OP_EQ, i);
+
+  /* Test parse_uint64 */
+  tt_assert(U64_LITERAL(10) == tor_parse_uint64("10 x",10,0,100, &i, &cp));
+  tt_int_op(1,OP_EQ, i);
+  tt_str_op(cp,OP_EQ, " x");
+  tt_assert(U64_LITERAL(12345678901) ==
+              tor_parse_uint64("12345678901",10,0,UINT64_MAX, &i, &cp));
+  tt_int_op(1,OP_EQ, i);
+  tt_str_op(cp,OP_EQ, "");
+  tt_assert(U64_LITERAL(0) ==
+              tor_parse_uint64("12345678901",10,500,INT32_MAX, &i, &cp));
+  tt_int_op(0,OP_EQ, i);
+  tt_assert(U64_LITERAL(0) ==
+              tor_parse_uint64("123",-1,0,INT32_MAX, &i, &cp));
+  tt_int_op(0,OP_EQ, i);
+
+  {
+  /* Test parse_double */
+  double d = tor_parse_double("10", 0, (double)UINT64_MAX,&i,NULL);
+  tt_int_op(1,OP_EQ, i);
+  tt_assert(DBL_TO_U64(d) == 10);
+  d = tor_parse_double("0", 0, (double)UINT64_MAX,&i,NULL);
+  tt_int_op(1,OP_EQ, i);
+  tt_assert(DBL_TO_U64(d) == 0);
+  d = tor_parse_double(" ", 0, (double)UINT64_MAX,&i,NULL);
+  tt_int_op(0,OP_EQ, i);
+  d = tor_parse_double(".0a", 0, (double)UINT64_MAX,&i,NULL);
+  tt_int_op(0,OP_EQ, i);
+  d = tor_parse_double(".0a", 0, (double)UINT64_MAX,&i,&cp);
+  tt_int_op(1,OP_EQ, i);
+  d = tor_parse_double("-.0", 0, (double)UINT64_MAX,&i,NULL);
+  tt_int_op(1,OP_EQ, i);
+  tt_assert(DBL_TO_U64(d) == 0);
+  d = tor_parse_double("-10", -100.0, 100.0,&i,NULL);
+  tt_int_op(1,OP_EQ, i);
+  tt_double_op(fabs(d - -10.0),OP_LT, 1E-12);
+  }
+
+  {
+    /* Test tor_parse_* where we overflow/underflow the underlying type. */
+    /* This string should overflow 64-bit ints. */
+#define TOOBIG "100000000000000000000000000"
+    tt_int_op(0L, OP_EQ,
+              tor_parse_long(TOOBIG, 10, LONG_MIN, LONG_MAX, &i, NULL));
+    tt_int_op(i,OP_EQ, 0);
+    tt_int_op(0L,OP_EQ,
+              tor_parse_long("-"TOOBIG, 10, LONG_MIN, LONG_MAX, &i, NULL));
+    tt_int_op(i,OP_EQ, 0);
+    tt_int_op(0UL,OP_EQ, tor_parse_ulong(TOOBIG, 10, 0, ULONG_MAX, &i, NULL));
+    tt_int_op(i,OP_EQ, 0);
+    tt_u64_op(U64_LITERAL(0), OP_EQ, tor_parse_uint64(TOOBIG, 10,
+                                             0, UINT64_MAX, &i, NULL));
+    tt_int_op(i,OP_EQ, 0);
+  }
+ done:
+  tor_end_capture_bugs_();
+}
+
+static void
 test_util_pow2(void *arg)
 {
   /* Test tor_log2(). */
@@ -2217,9 +2320,15 @@ test_util_gzip_compression_bomb(void *arg)
   tor_zlib_state_t *state = NULL;
 
   /* Make sure we can't produce a compression bomb */
+  setup_full_capture_of_logs(LOG_WARN);
   tt_int_op(-1, OP_EQ, tor_gzip_compress(&result, &result_len,
                                          one_mb, one_million,
                                          ZLIB_METHOD));
+  expect_single_log_msg_containing(
+         "We compressed something and got an insanely high "
+         "compression factor; other Tors would think this "
+         "was a zlib bomb.");
+  teardown_capture_of_logs();
 
   /* Here's a compression bomb that we made manually. */
   const char compression_bomb[1039] =
@@ -4965,24 +5074,66 @@ test_util_socket(void *arg)
   tt_int_op(fd_is_nonblocking(fd4), OP_EQ, 1);
 #endif
 
-  tor_close_socket(fd1);
-  tor_close_socket(fd2);
+  tor_assert(tor_close_socket == tor_close_socket__real);
+
+  /* we use close_socket__real here so that coverity can tell that we are
+   * really closing these sockets. */
+  tor_close_socket__real(fd1);
+  tor_close_socket__real(fd2);
   fd1 = fd2 = TOR_INVALID_SOCKET;
   tt_int_op(get_n_open_sockets(), OP_EQ, n + 2);
-  tor_close_socket(fd3);
-  tor_close_socket(fd4);
+  tor_close_socket__real(fd3);
+  tor_close_socket__real(fd4);
   fd3 = fd4 = TOR_INVALID_SOCKET;
   tt_int_op(get_n_open_sockets(), OP_EQ, n);
 
  done:
   if (SOCKET_OK(fd1))
-    tor_close_socket(fd1);
+    tor_close_socket__real(fd1);
   if (SOCKET_OK(fd2))
-    tor_close_socket(fd2);
+    tor_close_socket__real(fd2);
   if (SOCKET_OK(fd3))
-    tor_close_socket(fd3);
+    tor_close_socket__real(fd3);
   if (SOCKET_OK(fd4))
-    tor_close_socket(fd4);
+    tor_close_socket__real(fd4);
+}
+
+static int
+is_there_a_localhost(void)
+{
+  tor_socket_t s;
+  s = tor_open_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  tor_assert(SOCKET_OK(s));
+
+  struct sockaddr_in s_in;
+  memset(&s_in, 0, sizeof(s_in));
+  s_in.sin_family = AF_INET;
+  s_in.sin_addr.s_addr = htonl(0x7f000001);
+  s_in.sin_port = 0;
+
+  int result = 0;
+  if (bind(s, (void*)&s_in, sizeof(s_in)) == 0) {
+    result = 1;
+  }
+  tor_close_socket(s);
+  if (result)
+    return result;
+
+  s = tor_open_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  tor_assert(SOCKET_OK(s));
+
+  struct sockaddr_in6 sin6;
+  memset(&sin6, 0, sizeof(sin6));
+  sin6.sin6_family = AF_INET6;
+  sin6.sin6_addr.s6_addr[15] = 1;
+  sin6.sin6_port = 0;
+
+  if (bind(s, (void*)&sin6, sizeof(sin6)) == 0) {
+    result = 1;
+  }
+  tor_close_socket(s);
+
+  return result;
 }
 
 /* Test for socketpair and ersatz_socketpair().  We test them both, since
@@ -5003,10 +5154,10 @@ test_util_socketpair(void *arg)
    * Otherwise, we risk exposing a socketpair on a routable IP address. (Some
    * BSD jails use a routable address for localhost. Fortunately, they have
    * the real AF_UNIX socketpair.) */
-  if (ersatz && ERRNO_IS_EPROTO(-socketpair_result)) {
+  if (ersatz && socketpair_result < 0 && !is_there_a_localhost()) {
     /* In my testing, an IPv6-only FreeBSD jail without ::1 returned EINVAL.
      * Assume we're on a machine without 127.0.0.1 or ::1 and give up now. */
-    goto done;
+    tt_skip();
   }
   tt_int_op(0, OP_EQ, socketpair_result);
 
@@ -5214,7 +5365,6 @@ test_util_pwdb(void *arg)
   const struct passwd *me = NULL, *me2, *me3;
   char *name = NULL;
   char *dir = NULL;
-  int prev_level = -100;
 
   /* Uncached case. */
   /* Let's assume that we exist. */
@@ -5254,12 +5404,13 @@ test_util_pwdb(void *arg)
   tt_assert(found);
   tor_free(dir);
 
-  prev_level = setup_capture_of_logs(LOG_ERR); /* We should do a LOG_ERR */
+  /* We should do a LOG_ERR */
+  setup_full_capture_of_logs(LOG_ERR);
   dir = get_user_homedir(badname);
   tt_assert(dir == NULL);
+  expect_log_msg_containing("not found");
   tt_int_op(smartlist_len(mock_saved_logs()), OP_EQ, 1);
-  teardown_capture_of_logs(prev_level);
-  prev_level = -100;
+  teardown_capture_of_logs();
 
   /* Now try to find a user that doesn't exist by ID. */
   found = 0;
@@ -5276,8 +5427,7 @@ test_util_pwdb(void *arg)
  done:
   tor_free(name);
   tor_free(dir);
-  if (prev_level >= 0)
-    teardown_capture_of_logs(prev_level);
+  teardown_capture_of_logs();
 }
 #endif
 
@@ -5320,6 +5470,8 @@ test_util_monotonic_time(void *arg)
   monotime_coarse_t mtc1, mtc2;
   uint64_t nsec1, nsec2, usec1, msec1;
   uint64_t nsecc1, nsecc2, usecc1, msecc1;
+
+  monotime_init();
 
   monotime_get(&mt1);
   monotime_coarse_get(&mtc1);
@@ -5365,6 +5517,7 @@ static void
 test_util_monotonic_time_ratchet(void *arg)
 {
   (void)arg;
+  monotime_init();
   monotime_reset_ratchets_for_testing();
 
   /* win32, performance counter ratchet. */
@@ -5460,9 +5613,10 @@ struct testcase_t util_tests[] = {
   UTIL_LEGACY(escape_string_socks),
   UTIL_LEGACY(string_is_key_value),
   UTIL_LEGACY(strmisc),
+  UTIL_TEST(parse_integer, 0),
   UTIL_LEGACY(pow2),
   UTIL_LEGACY(gzip),
-  UTIL_LEGACY(gzip_compression_bomb),
+  UTIL_TEST(gzip_compression_bomb, TT_FORK),
   UTIL_LEGACY(datadir),
   UTIL_LEGACY(memarea),
   UTIL_LEGACY(control_formats),

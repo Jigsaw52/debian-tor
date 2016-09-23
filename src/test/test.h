@@ -169,6 +169,7 @@ struct crypto_pk_t *pk_generate(int idx);
 #define NS_UNMOCK(name) UNMOCK(name)
 
 extern const struct testcase_setup_t passthrough_setup;
+extern const struct testcase_setup_t ed25519_test_setup;
 
 extern struct testcase_t accounting_tests[];
 extern struct testcase_t addr_tests[];
@@ -202,6 +203,7 @@ extern struct testcase_t logging_tests[];
 extern struct testcase_t microdesc_tests[];
 extern struct testcase_t nodelist_tests[];
 extern struct testcase_t oom_tests[];
+extern struct testcase_t oos_tests[];
 extern struct testcase_t options_tests[];
 extern struct testcase_t policy_tests[];
 extern struct testcase_t procmon_tests[];

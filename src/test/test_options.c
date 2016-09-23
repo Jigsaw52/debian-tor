@@ -394,14 +394,6 @@ free_options_test_data(options_test_data_t *td)
   tor_free(td);
 }
 
-#define expect_log_msg(str) \
-  tt_assert_msg(mock_saved_log_has_message(str), \
-                "expected log to contain " # str);
-
-#define expect_no_log_msg(str)                      \
-  tt_assert_msg(!mock_saved_log_has_message(str), \
-                "expected log to not contain " # str);
-
 static void
 test_options_validate__uname_for_server(void *ignored)
 {
@@ -409,7 +401,7 @@ test_options_validate__uname_for_server(void *ignored)
   char *msg;
   options_test_data_t *tdata = get_options_test_data(
                                       "ORListenAddress 127.0.0.1:5555");
-  int previous_log = setup_capture_of_logs(LOG_WARN);
+  setup_capture_of_logs(LOG_WARN);
 
   MOCK(get_uname, fixed_get_uname);
   fixed_get_uname_result = "Windows 95";
@@ -445,7 +437,7 @@ test_options_validate__uname_for_server(void *ignored)
   UNMOCK(get_uname);
   free_options_test_data(tdata);
   tor_free(msg);
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
 }
 
 static void
@@ -543,7 +535,7 @@ test_options_validate__contactinfo(void *ignored)
   char *msg;
   options_test_data_t *tdata = get_options_test_data(
                                 "ORListenAddress 127.0.0.1:5555\nORPort 955");
-  int previous_log = setup_capture_of_logs(LOG_DEBUG);
+  setup_capture_of_logs(LOG_DEBUG);
   tdata->opt->ContactInfo = NULL;
 
   ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
@@ -567,7 +559,7 @@ test_options_validate__contactinfo(void *ignored)
   tor_free(msg);
 
  done:
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   free_options_test_data(tdata);
   tor_free(msg);
 }
@@ -655,7 +647,7 @@ test_options_validate__authdir(void *ignored)
   (void)ignored;
   int ret;
   char *msg;
-  int previous_log = setup_capture_of_logs(LOG_INFO);
+  setup_capture_of_logs(LOG_INFO);
   options_test_data_t *tdata = get_options_test_data(
                                  "AuthoritativeDirectory 1\n"
                                  "Address this.should.not_exist.example.org");
@@ -948,7 +940,7 @@ test_options_validate__authdir(void *ignored)
   /*           "but ClientOnly also set."); */
 
  done:
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   //  sandbox_free_getaddrinfo_cache();
   free_options_test_data(tdata);
   tor_free(msg);
@@ -959,7 +951,7 @@ test_options_validate__relay_with_hidden_services(void *ignored)
 {
   (void)ignored;
   char *msg;
-  int previous_log = setup_capture_of_logs(LOG_DEBUG);
+  setup_capture_of_logs(LOG_DEBUG);
   options_test_data_t *tdata = get_options_test_data(
                                   "ORListenAddress 127.0.0.1:5555\n"
                                   "ORPort 955\n"
@@ -976,7 +968,7 @@ test_options_validate__relay_with_hidden_services(void *ignored)
             "https://trac.torproject.org/8742\n");
 
  done:
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   free_options_test_data(tdata);
   tor_free(msg);
 }
@@ -989,7 +981,7 @@ test_options_validate__relay_with_hidden_services(void *ignored)
 /*   (void)ignored; */
 /*   int ret; */
 /*   char *msg; */
-/*   int previous_log = setup_capture_of_logs(LOG_WARN); */
+/*   setup_capture_of_logs(LOG_WARN); */
 /*   options_test_data_t *tdata = get_options_test_data(""); */
 /*   ret = options_validate(tdata->old_opt, tdata->opt, */
 /*                          tdata->def_opt, 0, &msg); */
@@ -998,7 +990,7 @@ test_options_validate__relay_with_hidden_services(void *ignored)
 /*           "configured. " */
 /*           " Tor will still run, but probably won't do anything.\n"); */
 /*  done: */
-/*   teardown_capture_of_logs(previous_log); */
+/*   teardown_capture_of_logs(); */
 /*   free_options_test_data(tdata); */
 /*   tor_free(msg); */
 /* } */
@@ -1139,7 +1131,7 @@ test_options_validate__exclude_nodes(void *ignored)
 
   int ret;
   char *msg;
-  int previous_log = setup_capture_of_logs(LOG_WARN);
+  setup_capture_of_logs(LOG_WARN);
   options_test_data_t *tdata = get_options_test_data(
                                                   "ExcludeExitNodes {us}\n");
 
@@ -1204,7 +1196,7 @@ test_options_validate__exclude_nodes(void *ignored)
 
  done:
   NS_UNMOCK(geoip_get_country);
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   free_options_test_data(tdata);
   tor_free(msg);
 }
@@ -1215,7 +1207,7 @@ test_options_validate__scheduler(void *ignored)
   (void)ignored;
   int ret;
   char *msg;
-  int previous_log = setup_capture_of_logs(LOG_DEBUG);
+  setup_capture_of_logs(LOG_DEBUG);
   options_test_data_t *tdata = get_options_test_data(
                                             "SchedulerLowWaterMark__ 0\n");
 
@@ -1247,7 +1239,7 @@ test_options_validate__scheduler(void *ignored)
   tor_free(msg);
 
  done:
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   free_options_test_data(tdata);
   tor_free(msg);
 }
@@ -1310,7 +1302,7 @@ test_options_validate__tlsec(void *ignored)
   (void)ignored;
   int ret;
   char *msg;
-  int previous_log = setup_capture_of_logs(LOG_DEBUG);
+  setup_capture_of_logs(LOG_DEBUG);
   options_test_data_t *tdata = get_options_test_data(
                                  "TLSECGroup ed25519\n"
                                  "SchedulerHighWaterMark__ 42\n"
@@ -1347,7 +1339,7 @@ test_options_validate__tlsec(void *ignored)
   tor_free(msg);
 
  done:
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   free_options_test_data(tdata);
   tor_free(msg);
 }
@@ -1385,7 +1377,7 @@ test_options_validate__recommended_packages(void *ignored)
   (void)ignored;
   int ret;
   char *msg;
-  int previous_log = setup_capture_of_logs(LOG_WARN);
+  setup_capture_of_logs(LOG_WARN);
   options_test_data_t *tdata = get_options_test_data(
             "RecommendedPackages foo 1.2 http://foo.com sha1=123123123123\n"
             "RecommendedPackages invalid-package-line\n"
@@ -1399,7 +1391,7 @@ test_options_validate__recommended_packages(void *ignored)
 
  done:
   escaped(NULL); // This will free the leaking memory from the previous escaped
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   free_options_test_data(tdata);
   tor_free(msg);
 }
@@ -1477,7 +1469,7 @@ test_options_validate__paths_needed(void *ignored)
   (void)ignored;
   int ret;
   char *msg;
-  int previous_log = setup_capture_of_logs(LOG_WARN);
+  setup_capture_of_logs(LOG_WARN);
   options_test_data_t *tdata = get_options_test_data(
                                       "PathsNeededToBuildCircuits 0.1\n"
                                       "ConnLimit 1\n"
@@ -1522,7 +1514,7 @@ test_options_validate__paths_needed(void *ignored)
   tor_free(msg);
 
  done:
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   free_options_test_data(tdata);
   tor_free(msg);
 }
@@ -1659,7 +1651,7 @@ test_options_validate__reachable_addresses(void *ignored)
   (void)ignored;
   int ret;
   char *msg;
-  int previous_log = setup_capture_of_logs(LOG_NOTICE);
+  setup_capture_of_logs(LOG_NOTICE);
   options_test_data_t *tdata = get_options_test_data(
                                      "FascistFirewall 1\n"
                                      "MaxClientCircuitsPending 1\n"
@@ -1873,7 +1865,7 @@ test_options_validate__reachable_addresses(void *ignored)
   tt_ptr_op(msg, OP_EQ, NULL);
 
  done:
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   free_options_test_data(tdata);
   tor_free(msg);
 }
@@ -2123,7 +2115,7 @@ test_options_validate__publish_server_descriptor(void *ignored)
   (void)ignored;
   int ret;
   char *msg;
-  int previous_log = setup_capture_of_logs(LOG_WARN);
+  setup_capture_of_logs(LOG_WARN);
   options_test_data_t *tdata = get_options_test_data(
              "PublishServerDescriptor bridge\n" TEST_OPTIONS_DEFAULT_VALUES
                                                      );
@@ -2187,7 +2179,7 @@ test_options_validate__publish_server_descriptor(void *ignored)
   tt_assert(!tdata->opt->DirPort_set);
 
  done:
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   policies_free_all();
   free_options_test_data(tdata);
   tor_free(msg);
@@ -2274,7 +2266,7 @@ test_options_validate__hidserv(void *ignored)
   (void)ignored;
   int ret;
   char *msg;
-  int previous_log = setup_capture_of_logs(LOG_WARN);
+  setup_capture_of_logs(LOG_WARN);
 
   options_test_data_t *tdata = get_options_test_data(
                                                 TEST_OPTIONS_DEFAULT_VALUES);
@@ -2309,7 +2301,7 @@ test_options_validate__hidserv(void *ignored)
   tor_free(msg);
 
  done:
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   policies_free_all();
   free_options_test_data(tdata);
   tor_free(msg);
@@ -2321,7 +2313,7 @@ test_options_validate__predicted_ports(void *ignored)
   (void)ignored;
   int ret;
   char *msg;
-  int previous_log = setup_capture_of_logs(LOG_WARN);
+  setup_capture_of_logs(LOG_WARN);
 
   options_test_data_t *tdata = get_options_test_data(
                                      "PredictedPortsRelevanceTime 100000000\n"
@@ -2333,7 +2325,7 @@ test_options_validate__predicted_ports(void *ignored)
   tt_int_op(tdata->opt->PredictedPortsRelevanceTime, OP_EQ, 3600);
 
  done:
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   policies_free_all();
   free_options_test_data(tdata);
   tor_free(msg);
@@ -2547,7 +2539,7 @@ test_options_validate__circuits(void *ignored)
   (void)ignored;
   char *msg;
   options_test_data_t *tdata = NULL;
-  int previous_log = setup_capture_of_logs(LOG_WARN);
+  setup_capture_of_logs(LOG_WARN);
 
   free_options_test_data(tdata);
   tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
@@ -2624,7 +2616,7 @@ test_options_validate__circuits(void *ignored)
 
  done:
   policies_free_all();
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   free_options_test_data(tdata);
   tor_free(msg);
 }
@@ -2697,7 +2689,7 @@ test_options_validate__rend(void *ignored)
   int ret;
   char *msg;
   options_test_data_t *tdata = NULL;
-  int previous_log = setup_capture_of_logs(LOG_WARN);
+  setup_capture_of_logs(LOG_WARN);
 
   free_options_test_data(tdata);
   tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
@@ -2752,7 +2744,156 @@ test_options_validate__rend(void *ignored)
 
  done:
   policies_free_all();
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
+  free_options_test_data(tdata);
+  tor_free(msg);
+}
+
+static void
+test_options_validate__single_onion(void *ignored)
+{
+  (void)ignored;
+  int ret;
+  char *msg;
+  options_test_data_t *tdata = NULL;
+  setup_capture_of_logs(LOG_WARN);
+
+  /* Test that HiddenServiceSingleHopMode must come with
+   * HiddenServiceNonAnonymousMode */
+  tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
+                                "SOCKSPort 0\n"
+                                "HiddenServiceSingleHopMode 1\n"
+                                );
+  ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
+  tt_int_op(ret, OP_EQ, -1);
+  tt_str_op(msg, OP_EQ, "HiddenServiceSingleHopMode does not provide any "
+            "server anonymity. It must be used with "
+            "HiddenServiceNonAnonymousMode set to 1.");
+  tor_free(msg);
+  free_options_test_data(tdata);
+
+  tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
+                                "SOCKSPort 0\n"
+                                "HiddenServiceSingleHopMode 1\n"
+                                "HiddenServiceNonAnonymousMode 0\n"
+                                );
+  ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
+  tt_int_op(ret, OP_EQ, -1);
+  tt_str_op(msg, OP_EQ, "HiddenServiceSingleHopMode does not provide any "
+            "server anonymity. It must be used with "
+            "HiddenServiceNonAnonymousMode set to 1.");
+  tor_free(msg);
+  free_options_test_data(tdata);
+
+  tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
+                                "SOCKSPort 0\n"
+                                "HiddenServiceSingleHopMode 1\n"
+                                "HiddenServiceNonAnonymousMode 1\n"
+                                );
+  ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
+  tt_int_op(ret, OP_EQ, 0);
+  tt_ptr_op(msg, OP_EQ, NULL);
+  free_options_test_data(tdata);
+
+  /* Test that SOCKSPort must come with Tor2webMode if
+   * HiddenServiceSingleHopMode is 1 */
+  tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
+                                "SOCKSPort 5000\n"
+                                "HiddenServiceSingleHopMode 1\n"
+                                "HiddenServiceNonAnonymousMode 1\n"
+                                "Tor2webMode 0\n"
+                                );
+  ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
+  tt_int_op(ret, OP_EQ, -1);
+  tt_str_op(msg, OP_EQ, "HiddenServiceNonAnonymousMode is incompatible with "
+            "using Tor as an anonymous client. Please set "
+            "Socks/Trans/NATD/DNSPort to 0, or HiddenServiceNonAnonymousMode "
+            "to 0, or use the non-anonymous Tor2webMode.");
+  tor_free(msg);
+  free_options_test_data(tdata);
+
+  tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
+                                "SOCKSPort 0\n"
+                                "HiddenServiceSingleHopMode 1\n"
+                                "HiddenServiceNonAnonymousMode 1\n"
+                                "Tor2webMode 0\n"
+                                );
+  ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
+  tt_int_op(ret, OP_EQ, 0);
+  tt_ptr_op(msg, OP_EQ, NULL);
+  free_options_test_data(tdata);
+
+  tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
+                                "SOCKSPort 5000\n"
+                                "HiddenServiceSingleHopMode 0\n"
+                                "Tor2webMode 0\n"
+                                );
+  ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
+  tt_int_op(ret, OP_EQ, 0);
+  tt_ptr_op(msg, OP_EQ, NULL);
+  free_options_test_data(tdata);
+
+  tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
+                                "SOCKSPort 5000\n"
+                                "HiddenServiceSingleHopMode 1\n"
+                                "HiddenServiceNonAnonymousMode 1\n"
+                                "Tor2webMode 1\n"
+                                );
+  ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
+  tt_int_op(ret, OP_EQ, 0);
+  tt_ptr_op(msg, OP_EQ, NULL);
+  free_options_test_data(tdata);
+
+  /* Test that a hidden service can't be run with Tor2web
+   * Use HiddenServiceNonAnonymousMode instead of Tor2webMode, because
+   * Tor2webMode requires a compilation #define */
+  tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
+                  "HiddenServiceNonAnonymousMode 1\n"
+                  "HiddenServiceDir /Library/Tor/var/lib/tor/hidden_service/\n"
+                  "HiddenServicePort 80 127.0.0.1:8080\n"
+                                );
+  ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
+  tt_int_op(ret, OP_EQ, -1);
+  tt_str_op(msg, OP_EQ, "HiddenServiceNonAnonymousMode does not provide any "
+            "server anonymity. It must be used with "
+            "HiddenServiceSingleHopMode set to 1.");
+  tor_free(msg);
+  free_options_test_data(tdata);
+
+  tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
+                  "HiddenServiceNonAnonymousMode 1\n"
+                                );
+  ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
+  tt_int_op(ret, OP_EQ, -1);
+  tt_str_op(msg, OP_EQ, "HiddenServiceNonAnonymousMode does not provide any "
+            "server anonymity. It must be used with "
+            "HiddenServiceSingleHopMode set to 1.");
+  tor_free(msg);
+  free_options_test_data(tdata);
+
+  tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
+                  "HiddenServiceDir /Library/Tor/var/lib/tor/hidden_service/\n"
+                  "HiddenServicePort 80 127.0.0.1:8080\n"
+                                );
+  ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
+  tt_int_op(ret, OP_EQ, 0);
+  tt_ptr_op(msg, OP_EQ, NULL);
+  free_options_test_data(tdata);
+
+  tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
+                  "HiddenServiceNonAnonymousMode 1\n"
+                  "HiddenServiceDir /Library/Tor/var/lib/tor/hidden_service/\n"
+                  "HiddenServicePort 80 127.0.0.1:8080\n"
+                  "HiddenServiceSingleHopMode 1\n"
+                  "SOCKSPort 0\n"
+                                );
+  ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
+  tt_int_op(ret, OP_EQ, 0);
+  tt_ptr_op(msg, OP_EQ, NULL);
+
+ done:
+  policies_free_all();
+  teardown_capture_of_logs();
   free_options_test_data(tdata);
   tor_free(msg);
 }
@@ -2764,7 +2905,7 @@ test_options_validate__accounting(void *ignored)
   int ret;
   char *msg;
   options_test_data_t *tdata = NULL;
-  int previous_log = setup_capture_of_logs(LOG_WARN);
+  setup_capture_of_logs(LOG_WARN);
 
   free_options_test_data(tdata);
   tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
@@ -2869,7 +3010,7 @@ test_options_validate__accounting(void *ignored)
   tor_free(msg);
 
  done:
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   policies_free_all();
   free_options_test_data(tdata);
   tor_free(msg);
@@ -2883,7 +3024,7 @@ test_options_validate__proxy(void *ignored)
   char *msg;
   options_test_data_t *tdata = NULL;
   sandbox_disable_getaddrinfo_cache();
-  int previous_log = setup_capture_of_logs(LOG_WARN);
+  setup_capture_of_logs(LOG_WARN);
 
   free_options_test_data(tdata);
   tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
@@ -3199,7 +3340,7 @@ test_options_validate__proxy(void *ignored)
   tor_free(msg);
 
  done:
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   free_options_test_data(tdata);
   policies_free_all();
   // sandbox_free_getaddrinfo_cache();
@@ -3213,7 +3354,7 @@ test_options_validate__control(void *ignored)
   int ret;
   char *msg;
   options_test_data_t *tdata = NULL;
-  int previous_log = setup_capture_of_logs(LOG_WARN);
+  setup_capture_of_logs(LOG_WARN);
 
   free_options_test_data(tdata);
   tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
@@ -3427,7 +3568,7 @@ test_options_validate__control(void *ignored)
   tor_free(msg);
 
  done:
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   policies_free_all();
   free_options_test_data(tdata);
   tor_free(msg);
@@ -3440,7 +3581,7 @@ test_options_validate__families(void *ignored)
   int ret;
   char *msg;
   options_test_data_t *tdata = NULL;
-  int previous_log = setup_capture_of_logs(LOG_WARN);
+  setup_capture_of_logs(LOG_WARN);
 
   free_options_test_data(tdata);
   tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
@@ -3499,7 +3640,7 @@ test_options_validate__families(void *ignored)
   tor_free(msg);
 
  done:
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   policies_free_all();
   free_options_test_data(tdata);
   tor_free(msg);
@@ -3536,7 +3677,7 @@ test_options_validate__dir_auth(void *ignored)
   int ret;
   char *msg;
   options_test_data_t *tdata = NULL;
-  int previous_log = setup_capture_of_logs(LOG_WARN);
+  setup_capture_of_logs(LOG_WARN);
 
   free_options_test_data(tdata);
   tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
@@ -3611,7 +3752,7 @@ test_options_validate__dir_auth(void *ignored)
 
  done:
   policies_free_all();
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   free_options_test_data(tdata);
   tor_free(msg);
 }
@@ -3623,7 +3764,7 @@ test_options_validate__transport(void *ignored)
   int ret;
   char *msg;
   options_test_data_t *tdata = NULL;
-  int previous_log = setup_capture_of_logs(LOG_NOTICE);
+  setup_capture_of_logs(LOG_NOTICE);
 
   free_options_test_data(tdata);
   tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
@@ -3736,7 +3877,7 @@ test_options_validate__transport(void *ignored)
  done:
   escaped(NULL); // This will free the leaking memory from the previous escaped
   policies_free_all();
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   free_options_test_data(tdata);
   tor_free(msg);
 }
@@ -3748,7 +3889,7 @@ test_options_validate__constrained_sockets(void *ignored)
   int ret;
   char *msg;
   options_test_data_t *tdata = NULL;
-  int previous_log = setup_capture_of_logs(LOG_WARN);
+  setup_capture_of_logs(LOG_WARN);
 
   free_options_test_data(tdata);
   tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
@@ -3819,7 +3960,7 @@ test_options_validate__constrained_sockets(void *ignored)
 
  done:
   policies_free_all();
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   free_options_test_data(tdata);
   tor_free(msg);
 }
@@ -3831,7 +3972,7 @@ test_options_validate__v3_auth(void *ignored)
   int ret;
   char *msg;
   options_test_data_t *tdata = NULL;
-  int previous_log = setup_capture_of_logs(LOG_WARN);
+  setup_capture_of_logs(LOG_WARN);
 
   free_options_test_data(tdata);
   tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
@@ -4038,7 +4179,7 @@ test_options_validate__v3_auth(void *ignored)
 
  done:
   policies_free_all();
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   free_options_test_data(tdata);
   tor_free(msg);
 }
@@ -4083,7 +4224,7 @@ test_options_validate__exits(void *ignored)
   int ret;
   char *msg;
   options_test_data_t *tdata = NULL;
-  int previous_log = setup_capture_of_logs(LOG_WARN);
+  setup_capture_of_logs(LOG_WARN);
 
   free_options_test_data(tdata);
   tdata = get_options_test_data(TEST_OPTIONS_DEFAULT_VALUES
@@ -4113,7 +4254,7 @@ test_options_validate__exits(void *ignored)
 
  done:
   policies_free_all();
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   free_options_test_data(tdata);
   tor_free(msg);
 }
@@ -4125,7 +4266,7 @@ test_options_validate__testing_options(void *ignored)
   int ret;
   char *msg;
   options_test_data_t *tdata = NULL;
-  int previous_log = setup_capture_of_logs(LOG_WARN);
+  setup_capture_of_logs(LOG_WARN);
 
 #define TEST_TESTING_OPTION(name, low_val, high_val, err_low)           \
   STMT_BEGIN                                                            \
@@ -4281,7 +4422,7 @@ test_options_validate__testing_options(void *ignored)
 
  done:
   policies_free_all();
-  teardown_capture_of_logs(previous_log);
+  teardown_capture_of_logs();
   free_options_test_data(tdata);
   tor_free(msg);
 }
@@ -4379,6 +4520,7 @@ struct testcase_t options_tests[] = {
   LOCAL_VALIDATE_TEST(port_forwarding),
   LOCAL_VALIDATE_TEST(tor2web),
   LOCAL_VALIDATE_TEST(rend),
+  LOCAL_VALIDATE_TEST(single_onion),
   LOCAL_VALIDATE_TEST(accounting),
   LOCAL_VALIDATE_TEST(proxy),
   LOCAL_VALIDATE_TEST(control),

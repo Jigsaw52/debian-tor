@@ -363,15 +363,15 @@ test_crypto_rng_engine(void *arg)
   ;
 }
 
-/** Run unit tests for our AES functionality */
+/** Run unit tests for our AES128 functionality */
 static void
-test_crypto_aes(void *arg)
+test_crypto_aes128(void *arg)
 {
   char *data1 = NULL, *data2 = NULL, *data3 = NULL;
   crypto_cipher_t *env1 = NULL, *env2 = NULL;
   int i, j;
   char *mem_op_hex_tmp=NULL;
-
+  char key[CIPHER_KEY_LEN];
   int use_evp = !strcmp(arg,"evp");
   evaluate_evp_for_aes(use_evp);
   evaluate_ctr_for_aes();
@@ -387,9 +387,10 @@ test_crypto_aes(void *arg)
 
   memset(data2, 0, 1024);
   memset(data3, 0, 1024);
-  env1 = crypto_cipher_new(NULL);
+  crypto_rand(key, sizeof(key));
+  env1 = crypto_cipher_new(key);
   tt_ptr_op(env1, OP_NE, NULL);
-  env2 = crypto_cipher_new(crypto_cipher_get_key(env1));
+  env2 = crypto_cipher_new(key);
   tt_ptr_op(env2, OP_NE, NULL);
 
   /* Try encrypting 512 chars. */
@@ -420,7 +421,7 @@ test_crypto_aes(void *arg)
   env2 = NULL;
 
   memset(data3, 0, 1024);
-  env2 = crypto_cipher_new(crypto_cipher_get_key(env1));
+  env2 = crypto_cipher_new(key);
   tt_ptr_op(env2, OP_NE, NULL);
   for (j = 0; j < 1024-16; j += 17) {
     crypto_cipher_encrypt(env2, data3+j, data1+j, 17);
@@ -513,32 +514,61 @@ test_crypto_aes(void *arg)
 static void
 test_crypto_aes_ctr_testvec(void *arg)
 {
-  (void)arg;
+  const char *bitstr = arg;
   char *mem_op_hex_tmp=NULL;
+  crypto_cipher_t *c=NULL;
 
   /* from NIST SP800-38a, section F.5 */
-  const char key16[] = "2b7e151628aed2a6abf7158809cf4f3c";
   const char ctr16[] = "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff";
   const char plaintext16[] =
     "6bc1bee22e409f96e93d7e117393172a"
     "ae2d8a571e03ac9c9eb76fac45af8e51"
     "30c81c46a35ce411e5fbc1191a0a52ef"
     "f69f2445df4f9b17ad2b417be66c3710";
-  const char ciphertext16[] =
-    "874d6191b620e3261bef6864990db6ce"
-    "9806f66b7970fdff8617187bb9fffdff"
-    "5ae4df3edbd5d35e5b4f09020db03eab"
-    "1e031dda2fbe03d1792170a0f3009cee";
+  const char *ciphertext16;
+  const char *key16;
+  int bits;
 
-  char key[16];
+  if (!strcmp(bitstr, "128")) {
+    ciphertext16 = /* section F.5.1 */
+      "874d6191b620e3261bef6864990db6ce"
+      "9806f66b7970fdff8617187bb9fffdff"
+      "5ae4df3edbd5d35e5b4f09020db03eab"
+      "1e031dda2fbe03d1792170a0f3009cee";
+    key16 = "2b7e151628aed2a6abf7158809cf4f3c";
+    bits = 128;
+  } else if (!strcmp(bitstr, "192")) {
+    ciphertext16 = /* section F.5.3 */
+      "1abc932417521ca24f2b0459fe7e6e0b"
+      "090339ec0aa6faefd5ccc2c6f4ce8e94"
+      "1e36b26bd1ebc670d1bd1d665620abf7"
+      "4f78a7f6d29809585a97daec58c6b050";
+    key16 = "8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b";
+    bits = 192;
+  } else if (!strcmp(bitstr, "256")) {
+    ciphertext16 = /* section F.5.5 */
+      "601ec313775789a5b7a7f504bbf3d228"
+      "f443e3ca4d62b59aca84e990cacaf5c5"
+      "2b0930daa23de94ce87017ba2d84988d"
+      "dfc9c58db67aada613c2dd08457941a6";
+    key16 =
+      "603deb1015ca71be2b73aef0857d7781"
+      "1f352c073b6108d72d9810a30914dff4";
+    bits = 256;
+  } else {
+    tt_abort_msg("AES doesn't support this number of bits.");
+  }
+
+  char key[32];
   char iv[16];
   char plaintext[16*4];
+  memset(key, 0xf9, sizeof(key)); /* poison extra bytes */
   base16_decode(key, sizeof(key), key16, strlen(key16));
   base16_decode(iv, sizeof(iv), ctr16, strlen(ctr16));
   base16_decode(plaintext, sizeof(plaintext),
                 plaintext16, strlen(plaintext16));
 
-  crypto_cipher_t *c = crypto_cipher_new_with_iv(key, iv);
+  c = crypto_cipher_new_with_iv_and_bits((uint8_t*)key, (uint8_t*)iv, bits);
   crypto_cipher_crypt_inplace(c, plaintext, sizeof(plaintext));
   test_memeq_hex(plaintext, ciphertext16);
 
@@ -999,11 +1029,11 @@ test_crypto_sha3(void *arg)
   crypto_digest_free(d1);
 
   /* Attempt to exercise the incremental hashing code by creating a randomized
-   * 100 KiB buffer, and hashing rand[1, 5 * Rate] bytes at a time.  SHA3-512
+   * 30 KiB buffer, and hashing rand[1, 5 * Rate] bytes at a time.  SHA3-512
    * is used because it has a lowest rate of the family (the code is common,
    * but the slower rate exercises more of it).
    */
-  const size_t bufsz = 100 * 1024;
+  const size_t bufsz = 30 * 1024;
   size_t j = 0;
   large = tor_malloc(bufsz);
   crypto_rand(large, bufsz);
@@ -2139,24 +2169,6 @@ test_crypto_curve25519_persist(void *arg)
   tor_free(tag);
 }
 
-static void *
-ed25519_testcase_setup(const struct testcase_t *testcase)
-{
-  crypto_ed25519_testing_force_impl(testcase->setup_data);
-  return testcase->setup_data;
-}
-static int
-ed25519_testcase_cleanup(const struct testcase_t *testcase, void *ptr)
-{
-  (void)testcase;
-  (void)ptr;
-  crypto_ed25519_testing_restore_impl();
-  return 1;
-}
-static const struct testcase_setup_t ed25519_test_setup = {
-  ed25519_testcase_setup, ed25519_testcase_cleanup
-};
-
 static void
 test_crypto_ed25519_simple(void *arg)
 {
@@ -2258,7 +2270,7 @@ test_crypto_ed25519_simple(void *arg)
     tt_int_op(0, OP_EQ, ed25519_sign(&manual_sig, (uint8_t *)prefixed_msg,
                                      strlen(prefixed_msg), &kp1));
     tor_free(prefixed_msg);
-    tt_assert(!memcmp(sig1.sig, manual_sig.sig, sizeof(sig1.sig)));
+    tt_assert(fast_memeq(sig1.sig, manual_sig.sig, sizeof(sig1.sig)));
 
     /* Test that prefixed checksig verifies it properly. */
     tt_int_op(0, OP_EQ, ed25519_checksig_prefixed(&sig1, msg, msg_len,
@@ -2619,77 +2631,6 @@ test_crypto_ed25519_testvectors(void *arg)
 }
 
 static void
-test_crypto_ed25519_fuzz_donna(void *arg)
-{
-  const unsigned iters = 1024;
-  uint8_t msg[1024];
-  unsigned i;
-  (void)arg;
-
-  tt_assert(sizeof(msg) == iters);
-  crypto_rand((char*) msg, sizeof(msg));
-
-  /* Fuzz Ed25519-donna vs ref10, alternating the implementation used to
-   * generate keys/sign per iteration.
-   */
-  for (i = 0; i < iters; ++i) {
-    const int use_donna = i & 1;
-    uint8_t blinding[32];
-    curve25519_keypair_t ckp;
-    ed25519_keypair_t kp, kp_blind, kp_curve25519;
-    ed25519_public_key_t pk, pk_blind, pk_curve25519;
-    ed25519_signature_t sig, sig_blind;
-    int bit = 0;
-
-    crypto_rand((char*) blinding, sizeof(blinding));
-
-    /* Impl. A:
-     *  1. Generate a keypair.
-     *  2. Blinded the keypair.
-     *  3. Sign a message (unblinded).
-     *  4. Sign a message (blinded).
-     *  5. Generate a curve25519 keypair, and convert it to Ed25519.
-     */
-    ed25519_set_impl_params(use_donna);
-    tt_int_op(0, OP_EQ, ed25519_keypair_generate(&kp, i&1));
-    tt_int_op(0, OP_EQ, ed25519_keypair_blind(&kp_blind, &kp, blinding));
-    tt_int_op(0, OP_EQ, ed25519_sign(&sig, msg, i, &kp));
-    tt_int_op(0, OP_EQ, ed25519_sign(&sig_blind, msg, i, &kp_blind));
-
-    tt_int_op(0, OP_EQ, curve25519_keypair_generate(&ckp, i&1));
-    tt_int_op(0, OP_EQ, ed25519_keypair_from_curve25519_keypair(
-            &kp_curve25519, &bit, &ckp));
-
-    /* Impl. B:
-     *  1. Validate the public key by rederiving it.
-     *  2. Validate the blinded public key by rederiving it.
-     *  3. Validate the unblinded signature (and test a invalid signature).
-     *  4. Validate the blinded signature.
-     *  5. Validate the public key (from Curve25519) by rederiving it.
-     */
-    ed25519_set_impl_params(!use_donna);
-    tt_int_op(0, OP_EQ, ed25519_public_key_generate(&pk, &kp.seckey));
-    tt_mem_op(pk.pubkey, OP_EQ, kp.pubkey.pubkey, 32);
-
-    tt_int_op(0, OP_EQ, ed25519_public_blind(&pk_blind, &kp.pubkey, blinding));
-    tt_mem_op(pk_blind.pubkey, OP_EQ, kp_blind.pubkey.pubkey, 32);
-
-    tt_int_op(0, OP_EQ, ed25519_checksig(&sig, msg, i, &pk));
-    sig.sig[0] ^= 15;
-    tt_int_op(-1, OP_EQ, ed25519_checksig(&sig, msg, sizeof(msg), &pk));
-
-    tt_int_op(0, OP_EQ, ed25519_checksig(&sig_blind, msg, i, &pk_blind));
-
-    tt_int_op(0, OP_EQ, ed25519_public_key_from_curve25519_public_key(
-            &pk_curve25519, &ckp.pubkey, bit));
-    tt_mem_op(pk_curve25519.pubkey, OP_EQ, kp_curve25519.pubkey.pubkey, 32);
-  }
-
- done:
-  ;
-}
-
-static void
 test_crypto_ed25519_storage(void *arg)
 {
   (void)arg;
@@ -2961,9 +2902,14 @@ struct testcase_t crypto_tests[] = {
   { "rng_strongest_broken", test_crypto_rng_strongest, TT_FORK,
     &passthrough_setup, (void*)"broken" },
   { "openssl_version", test_crypto_openssl_version, TT_FORK, NULL, NULL },
-  { "aes_AES", test_crypto_aes, TT_FORK, &passthrough_setup, (void*)"aes" },
-  { "aes_EVP", test_crypto_aes, TT_FORK, &passthrough_setup, (void*)"evp" },
-  { "aes_ctr_testvec", test_crypto_aes_ctr_testvec, 0, NULL, NULL },
+  { "aes_AES", test_crypto_aes128, TT_FORK, &passthrough_setup, (void*)"aes" },
+  { "aes_EVP", test_crypto_aes128, TT_FORK, &passthrough_setup, (void*)"evp" },
+  { "aes128_ctr_testvec", test_crypto_aes_ctr_testvec, 0,
+    &passthrough_setup, (void*)"128" },
+  { "aes192_ctr_testvec", test_crypto_aes_ctr_testvec, 0,
+    &passthrough_setup, (void*)"192" },
+  { "aes256_ctr_testvec", test_crypto_aes_ctr_testvec, 0,
+    &passthrough_setup, (void*)"256" },
   CRYPTO_LEGACY(sha),
   CRYPTO_LEGACY(pk),
   { "pk_fingerprints", test_crypto_pk_fingerprints, TT_FORK, NULL, NULL },
@@ -2995,7 +2941,6 @@ struct testcase_t crypto_tests[] = {
   ED25519_TEST(convert, 0),
   ED25519_TEST(blinding, 0),
   ED25519_TEST(testvectors, 0),
-  ED25519_TEST(fuzz_donna, TT_FORK),
   { "ed25519_storage", test_crypto_ed25519_storage, 0, NULL, NULL },
   { "siphash", test_crypto_siphash, 0, NULL, NULL },
   { "failure_modes", test_crypto_failure_modes, TT_FORK, NULL, NULL },

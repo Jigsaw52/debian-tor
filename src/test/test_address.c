@@ -557,6 +557,13 @@ fake_open_socket(int domain, int type, int protocol)
   return FAKE_SOCKET_FD;
 }
 
+static int
+fake_close_socket(tor_socket_t s)
+{
+  (void)s;
+  return 0;
+}
+
 static int last_connected_socket_fd = 0;
 
 static int connect_retval = 0;
@@ -617,6 +624,7 @@ test_address_udp_socket_trick_whitebox(void *arg)
   MOCK(tor_open_socket,fake_open_socket);
   MOCK(tor_connect_socket,pretend_to_connect);
   MOCK(tor_getsockname,fake_getsockname);
+  MOCK(tor_close_socket,fake_close_socket);
 
   mock_addr = tor_malloc_zero(sizeof(struct sockaddr_storage));
   sockaddr_in_from_string("23.32.246.118",(struct sockaddr_in *)mock_addr);
@@ -647,11 +655,12 @@ test_address_udp_socket_trick_whitebox(void *arg)
 
   tt_assert(sockaddr_in6_are_equal(mock_addr6,ipv6_to_check));
 
+ done:
   UNMOCK(tor_open_socket);
   UNMOCK(tor_connect_socket);
   UNMOCK(tor_getsockname);
+  UNMOCK(tor_close_socket);
 
-  done:
   tor_free(ipv6_to_check);
   tor_free(mock_addr);
   tor_free(addr_from_hack);
@@ -794,7 +803,15 @@ test_address_get_if_addrs6_list_internal(void *arg)
 
   (void)arg;
 
+  /* We might drop a log_err */
+  setup_full_capture_of_logs(LOG_ERR);
   results = get_interface_address6_list(LOG_ERR, AF_INET6, 1);
+  tt_int_op(smartlist_len(mock_saved_logs()), OP_LE, 1);
+  if (smartlist_len(mock_saved_logs()) == 1) {
+    expect_log_msg_containing_either("connect() failed",
+                                     "unable to create socket");
+  }
+  teardown_capture_of_logs();
 
   tt_assert(results != NULL);
   /* Work even on systems without IPv6 interfaces */
@@ -813,6 +830,7 @@ test_address_get_if_addrs6_list_internal(void *arg)
 
  done:
   free_interface_address6_list(results);
+  teardown_capture_of_logs();
   return;
 }
 
@@ -824,10 +842,14 @@ test_address_get_if_addrs6_list_no_internal(void *arg)
   (void)arg;
 
   /* We might drop a log_err */
-  int prev_level = setup_capture_of_logs(LOG_ERR);
+  setup_full_capture_of_logs(LOG_ERR);
   results = get_interface_address6_list(LOG_ERR, AF_INET6, 0);
   tt_int_op(smartlist_len(mock_saved_logs()), OP_LE, 1);
-  teardown_capture_of_logs(prev_level);
+  if (smartlist_len(mock_saved_logs()) == 1) {
+    expect_log_msg_containing_either("connect() failed",
+                                     "unable to create socket");
+  }
+  teardown_capture_of_logs();
 
   tt_assert(results != NULL);
   /* Work even on systems without IPv6 interfaces */
@@ -845,6 +867,7 @@ test_address_get_if_addrs6_list_no_internal(void *arg)
   }
 
  done:
+  teardown_capture_of_logs();
   free_interface_address6_list(results);
   return;
 }
