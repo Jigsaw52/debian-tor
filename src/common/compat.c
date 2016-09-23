@@ -1110,8 +1110,8 @@ tor_close_socket_simple(tor_socket_t s)
 
 /** As tor_close_socket_simple(), but keeps track of the number
  * of open sockets. Returns 0 on success, -1 on failure. */
-int
-tor_close_socket(tor_socket_t s)
+MOCK_IMPL(int,
+tor_close_socket,(tor_socket_t s))
 {
   int r = tor_close_socket_simple(s);
 
@@ -2350,7 +2350,7 @@ make_path_absolute(char *fname)
   /* We don't want to assume that tor_free can free a string allocated
    * with malloc.  On failure, return fname (it's better than nothing). */
   char *absfname = tor_strdup(absfname_malloced ? absfname_malloced : fname);
-  if (absfname_malloced) free(absfname_malloced);
+  if (absfname_malloced) raw_free(absfname_malloced);
 
   return absfname;
 #else

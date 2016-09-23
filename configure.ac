@@ -4,7 +4,7 @@ dnl Copyright (c) 2007-2015, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
 AC_PREREQ([2.63])
-AC_INIT([tor],[0.2.9.2-alpha])
+AC_INIT([tor],[0.2.9.3-alpha])
 AC_CONFIG_SRCDIR([src/or/main.c])
 AC_CONFIG_MACRO_DIR([m4])
 
@@ -501,6 +501,8 @@ AC_CHECK_FUNCS([evutil_secure_rng_set_urandom_device_file \
                 evutil_secure_rng_add_bytes \
 ])
 
+AC_CHECK_HEADERS(event2/event.h event2/dns.h event2/bufferevent_ssl.h)
+
 LIBS="$STATIC_LIBEVENT_FLAGS $TOR_LIB_WS32 $save_LIBS"
 
 if test "$enable_static_libevent" = "yes"; then
@@ -521,7 +523,7 @@ else
          TOR_LIBEVENT_LIBS="$ac_cv_search_evdns_base_new $TOR_LIBEVENT_LIBS"
        fi
      else
-       TOR_LIBEVENT_LIBS="-levent"
+       AC_MSG_ERROR("libevent2 is required but the headers could not be found")
      fi
 fi
 
@@ -1800,11 +1802,6 @@ if test "x$enable_gcc_warnings_advisory" != "xno"; then
      -Wsync-nand
      -Wtautological-constant-out-of-range-compare
      -Wtentative-definition-incomplete-type
-     -Wthread-safety
-     -Wthread-safety-analysis
-     -Wthread-safety-attributes
-     -Wthread-safety-beta
-     -Wthread-safety-precise
      -Wtrampolines
      -Wtype-safety
      -Wtypedef-redefinition
@@ -1837,6 +1834,14 @@ if test "x$enable_gcc_warnings_advisory" != "xno"; then
      -Wvla-extension
      -Wzero-length-array
   ], [ TOR_CHECK_CFLAGS([warning_flag]) ])
+
+dnl    These seem to require annotations that we don't currently use,
+dnl    and they give false positives in our pthreads wrappers. (Clang 4)
+dnl     -Wthread-safety
+dnl     -Wthread-safety-analysis
+dnl     -Wthread-safety-attributes
+dnl     -Wthread-safety-beta
+dnl     -Wthread-safety-precise
 
   CFLAGS="$CFLAGS -W -Wfloat-equal -Wundef -Wpointer-arith"
   CFLAGS="$CFLAGS -Wstrict-prototypes -Wmissing-prototypes -Wwrite-strings"

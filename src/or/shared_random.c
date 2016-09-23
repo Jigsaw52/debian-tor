@@ -201,7 +201,7 @@ verify_commit_and_reveal(const sr_commit_t *commit)
     if (fast_memneq(received_hashed_reveal, commit->hashed_reveal,
                     sizeof(received_hashed_reveal))) {
       log_warn(LD_BUG, "SR: Received reveal value from authority %s "
-                       "does't match the commit value.",
+                       "doesn't match the commit value.",
                sr_commit_get_rsa_fpr(commit));
       goto invalid;
     }
@@ -578,8 +578,8 @@ commit_is_authoritative(const sr_commit_t *commit,
   tor_assert(commit);
   tor_assert(voter_key);
 
-  return !memcmp(commit->rsa_identity, voter_key,
-                 sizeof(commit->rsa_identity));
+  return fast_memeq(commit->rsa_identity, voter_key,
+                    sizeof(commit->rsa_identity));
 }
 
 /* Decide if the newly received <b>commit</b> should be kept depending on

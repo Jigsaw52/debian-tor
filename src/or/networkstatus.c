@@ -1733,7 +1733,9 @@ networkstatus_set_current_consensus(const char *consensus,
   if (r != 1 && dl_certs)
     authority_certs_fetch_missing(c, now, source_dir);
 
-  if (flav == usable_consensus_flavor()) {
+  const int is_usable_flavor = flav == usable_consensus_flavor();
+
+  if (is_usable_flavor) {
     notify_control_networkstatus_changed(current_consensus, c);
   }
   if (flav == FLAV_NS) {
@@ -1776,19 +1778,11 @@ networkstatus_set_current_consensus(const char *consensus,
     }
   }
 
-  /* Reset the failure count only if this consensus is actually valid. */
-  if (c->valid_after <= now && now <= c->valid_until) {
-    download_status_reset(&consensus_dl_status[flav]);
-  } else {
-    if (!from_cache)
-      download_status_failed(&consensus_dl_status[flav], 0);
-  }
+  if (is_usable_flavor) {
+    nodelist_set_consensus(c);
 
-  if (flav == usable_consensus_flavor()) {
     /* XXXXNM Microdescs: needs a non-ns variant. ???? NM*/
     update_consensus_networkstatus_fetch_time(now);
-
-    nodelist_set_consensus(current_consensus);
 
     dirvote_recalculate_timing(options, now);
     routerstatus_list_update_named_server_map();
@@ -1811,6 +1805,14 @@ networkstatus_set_current_consensus(const char *consensus,
 
     circuit_build_times_new_consensus_params(get_circuit_build_times_mutable(),
         current_consensus);
+  }
+
+  /* Reset the failure count only if this consensus is actually valid. */
+  if (c->valid_after <= now && now <= c->valid_until) {
+    download_status_reset(&consensus_dl_status[flav]);
+  } else {
+    if (!from_cache)
+      download_status_failed(&consensus_dl_status[flav], 0);
   }
 
   if (directory_caches_dir_info(options)) {
@@ -2273,6 +2275,12 @@ client_would_use_router(const routerstatus_t *rs, time_t now,
   }
   if (rs->published_on + OLD_ROUTER_DESC_MAX_AGE < now) {
     /* We'd drop it immediately for being too old. */
+    return 0;
+  }
+  if (!routerstatus_version_supports_ntor(rs, 1)) {
+    /* We'd ignore it because it doesn't support ntor.
+     * If we don't know the version, download the descriptor so we can
+     * check if it supports ntor. */
     return 0;
   }
   return 1;

@@ -1151,6 +1151,8 @@ typedef struct entry_port_cfg_t {
   unsigned int ipv4_traffic : 1;
   unsigned int ipv6_traffic : 1;
   unsigned int prefer_ipv6 : 1;
+  unsigned int dns_request : 1;
+  unsigned int onion_traffic : 1;
 
   /** For a socks listener: should we cache IPv4/IPv6 DNS information that
    * exit nodes tell us?
@@ -3604,9 +3606,13 @@ typedef struct {
 
   /** @name port booleans
    *
-   * Derived booleans: True iff there is a non-listener port on an AF_INET or
-   * AF_INET6 address of the given type configured in one of the _lines
-   * options above.
+   * Derived booleans: For server ports and ControlPort, true iff there is a
+   * non-listener port on an AF_INET or AF_INET6 address of the given type
+   * configured in one of the _lines options above.
+   * For client ports, also true if there is a unix socket configured.
+   * If you are checking for client ports, you may want to use:
+   *   SocksPort_set || TransPort_set || NATDPort_set || DNSPort_set
+   * rather than SocksPort_set.
    *
    * @{
    */
@@ -3697,8 +3703,32 @@ typedef struct {
    * they reach the normal circuit-build timeout. */
   int CloseHSServiceRendCircuitsImmediatelyOnTimeout;
 
+  /** Onion Services in HiddenServiceSingleHopMode make one-hop (direct)
+   * circuits between the onion service server, and the introduction and
+   * rendezvous points. (Onion service descriptors are still posted using
+   * 3-hop paths, to avoid onion service directories blocking the service.)
+   * This option makes every hidden service instance hosted by
+   * this tor instance a Single Onion Service.
+   * HiddenServiceSingleHopMode requires HiddenServiceNonAnonymousMode to be
+   * set to 1.
+   * Use rend_service_allow_non_anonymous_connection() or
+   * rend_service_reveal_startup_time() instead of using this option directly.
+   */
+  int HiddenServiceSingleHopMode;
+  /* Makes hidden service clients and servers non-anonymous on this tor
+   * instance. Allows the non-anonymous HiddenServiceSingleHopMode. Enables
+   * non-anonymous behaviour in the hidden service protocol.
+   * Use rend_service_non_anonymous_mode_enabled() instead of using this option
+   * directly.
+   */
+  int HiddenServiceNonAnonymousMode;
+
   int ConnLimit; /**< Demanded minimum number of simultaneous connections. */
   int ConnLimit_; /**< Maximum allowed number of simultaneous connections. */
+  int ConnLimit_high_thresh; /**< start trying to lower socket usage if we
+                              *   have this many. */
+  int ConnLimit_low_thresh; /**< try to get down to here after socket
+                             *   exhaustion. */
   int RunAsDaemon; /**< If true, run in the background. (Unix only) */
   int FascistFirewall; /**< Whether to prefer ORs reachable on open ports. */
   smartlist_t *FirewallPorts; /**< Which ports our firewall allows
@@ -3748,7 +3778,8 @@ typedef struct {
                      * unattached before we fail it? */
   int LearnCircuitBuildTimeout; /**< If non-zero, we attempt to learn a value
                                  * for CircuitBuildTimeout based on timeout
-                                 * history */
+                                 * history. Use circuit_build_times_disabled()
+                                 * rather than checking this value directly. */
   int CircuitBuildTimeout; /**< Cull non-open circuits that were born at
                             * least this many seconds ago. Used until
                             * adaptive algorithm learns a new value. */
@@ -3934,8 +3965,16 @@ typedef struct {
   int TokenBucketRefillInterval;
   char *AccelName; /**< Optional hardware acceleration engine name. */
   char *AccelDir; /**< Optional hardware acceleration engine search dir. */
-  int UseEntryGuards; /**< Boolean: Do we try to enter from a smallish number
-                       * of fixed nodes? */
+
+  /** Boolean: Do we try to enter from a smallish number
+   * of fixed nodes? */
+  int UseEntryGuards_option;
+  /** Internal variable to remember whether we're actually acting on
+   * UseEntryGuards_option -- when we're a non-anonymous Tor2web client or
+   * Single Onion Service, it is alwasy false, otherwise we use the value of
+   * UseEntryGuards_option. */
+  int UseEntryGuards;
+
   int NumEntryGuards; /**< How many entry guards do we try to establish? */
   int UseEntryGuardsAsDirGuards; /** Boolean: Do we try to get directory info
                                   * from a smallish number of fixed nodes? */
@@ -4380,9 +4419,6 @@ typedef struct {
 
   char *TLSECGroup; /**< One of "P256", "P224", or nil for auto */
 
-  /** Autobool: should we use the ntor handshake if we can? */
-  int UseNTorHandshake;
-
   /** Fraction: */
   double PathsNeededToBuildCircuits;
 
@@ -4454,6 +4490,9 @@ typedef struct {
    * participate in the protocol. If on (default), a flag is added to the
    * vote indicating participation. */
   int AuthDirSharedRandomness;
+
+  /** If 1, we skip all OOS checks. */
+  int DisableOOSCheck;
 } or_options_t;
 
 /** Persistent state for an onion router, as saved to disk. */
@@ -5048,7 +5087,8 @@ typedef struct rend_encoded_v2_service_descriptor_t {
  * the service side) and in rend_service_descriptor_t (on both the
  * client and service side). */
 typedef struct rend_intro_point_t {
-  extend_info_t *extend_info; /**< Extend info of this introduction point. */
+  extend_info_t *extend_info; /**< Extend info for connecting to this
+                               * introduction point via a multi-hop path. */
   crypto_pk_t *intro_key; /**< Introduction key that replaces the service
                                * key, if this descriptor is V2. */
 

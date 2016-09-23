@@ -36,6 +36,7 @@
 #include "test_dir_common.h"
 #include "torcert.h"
 #include "relay.h"
+#include "log_test_helpers.h"
 
 #define NS_MODULE dir
 
@@ -116,6 +117,7 @@ test_dir_formats(void *arg)
   const addr_policy_t *p;
   time_t now = time(NULL);
   port_cfg_t orport, dirport;
+  char cert_buf[256];
 
   (void)arg;
   pk1 = pk_generate(0);
@@ -135,6 +137,11 @@ test_dir_formats(void *arg)
   tor_addr_parse(&r1->ipv6_addr, "1:2:3:4::");
   r1->ipv6_orport = 9999;
   r1->onion_pkey = crypto_pk_dup_key(pk1);
+  /* Fake just enough of an ntor key to get by */
+  curve25519_keypair_t r1_onion_keypair;
+  curve25519_keypair_generate(&r1_onion_keypair, 0);
+  r1->onion_curve25519_pkey = tor_memdup(&r1_onion_keypair.pubkey,
+                                         sizeof(curve25519_public_key_t));
   r1->identity_pkey = crypto_pk_dup_key(pk2);
   r1->bandwidthrate = 1000;
   r1->bandwidthburst = 5000;
@@ -167,11 +174,6 @@ test_dir_formats(void *arg)
                                          &kp2.pubkey,
                                          now, 86400,
                                          CERT_FLAG_INCLUDE_SIGNING_KEY);
-  char cert_buf[256];
-  base64_encode(cert_buf, sizeof(cert_buf),
-                (const char*)r2->cache_info.signing_key_cert->encoded,
-                r2->cache_info.signing_key_cert->encoded_len,
-                BASE64_ENCODE_MULTILINE);
   r2->platform = tor_strdup(platform);
   r2->cache_info.published_on = 5;
   r2->or_port = 9005;
@@ -247,6 +249,11 @@ test_dir_formats(void *arg)
   strlcat(buf2, "hidden-service-dir\n", sizeof(buf2));
   strlcat(buf2, "contact Magri White <magri@elsewhere.example.com>\n",
           sizeof(buf2));
+  strlcat(buf2, "ntor-onion-key ", sizeof(buf2));
+  base64_encode(cert_buf, sizeof(cert_buf),
+                (const char*)r1_onion_keypair.pubkey.public_key, 32,
+                BASE64_ENCODE_MULTILINE);
+  strlcat(buf2, cert_buf, sizeof(buf2));
   strlcat(buf2, "reject *:*\n", sizeof(buf2));
   strlcat(buf2, "tunnelled-dir-server\nrouter-signature\n", sizeof(buf2));
   buf[strlen(buf2)] = '\0'; /* Don't compare the sig; it's never the same
@@ -276,6 +283,10 @@ test_dir_formats(void *arg)
           "router Fred 10.3.2.1 9005 0 0\n"
           "identity-ed25519\n"
           "-----BEGIN ED25519 CERT-----\n", sizeof(buf2));
+  base64_encode(cert_buf, sizeof(cert_buf),
+                (const char*)r2->cache_info.signing_key_cert->encoded,
+                r2->cache_info.signing_key_cert->encoded_len,
+                BASE64_ENCODE_MULTILINE);
   strlcat(buf2, cert_buf, sizeof(buf2));
   strlcat(buf2, "-----END ED25519 CERT-----\n", sizeof(buf2));
   strlcat(buf2, "master-key-ed25519 ", sizeof(buf2));
@@ -1577,23 +1588,46 @@ test_dir_param_voting_lookup(void *arg)
   tt_int_op(99, OP_EQ,
             dirvote_get_intermediate_param_value(lst, "abcd", 1000));
 
-  /* moomin appears twice. */
+  /* moomin appears twice. That's a bug. */
+  tor_capture_bugs_(1);
   tt_int_op(-100, OP_EQ,
             dirvote_get_intermediate_param_value(lst, "moomin", -100));
-  /* fred and jack are truncated */
+  tt_int_op(smartlist_len(tor_get_captured_bug_log_()), OP_EQ, 1);
+  tt_str_op(smartlist_get(tor_get_captured_bug_log_(), 0), OP_EQ,
+            "!(n_found > 1)");
+  tor_end_capture_bugs_();
+  /* There is no 'fred=', so that is treated as not existing. */
   tt_int_op(-100, OP_EQ,
             dirvote_get_intermediate_param_value(lst, "fred", -100));
+  /* jack is truncated */
+  tor_capture_bugs_(1);
   tt_int_op(-100, OP_EQ,
             dirvote_get_intermediate_param_value(lst, "jack", -100));
+  tt_int_op(smartlist_len(tor_get_captured_bug_log_()), OP_EQ, 1);
+  tt_str_op(smartlist_get(tor_get_captured_bug_log_(), 0), OP_EQ,
+            "!(! ok)");
+  tor_end_capture_bugs_();
   /* electricity and opa aren't integers. */
+  tor_capture_bugs_(1);
   tt_int_op(-100, OP_EQ,
             dirvote_get_intermediate_param_value(lst, "electricity", -100));
+  tt_int_op(smartlist_len(tor_get_captured_bug_log_()), OP_EQ, 1);
+  tt_str_op(smartlist_get(tor_get_captured_bug_log_(), 0), OP_EQ,
+            "!(! ok)");
+  tor_end_capture_bugs_();
+
+  tor_capture_bugs_(1);
   tt_int_op(-100, OP_EQ,
             dirvote_get_intermediate_param_value(lst, "opa", -100));
+  tt_int_op(smartlist_len(tor_get_captured_bug_log_()), OP_EQ, 1);
+  tt_str_op(smartlist_get(tor_get_captured_bug_log_(), 0), OP_EQ,
+            "!(! ok)");
+  tor_end_capture_bugs_();
 
  done:
   SMARTLIST_FOREACH(lst, char *, cp, tor_free(cp));
   smartlist_free(lst);
+  tor_end_capture_bugs_();
 }
 
 #undef dirvote_compute_params
@@ -1704,8 +1738,8 @@ test_vrs_for_v3ns(vote_routerstatus_t *vrs, int voter, time_t now)
     tt_int_op(rs->addr,OP_EQ, 0x99008801);
     tt_int_op(rs->or_port,OP_EQ, 443);
     tt_int_op(rs->dir_port,OP_EQ, 8000);
-    /* no flags except "running" (16) and "v2dir" (64) */
-    tt_u64_op(vrs->flags, OP_EQ, U64_LITERAL(80));
+    /* no flags except "running" (16) and "v2dir" (64) and "valid" (128) */
+    tt_u64_op(vrs->flags, OP_EQ, U64_LITERAL(0xd0));
   } else if (tor_memeq(rs->identity_digest,
                        "\x5\x5\x5\x5\x5\x5\x5\x5\x5\x5\x5\x5\x5\x5\x5\x5"
                        "\x5\x5\x5\x5",
@@ -1802,7 +1836,7 @@ test_routerstatus_for_v3ns(routerstatus_t *rs, time_t now)
     tt_assert(!rs->is_stable);
     /* (If it wasn't running it wouldn't be here) */
     tt_assert(rs->is_flagged_running);
-    tt_assert(!rs->is_valid);
+    tt_assert(rs->is_valid);
     tt_assert(!rs->is_named);
     tt_assert(rs->is_v2_dir);
     /* XXXX check version */
@@ -2042,9 +2076,9 @@ test_a_networkstatus(
 
   tt_int_op(4,OP_EQ, smartlist_len(con->voters)); /*3 voters, 1 legacy key.*/
   /* The voter id digests should be in this order. */
-  tt_assert(memcmp(cert2->cache_info.identity_digest,
+  tt_assert(fast_memcmp(cert2->cache_info.identity_digest,
                      cert1->cache_info.identity_digest,DIGEST_LEN)<0);
-  tt_assert(memcmp(cert1->cache_info.identity_digest,
+  tt_assert(fast_memcmp(cert1->cache_info.identity_digest,
                      cert3->cache_info.identity_digest,DIGEST_LEN)<0);
   test_same_voter(smartlist_get(con->voters, 1),
                   smartlist_get(v2->voters, 0));
@@ -3235,6 +3269,7 @@ static void
 test_dir_fetch_type(void *arg)
 {
   (void)arg;
+
   tt_int_op(dir_fetch_type(DIR_PURPOSE_FETCH_EXTRAINFO, ROUTER_PURPOSE_BRIDGE,
                            NULL), OP_EQ, EXTRAINFO_DIRINFO | BRIDGE_DIRINFO);
   tt_int_op(dir_fetch_type(DIR_PURPOSE_FETCH_EXTRAINFO, ROUTER_PURPOSE_GENERAL,
@@ -3260,9 +3295,14 @@ test_dir_fetch_type(void *arg)
   tt_int_op(dir_fetch_type(DIR_PURPOSE_FETCH_MICRODESC, ROUTER_PURPOSE_GENERAL,
                            NULL), OP_EQ, MICRODESC_DIRINFO);
 
+  /* This will give a warning, because this function isn't supposed to be
+   * used for HS descriptors. */
+  setup_full_capture_of_logs(LOG_WARN);
   tt_int_op(dir_fetch_type(DIR_PURPOSE_FETCH_RENDDESC_V2,
                            ROUTER_PURPOSE_GENERAL, NULL), OP_EQ, NO_DIRINFO);
- done: ;
+  expect_single_log_msg_containing("Unexpected purpose");
+ done:
+  teardown_capture_of_logs();
 }
 
 static void
@@ -3951,9 +3991,14 @@ test_dir_conn_purpose_to_string(void *data)
   EXPECT_CONN_PURPOSE(DIR_PURPOSE_UPLOAD_RENDDESC_V2,
                       "hidden-service v2 descriptor upload");
   EXPECT_CONN_PURPOSE(DIR_PURPOSE_FETCH_MICRODESC, "microdescriptor fetch");
-  EXPECT_CONN_PURPOSE(1024, "(unknown)");
 
-  done: ;
+  /* This will give a warning, because there is no purpose 1024. */
+  setup_full_capture_of_logs(LOG_WARN);
+  EXPECT_CONN_PURPOSE(1024, "(unknown)");
+  expect_single_log_msg_containing("Called with unknown purpose 1024");
+
+ done:
+  teardown_capture_of_logs();
 }
 
 NS_DECL(int,
