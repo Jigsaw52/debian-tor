@@ -24,6 +24,7 @@
 #include "networkstatus.h"
 #include "nodelist.h"
 #include "policies.h"
+#include "protover.h"
 #include "rephist.h"
 #include "router.h"
 #include "routerlist.h"
@@ -35,6 +36,24 @@
  * \file dirserv.c
  * \brief Directory server core implementation. Manages directory
  * contents and generates directories.
+ *
+ * This module implements most of directory cache functionality, and some of
+ * the directory authority functionality.  The directory.c module delegates
+ * here in order to handle incoming requests from clients, via
+ * connection_dirserv_flushed_some() and its kin.  In order to save RAM, this
+ * module is reponsible for spooling directory objects (in whole or in part)
+ * onto buf_t instances, and then closing the dir_connection_t once the
+ * objects are totally flushed.
+ *
+ * The directory.c module also delegates here for handling descriptor uploads
+ * via dirserv_add_multiple_descriptors().
+ *
+ * Additionally, this module handles some aspects of voting, including:
+ * deciding how to vote on individual flags (based on decisions reached in
+ * rephist.c), of formatting routerstatus lines, and deciding what relays to
+ * include in an authority's vote.  (TODO: Those functions could profitably be
+ * split off.  They only live in this file because historically they were
+ * shared among the v1, v2, and v3 directory code.)
  */
 
 /** How far in the future do we allow a router to get? (seconds) */
@@ -1795,6 +1814,7 @@ version_from_platform(const char *platform)
  */
 char *
 routerstatus_format_entry(const routerstatus_t *rs, const char *version,
+                          const char *protocols,
                           routerstatus_format_type_t format,
                           const vote_routerstatus_t *vrs)
 {
@@ -1857,6 +1877,9 @@ routerstatus_format_entry(const routerstatus_t *rs, const char *version,
 #define V_LINE_OVERHEAD 7
   if (version && strlen(version) < MAX_V_LINE_LEN - V_LINE_OVERHEAD) {
     smartlist_add_asprintf(chunks, "v %s\n", version);
+  }
+  if (protocols) {
+    smartlist_add_asprintf(chunks, "pr %s\n", protocols);
   }
 
   if (format != NS_V2) {
@@ -2836,6 +2859,12 @@ dirserv_generate_networkstatus_vote_obj(crypto_pk_t *private_key,
         rs->is_flagged_running = 0;
 
       vrs->version = version_from_platform(ri->platform);
+      if (ri->protocol_list) {
+        vrs->protocols = tor_strdup(ri->protocol_list);
+      } else {
+        vrs->protocols = tor_strdup(
+                              protover_compute_for_old_tor(vrs->version));
+      }
       vrs->microdesc = dirvote_format_all_microdesc_vote_lines(ri, now,
                                                         microdescriptors);
 
@@ -2908,6 +2937,31 @@ dirserv_generate_networkstatus_vote_obj(crypto_pk_t *private_key,
 
   v3_out->client_versions = client_versions;
   v3_out->server_versions = server_versions;
+
+  /* These are hardwired, to avoid disaster. */
+  v3_out->recommended_relay_protocols =
+    tor_strdup("Cons=1-2 Desc=1-2 DirCache=1 HSDir=1 HSIntro=3 HSRend=1 "
+               "Link=4 LinkAuth=1 Microdesc=1-2 Relay=2");
+  v3_out->recommended_client_protocols =
+    tor_strdup("Cons=1-2 Desc=1-2 DirCache=1 HSDir=1 HSIntro=3 HSRend=1 "
+               "Link=4 LinkAuth=1 Microdesc=1-2 Relay=2");
+  v3_out->required_client_protocols =
+    tor_strdup("Cons=1-2 Desc=1-2 DirCache=1 HSDir=1 HSIntro=3 HSRend=1 "
+               "Link=4 LinkAuth=1 Microdesc=1-2 Relay=2");
+  v3_out->required_relay_protocols =
+    tor_strdup("Cons=1 Desc=1 DirCache=1 HSDir=1 HSIntro=3 HSRend=1 "
+               "Link=3-4 LinkAuth=1 Microdesc=1 Relay=1-2");
+
+  /* We are not allowed to vote to require anything we don't have. */
+  tor_assert(protover_all_supported(v3_out->required_relay_protocols, NULL));
+  tor_assert(protover_all_supported(v3_out->required_client_protocols, NULL));
+
+  /* We should not recommend anything we don't have. */
+  tor_assert_nonfatal(protover_all_supported(
+                         v3_out->recommended_relay_protocols, NULL));
+  tor_assert_nonfatal(protover_all_supported(
+                         v3_out->recommended_client_protocols, NULL));
+
   v3_out->package_lines = smartlist_new();
   {
     config_line_t *cl;

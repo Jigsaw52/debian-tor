@@ -6,7 +6,51 @@
 
 /**
  * \file routerparse.c
- * \brief Code to parse and validate router descriptors and directories.
+ * \brief Code to parse and validate router descriptors, consenus directories,
+ *   and similar objects.
+ *
+ * The objects parsed by this module use a common text-based metaformat,
+ * documented in dir-spec.txt in torspec.git.  This module is itself divided
+ * into two major kinds of function: code to handle the metaformat, and code
+ * to convert from particular instances of the metaformat into the
+ * objects that Tor uses.
+ *
+ * The generic parsing code works by calling a table-based tokenizer on the
+ * input string.  Each token corresponds to a single line with a token, plus
+ * optional arguments on that line, plus an optional base-64 encoded object
+ * after that line.  Each token has a definition in a table of token_rule_t
+ * entries that describes how many arguments it can take, whether it takes an
+ * object, how many times it may appear, whether it must appear first, and so
+ * on.
+ *
+ * The tokenizer function tokenize_string() converts its string input into a
+ * smartlist full of instances of directory_token_t, according to a provided
+ * table of token_rule_t.
+ *
+ * The generic parts of this module additionally include functions for
+ * finding the start and end of signed information inside a signed object, and
+ * computing the digest that will be signed.
+ *
+ * There are also functions for saving objects to disk that have caused
+ * parsing to fail.
+ *
+ * The specific parts of this module describe conversions between
+ * particular lists of directory_token_t and particular objects.  The
+ * kinds of objects that can be parsed here are:
+ *  <ul>
+ *  <li>router descriptors (managed from routerlist.c)
+ *  <li>extra-info documents (managed from routerlist.c)
+ *  <li>microdescriptors (managed from microdesc.c)
+ *  <li>vote and consensus networkstatus documents, and the routerstatus_t
+ *    objects that they comprise (managed from networkstatus.c)
+ *  <li>detached-signature objects used by authorities for gathering
+ *    signatures on the networkstatus consensus (managed from dirvote.c)
+ *  <li>authority key certificates (managed from routerlist.c)
+ *  <li>hidden service descriptors (managed from rendcommon.c and rendcache.c)
+ * </ul>
+ *
+ * For no terribly good reason, the functions to <i>generate</i> signatures on
+ * the above directory objects are also in this module.
  **/
 
 #define ROUTERPARSE_PRIVATE
@@ -17,6 +61,7 @@
 #include "dirserv.h"
 #include "dirvote.h"
 #include "policies.h"
+#include "protover.h"
 #include "rendcommon.h"
 #include "router.h"
 #include "routerlist.h"
@@ -58,6 +103,7 @@ typedef enum {
   K_RUNNING_ROUTERS,
   K_ROUTER_STATUS,
   K_PLATFORM,
+  K_PROTO,
   K_OPT,
   K_BANDWIDTH,
   K_CONTACT,
@@ -74,6 +120,10 @@ typedef enum {
   K_DIR_OPTIONS,
   K_CLIENT_VERSIONS,
   K_SERVER_VERSIONS,
+  K_RECOMMENDED_CLIENT_PROTOCOLS,
+  K_RECOMMENDED_RELAY_PROTOCOLS,
+  K_REQUIRED_CLIENT_PROTOCOLS,
+  K_REQUIRED_RELAY_PROTOCOLS,
   K_OR_ADDRESS,
   K_ID,
   K_P,
@@ -252,12 +302,14 @@ typedef struct token_rule_t {
   int is_annotation;
 } token_rule_t;
 
-/*
+/**
+ * @name macros for defining token rules
+ *
  * Helper macros to define token tables.  's' is a string, 't' is a
  * directory_keyword, 'a' is a trio of argument multiplicities, and 'o' is an
  * object syntax.
- *
  */
+/**@{*/
 
 /** Appears to indicate the end of a table. */
 #define END_OF_TABLE { NULL, NIL_, 0,0,0, NO_OBJ, 0, INT_MAX, 0, 0 }
@@ -278,16 +330,17 @@ typedef struct token_rule_t {
 /** An annotation that must appear no more than once */
 #define A01(s,t,a,o)  { s, t, a, o, 0, 1, 0, 1 }
 
-/* Argument multiplicity: any number of arguments. */
+/** Argument multiplicity: any number of arguments. */
 #define ARGS        0,INT_MAX,0
-/* Argument multiplicity: no arguments. */
+/** Argument multiplicity: no arguments. */
 #define NO_ARGS     0,0,0
-/* Argument multiplicity: concatenate all arguments. */
+/** Argument multiplicity: concatenate all arguments. */
 #define CONCAT_ARGS 1,1,1
-/* Argument multiplicity: at least <b>n</b> arguments. */
+/** Argument multiplicity: at least <b>n</b> arguments. */
 #define GE(n)       n,INT_MAX,0
-/* Argument multiplicity: exactly <b>n</b> arguments. */
+/** Argument multiplicity: exactly <b>n</b> arguments. */
 #define EQ(n)       n,n,0
+/**@}*/
 
 /** List of tokens recognized in router descriptors */
 static token_rule_t routerdesc_token_table[] = {
@@ -306,6 +359,7 @@ static token_rule_t routerdesc_token_table[] = {
   T01("fingerprint",         K_FINGERPRINT,     CONCAT_ARGS, NO_OBJ ),
   T01("hibernating",         K_HIBERNATING,         GE(1),   NO_OBJ ),
   T01("platform",            K_PLATFORM,        CONCAT_ARGS, NO_OBJ ),
+  T01("proto",               K_PROTO,           CONCAT_ARGS, NO_OBJ ),
   T01("contact",             K_CONTACT,         CONCAT_ARGS, NO_OBJ ),
   T01("read-history",        K_READ_HISTORY,        ARGS,    NO_OBJ ),
   T01("write-history",       K_WRITE_HISTORY,       ARGS,    NO_OBJ ),
@@ -382,6 +436,7 @@ static token_rule_t rtrstatus_token_table[] = {
   T01("w",                   K_W,                   ARGS,    NO_OBJ ),
   T0N("m",                   K_M,               CONCAT_ARGS, NO_OBJ ),
   T0N("id",                  K_ID,                  GE(2),   NO_OBJ ),
+  T01("pr",                  K_PROTO,           CONCAT_ARGS, NO_OBJ ),
   T0N("opt",                 K_OPT,             CONCAT_ARGS, OBJ_OK ),
   END_OF_TABLE
 };
@@ -459,6 +514,14 @@ static token_rule_t networkstatus_token_table[] = {
   T01("shared-rand-previous-value", K_PREVIOUS_SRV,EQ(2),       NO_OBJ ),
   T01("shared-rand-current-value",  K_CURRENT_SRV, EQ(2),       NO_OBJ ),
   T0N("package",               K_PACKAGE,          CONCAT_ARGS, NO_OBJ ),
+  T01("recommended-client-protocols", K_RECOMMENDED_CLIENT_PROTOCOLS,
+      CONCAT_ARGS, NO_OBJ ),
+  T01("recommended-relay-protocols", K_RECOMMENDED_RELAY_PROTOCOLS,
+      CONCAT_ARGS, NO_OBJ ),
+  T01("required-client-protocols",    K_REQUIRED_CLIENT_PROTOCOLS,
+      CONCAT_ARGS, NO_OBJ ),
+  T01("required-relay-protocols",    K_REQUIRED_RELAY_PROTOCOLS,
+      CONCAT_ARGS, NO_OBJ ),
 
   CERTIFICATE_MEMBERS
 
@@ -499,6 +562,15 @@ static token_rule_t networkstatus_consensus_token_table[] = {
 
   T01("shared-rand-previous-value", K_PREVIOUS_SRV, EQ(2),   NO_OBJ ),
   T01("shared-rand-current-value",  K_CURRENT_SRV,  EQ(2),   NO_OBJ ),
+
+  T01("recommended-client-protocols", K_RECOMMENDED_CLIENT_PROTOCOLS,
+      CONCAT_ARGS, NO_OBJ ),
+  T01("recommended-relay-protocols", K_RECOMMENDED_RELAY_PROTOCOLS,
+      CONCAT_ARGS, NO_OBJ ),
+  T01("required-client-protocols",    K_REQUIRED_CLIENT_PROTOCOLS,
+      CONCAT_ARGS, NO_OBJ ),
+  T01("required-relay-protocols",    K_REQUIRED_RELAY_PROTOCOLS,
+      CONCAT_ARGS, NO_OBJ ),
 
   END_OF_TABLE
 };
@@ -2092,6 +2164,10 @@ router_parse_entry_from_string(const char *s, const char *end,
     router->platform = tor_strdup(tok->args[0]);
   }
 
+  if ((tok = find_opt_by_keyword(tokens, K_PROTO))) {
+    router->protocol_list = tor_strdup(tok->args[0]);
+  }
+
   if ((tok = find_opt_by_keyword(tokens, K_CONTACT))) {
     router->contact_info = tor_strdup(tok->args[0]);
   }
@@ -2731,7 +2807,7 @@ routerstatus_parse_guardfraction(const char *guardfraction_str,
  *
  * Parse according to the syntax used by the consensus flavor <b>flav</b>.
  **/
-static routerstatus_t *
+STATIC routerstatus_t *
 routerstatus_parse_entry_from_string(memarea_t *area,
                                      const char **s, smartlist_t *tokens,
                                      networkstatus_t *vote,
@@ -2845,6 +2921,7 @@ routerstatus_parse_entry_from_string(memarea_t *area,
       }
     }
   } else if (tok) {
+    /* This is a consensus, not a vote. */
     int i;
     for (i=0; i < tok->n_args; ++i) {
       if (!strcmp(tok->args[i], "Exit"))
@@ -2875,14 +2952,28 @@ routerstatus_parse_entry_from_string(memarea_t *area,
         rs->is_v2_dir = 1;
       }
     }
+    /* These are implied true by having been included in a consensus made
+     * with a given method */
+    rs->is_flagged_running = 1; /* Starting with consensus method 4. */
+    if (consensus_method >= MIN_METHOD_FOR_EXCLUDING_INVALID_NODES)
+      rs->is_valid = 1;
+  }
+  int found_protocol_list = 0;
+  if ((tok = find_opt_by_keyword(tokens, K_PROTO))) {
+    found_protocol_list = 1;
+    rs->protocols_known = 1;
+    rs->supports_extend2_cells =
+      protocol_list_supports_protocol(tok->args[0], PRT_RELAY, 2);
   }
   if ((tok = find_opt_by_keyword(tokens, K_V))) {
     tor_assert(tok->n_args == 1);
-    rs->version_known = 1;
-    if (strcmpstart(tok->args[0], "Tor ")) {
-    } else {
-      rs->version_supports_extend2_cells =
+    if (!strcmpstart(tok->args[0], "Tor ") && !found_protocol_list) {
+      /* We only do version checks like this in the case where
+       * the version is a "Tor" version, and where there is no
+       * list of protocol versions that we should be looking at instead. */
+      rs->supports_extend2_cells =
         tor_version_as_new_as(tok->args[0], "0.2.4.8-alpha");
+      rs->protocols_known = 1;
     }
     if (vote_rs) {
       vote_rs->version = tor_strdup(tok->args[0]);
@@ -2964,6 +3055,10 @@ routerstatus_parse_entry_from_string(memarea_t *area,
             goto err;
           }
         }
+      }
+      if (t->tp == K_PROTO) {
+        tor_assert(t->n_args == 1);
+        vote_rs->protocols = tor_strdup(t->args[0]);
       }
     } SMARTLIST_FOREACH_END(t);
   } else if (flav == FLAV_MICRODESC) {
@@ -3644,6 +3739,15 @@ networkstatus_parse_vote_from_string(const char *s, const char **eos_out,
       ns->consensus_method = 1;
     }
   }
+
+  if ((tok = find_opt_by_keyword(tokens, K_RECOMMENDED_CLIENT_PROTOCOLS)))
+    ns->recommended_client_protocols = tor_strdup(tok->args[0]);
+  if ((tok = find_opt_by_keyword(tokens, K_RECOMMENDED_RELAY_PROTOCOLS)))
+    ns->recommended_relay_protocols = tor_strdup(tok->args[0]);
+  if ((tok = find_opt_by_keyword(tokens, K_REQUIRED_CLIENT_PROTOCOLS)))
+    ns->required_client_protocols = tor_strdup(tok->args[0]);
+  if ((tok = find_opt_by_keyword(tokens, K_REQUIRED_RELAY_PROTOCOLS)))
+    ns->required_relay_protocols = tor_strdup(tok->args[0]);
 
   tok = find_by_keyword(tokens, K_VALID_AFTER);
   if (parse_iso_time(tok->args[0], &ns->valid_after))
