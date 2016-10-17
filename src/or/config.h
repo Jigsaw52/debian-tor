@@ -76,6 +76,8 @@ MOCK_DECL(char *,
 #define get_datadir_fname_suffix(sub1, suffix) \
   get_datadir_fname2_suffix((sub1), NULL, (suffix))
 
+int using_default_dir_authorities(const or_options_t *options);
+
 int check_or_create_data_subdir(const char *subdir);
 int write_to_data_subdir(const char* subdir, const char* fname,
                          const char* str, const char* descr);
@@ -128,7 +130,11 @@ int addressmap_register_auto(const char *from, const char *to,
                              time_t expires,
                              addressmap_entry_source_t addrmap_source,
                              const char **msg);
-int config_parse_unix_port(const char *addrport, char **path_out);
+
+int port_cfg_line_extract_addrport(const char *line,
+                                   char **addrport_out,
+                                   int *is_unix_out,
+                                   const char **rest_out);
 
 /** Represents the information stored in a torrc Bridge line. */
 typedef struct bridge_line_t {
