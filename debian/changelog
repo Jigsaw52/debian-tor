@@ -1,3 +1,9 @@
+tor (0.2.5.12-3) jessie-security; urgency=medium
+
+  * Fix a remote denial of service bug, torbug#20384, TROVE-2016-001.
+
+ -- Peter Palfrader <weasel@debian.org>  Tue, 18 Oct 2016 09:39:56 +0200
+
 tor (0.2.5.12-2) stable; urgency=medium
 
   * Update the set of authority directory servers to the one from
