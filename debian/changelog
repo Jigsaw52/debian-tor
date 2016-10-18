@@ -1,3 +1,13 @@
+tor (0.2.4.27-2) wheezy-security; urgency=medium
+
+  * Fix a remote denial of service bug, torbug#20384, TROVE-2016-001.
+  * Update the set of authority directory servers to the one from
+    Tor 0.2.8.7, released in August 2016.  This updates the key
+    for dannenberg, replaces the Tonga bridge authority with Bifroest,
+    and drops urras.
+
+ -- Peter Palfrader <weasel@debian.org>  Tue, 18 Oct 2016 09:40:24 +0200
+
 tor (0.2.4.27-1) wheezy-security; urgency=medium
 
   * New upstream version, fixing hidden service related Denial of

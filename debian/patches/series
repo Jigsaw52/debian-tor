@@ -1,2 +1,4 @@
 improve-geoip-warning
 torrc-revert-to-0.2.3.x-tree
+update-authority-set
+tor-bug-20384-TROVE-2016-10-001
