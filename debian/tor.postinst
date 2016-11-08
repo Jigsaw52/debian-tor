@@ -121,7 +121,7 @@ if [ "$1" = "configure" ] &&
 	checksum="`md5sum /etc/apparmor.d/usr.sbin.tor | awk '{print $1}'`"
 	pkg_md5="`dpkg-query -W -f='${Conffiles}' tor | awk '$1=="/etc/apparmor.d/usr.sbin.tor" {print $2}'`"
 	if [ "$checksum" = "$pkg_md5" ]; then
-		if [ -x /sbin/apparmor_parser ] ; then
+		if command -v apparmor_parser > /dev/null 2>&1 ; then
 			apparmor_parser --remove -T -W /etc/apparmor.d/usr.sbin.tor || true
 		fi
 
