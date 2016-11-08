@@ -1,9 +1,10 @@
-tor (0.2.9.4-alpha-1.1) experimental; urgency=medium
+tor (0.2.9.5-alpha-1) experimental; urgency=medium
 
+  * New upstream version.
   * Raise Standards-Version to 3.9.8 - no changes needed.
   * Use command -v $foo instead of [ -x /sbin/$foo ] in maintainer script.
 
- -- Peter Palfrader <weasel@debian.org>  Tue, 08 Nov 2016 13:30:40 +0100
+ -- Peter Palfrader <weasel@debian.org>  Tue, 08 Nov 2016 13:36:16 +0100
 
 tor (0.2.9.4-alpha-1) experimental; urgency=medium
 
