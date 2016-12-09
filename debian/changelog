@@ -6,9 +6,9 @@ tor (0.2.9.6-rc-2) UNRELEASED; urgency=medium
     CAP_CHOWN CAP_FOWNER no longer needed.
     CAP_DAC_OVERRIDE is still needed: Tor checks properties of hidden service
     directories as root before changing its UID to debian-tor, and those trees
-    are owned by debian-tor and go-rwx.
+    are owned by debian-tor and go-rwx (see #847598).
 
- -- Peter Palfrader <weasel@debian.org>  Fri, 09 Dec 2016 19:32:13 +0100
+ -- Peter Palfrader <weasel@debian.org>  Fri, 09 Dec 2016 19:33:27 +0100
 
 tor (0.2.9.6-rc-1) experimental; urgency=medium
 
