@@ -1,11 +1,14 @@
 tor (0.2.9.6-rc-2) UNRELEASED; urgency=medium
 
-  * Remove CAP_DAC_OVERRIDE, CAP_CHOWN, CAP_FOWNER from the systemd service
-    files' CapabilityBoundingSet.  We may no longer need them.  The upstream
+  * Remove CAP_CHOWN, CAP_FOWNER from the systemd service files'
+    CapabilityBoundingSet.  We may no longer need them.  The upstream
     changelog says that Tor changed some logic with 0.2.8.1-alpha that made
     CAP_CHOWN CAP_FOWNER no longer needed.
+    CAP_DAC_OVERRIDE is still needed: Tor checks properties of hidden service
+    directories as root before changing its UID to debian-tor, and those trees
+    are owned by debian-tor and go-rwx.
 
- -- Peter Palfrader <weasel@debian.org>  Thu, 08 Dec 2016 16:32:55 +0100
+ -- Peter Palfrader <weasel@debian.org>  Fri, 09 Dec 2016 19:32:13 +0100
 
 tor (0.2.9.6-rc-1) experimental; urgency=medium
 
