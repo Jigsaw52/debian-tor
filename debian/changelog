@@ -1,3 +1,12 @@
+tor (0.2.8.11-2) unstable; urgency=medium
+
+  * Re-add CAP_DAC_OVERRIDE to the CapabilityBoundingSet.  Tor checks
+    properties of hidden service directories as root before changing its UID
+    to debian-tor, and those trees are owned by debian-tor and go-rwx
+    (closes: #847598).
+
+ -- Peter Palfrader <weasel@debian.org>  Fri, 09 Dec 2016 19:23:24 +0100
+
 tor (0.2.8.11-1) unstable; urgency=medium
 
   * New upstream version.
