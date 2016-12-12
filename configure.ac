@@ -4,7 +4,7 @@ dnl Copyright (c) 2007-2015, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
 AC_PREREQ([2.63])
-AC_INIT([tor],[0.2.9.6-rc])
+AC_INIT([tor],[0.2.9.7-rc])
 AC_CONFIG_SRCDIR([src/or/main.c])
 AC_CONFIG_MACRO_DIR([m4])
 
@@ -430,11 +430,11 @@ AC_MSG_CHECKING([for a pre-Sierra OSX build target])
 AC_TRY_COMPILE([
 #ifdef __APPLE__
 #  include <AvailabilityMacros.h>
-#  ifndef MAC_OS_VERSION_10_12
-#    define MAC_OS_VERSION_10_12 101200
+#  ifndef MAC_OS_X_VERSION_10_12
+#    define MAC_OS_X_VERSION_10_12 101200
 #  endif
 #  if defined(MAC_OS_X_VERSION_MIN_REQUIRED)
-#    if MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_VERSION_10_12
+#    if MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_12
 #      error "Running on Mac OSX 10.11 or earlier"
 #    endif
 #  endif
