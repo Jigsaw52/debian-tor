@@ -27,6 +27,7 @@ PrivateDevices=yes
 ProtectHome=yes
 ProtectSystem=full
 ReadOnlyDirectories=/
+# We cannot restrict this to /var/lib/tor-instances/%i as the install from ExecStartPre might need to create that directory
 ReadWriteDirectories=-/var/lib/tor-instances
 ReadWriteDirectories=-/var/run
 CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_NET_BIND_SERVICE CAP_DAC_OVERRIDE
