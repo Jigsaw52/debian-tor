@@ -80,7 +80,7 @@ adduser --quiet \
         --group \
         --force-badname \
         "$user"
-install -d -m 02700 -o "$user" -g "$user" "$home"
+install -Z -d -m 02700 -o "$user" -g "$user" "$home"
 install -d "$etc"
 
 [ -e "$torrc" ] || cat > "$torrc" << EOF
