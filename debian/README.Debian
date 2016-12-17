@@ -13,6 +13,29 @@ As of 0.2.7.4, the package supports running multiple instances of Tor
 under systemd.  Please consult the tor-instance-create(8) manpage
 for details.
 
+Note that due to systemd and apparmor protections, the places on the
+filesystem which the tor process can access is limited.  (See the
+service files [1] for details.)  As such, hidden service directories
+should be created in subdirectories below Tor's DataDirectory [2].
+If you want to provide a hidden service and want Tor to connect to
+it not via TCP but via a UNIX socket, then we have set aside a
+dedicated directory [3] that is allowed by the default systemd and
+apparmor configuration (see Bug#846275[4] for a discussion).  In
+these, you can create subdirectories that your service (e.g. a
+webserver) can create unix sockets.  You still need to ensure that
+the Tor process is not prevented from accessing them by file and
+directory permissions.
+
+
+
+1: /lib/systemd/system/tor@default.service and
+   /lib/systemd/system/tor@.service
+2: /var/lib/tor and
+   /var/lib/tor-instances/<instancename>
+3: /var/lib/tor-onion-sockets/default and
+   /var/lib/tor-onion-sockets/<instancename>
+4: https://bugs.debian.org/846275
+
 -- 
 Peter Palfrader, Mon, 24 Jul 2006 05:20:30 +0200
                  Sat, 23 Feb 2008 13:44:40 +0100

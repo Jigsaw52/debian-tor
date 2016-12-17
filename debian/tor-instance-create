@@ -81,6 +81,7 @@ adduser --quiet \
         --force-badname \
         "$user"
 install -Z -d -m 02700 -o "$user" -g "$user" "$home"
+install -Z -d -m 02755 -o root -g root /var/lib/tor-onion-sockets/"$name"
 install -d "$etc"
 
 [ -e "$torrc" ] || cat > "$torrc" << EOF
