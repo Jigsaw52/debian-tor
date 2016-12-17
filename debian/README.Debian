@@ -1,5 +1,7 @@
 This is the Debian package for Tor, The Onion Router.
 
+# Startup and Configuration
+
 If Tor is started by init, it loads the configuration snippets from
 /usr/share/tor/tor-service-defaults-torrc before consulting /etc/tor/torrc.
 
@@ -9,22 +11,38 @@ pidfile, sets its data directory and configures cookie authentication.
 If Tor is started not from the init script, then it will behave like
 upstream's Tor.
 
+# Multiple instances
+
 As of 0.2.7.4, the package supports running multiple instances of Tor
 under systemd.  Please consult the tor-instance-create(8) manpage
 for details.
+
+# Filesystem access by the Tor service
 
 Note that due to systemd and apparmor protections, the places on the
 filesystem which the tor process can access is limited.  (See the
 service files [1] for details.)  As such, hidden service directories
 should be created in subdirectories below Tor's DataDirectory [2].
-If you want to provide a hidden service and want Tor to connect to
-it not via TCP but via a UNIX socket, then we have set aside a
-dedicated directory [3] that is allowed by the default systemd and
-apparmor configuration (see Bug#846275[4] for a discussion).  In
-these, you can create subdirectories that your service (e.g. a
-webserver) can create unix sockets.  You still need to ensure that
-the Tor process is not prevented from accessing them by file and
-directory permissions.
+
+## Onion services using UNIX domain sockets
+
+This package defines dedicated directories [3] to place UNIX domain
+sockets in for deployments where Tor should connect to a hidden service
+backend via UNIX socket instead of TCP.
+
+The default systemd and apparmor configuration (see Bug#846275[4] for a
+discussion) allows Tor access to sockets in these directories.  You
+still need to ensure that the Tor process is not prevented from
+accessing them by file and directory permissions.
+
+Example: The backend is run by user webfu.  The default Tor instance should be
+  able to access the socket.
+
+  The admin creates the directory
+    /var/lib/tor-onion-sockets/default/webfu/
+  and makes it mode 750 owned by webfu:debian-tor.  Then she configures
+  the backend service to create the socket in this directory and
+  configures Tor to use that socket.
 
 
 
