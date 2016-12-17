@@ -1,9 +1,5 @@
 tor (0.2.9.7-rc-2) UNRELEASED; urgency=medium
 
-  * In the non-default tor instances, do not attempt to create the Tor
-    DataDirectory as a ExecStartPre as our tor-instance-create script
-    should already have created the correct /var/lib/tor-instances/<X>
-    directory.
   * Update service files and apparmor config to let tor access
     /var/lib/tor-onion-sockets/<instance> so backends for onion services
     can put their UNIX domain sockets in a place that Tor is allowed
