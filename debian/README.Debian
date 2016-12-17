@@ -40,9 +40,11 @@ Example: The backend is run by user webfu.  The default Tor instance should be
 
   The admin creates the directory
     /var/lib/tor-onion-sockets/default/webfu/
-  and makes it mode 750 owned by webfu:debian-tor.  Then she configures
+  and makes it mode 02750 owned by webfu:debian-tor.  Then she configures
   the backend service to create the socket in this directory and
-  configures Tor to use that socket.
+  configures Tor to use that socket.  The socket should be read and writable
+  by the tor process as well, so it should be either g+rw when its group can
+  be debian-tor, or a+rw when not.
 
 
 
