@@ -4,6 +4,10 @@ tor (0.2.9.7-rc-2) UNRELEASED; urgency=medium
     /var/lib/tor-onion-sockets/<instance> so backends for onion services
     can put their UNIX domain sockets in a place that Tor is allowed
     to access by default (closes: #846275).
+  * Add a comment to tor@.service explaining why we cannot limit to
+    /var/lib/tor-{instances,onion-sockets}/<instance> but only to
+    /var/lib/tor-{instances,onion-sockets} -- systemd does not do
+    instance expansion in ReadWriteDirectories lines - cf. #781730.
 
  -- Peter Palfrader <weasel@debian.org>  Sat, 17 Dec 2016 17:31:30 +0100
 
