@@ -27,11 +27,9 @@ PrivateDevices=yes
 ProtectHome=yes
 ProtectSystem=full
 ReadOnlyDirectories=/
-# We would really like to restrict the next two items to
-# [..]/%i but we can't, as systemd does not support that yet.
-# See also #781730.
+# We would really like to restrict the next item to [..]/%i but we can't,
+# as systemd does not support that yet.  See also #781730.
 ReadWriteDirectories=-/var/lib/tor-instances
-ReadWriteDirectories=-/var/lib/tor-onion-sockets
 ReadWriteDirectories=-/var/run
 CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_NET_BIND_SERVICE CAP_DAC_OVERRIDE
 

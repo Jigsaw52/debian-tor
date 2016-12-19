@@ -39,8 +39,7 @@ as its configuration file is known to systemd as **tor@default**.
 There currently is no **tor-instance-remove** script.  To remove an
 instance, delete the user and its homedirectory once you are convinced
 there are no files or processes on your system still owned by that user.
-Then also remove the corresponding directory trees in /etc/tor/instances
-and /var/lib/tor-onion-sockets.
+Then also remove the corresponding directory tree in /etc/tor/instances.
 
 SEE ALSO
 --------

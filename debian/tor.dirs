@@ -1,3 +1,2 @@
 etc/apparmor.d/abstractions
 lib/systemd/system
-var/lib/tor-onion-sockets/default
