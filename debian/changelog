@@ -1,5 +1,6 @@
-tor (0.2.9.7-rc-2) UNRELEASED; urgency=medium
+tor (0.2.9.8-1) experimental; urgency=medium
 
+  * New upstream version, upload 0.2.9.x tree to unstable.
   * Add a comment to tor@.service explaining why we cannot limit to
     /var/lib/tor-instances/<instance> but only to /var/lib/tor-instances --
     systemd does not do instance expansion in ReadWriteDirectories lines --
@@ -10,7 +11,7 @@ tor (0.2.9.7-rc-2) UNRELEASED; urgency=medium
   * Use -Z (Apply SE-Linux labels) to install when creating instance datadirs
     in tor-instance-create.
 
- -- Peter Palfrader <weasel@debian.org>  Sat, 17 Dec 2016 17:31:30 +0100
+ -- Peter Palfrader <weasel@debian.org>  Mon, 19 Dec 2016 15:53:38 +0100
 
 tor (0.2.9.7-rc-1) experimental; urgency=medium
 
