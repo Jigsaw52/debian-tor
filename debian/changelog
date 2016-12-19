@@ -7,6 +7,8 @@ tor (0.2.9.7-rc-2) UNRELEASED; urgency=medium
   * Update README.Debian to mention a good location to put onion service
     UNIX sockets.  Note that neither systemd nor apparmor limits access
     to them -- cf. #846275.
+  * Use -Z (Apply SE-Linux labels) to install when creating instance datadirs
+    in tor-instance-create.
 
  -- Peter Palfrader <weasel@debian.org>  Sat, 17 Dec 2016 17:31:30 +0100
 
