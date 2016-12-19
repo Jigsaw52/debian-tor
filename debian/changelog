@@ -1,3 +1,9 @@
+tor (0.2.9.8-2) unstable; urgency=medium
+
+  * Actually target unstable.
+
+ -- Peter Palfrader <weasel@debian.org>  Mon, 19 Dec 2016 22:21:05 +0100
+
 tor (0.2.9.8-1) experimental; urgency=medium
 
   * New upstream version, upload 0.2.9.x tree to unstable.
