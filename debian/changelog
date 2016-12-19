@@ -1,3 +1,11 @@
+tor (0.2.4.27-3) wheezy-security; urgency=medium
+
+  * Fix for an issue (Tor#21018) where Tor clients could crash when
+    attempting to visit a hostile hidden service.
+    [TROVE-2016-12-002,CVE-2016-1254]
+
+ -- Peter Palfrader <weasel@debian.org>  Mon, 19 Dec 2016 22:01:22 +0100
+
 tor (0.2.4.27-2) wheezy-security; urgency=medium
 
   * Fix a remote denial of service bug, torbug#20384, TROVE-2016-001.
