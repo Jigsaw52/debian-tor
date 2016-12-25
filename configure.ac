@@ -4,7 +4,7 @@ dnl Copyright (c) 2007-2015, The Tor Project, Inc.
 dnl See LICENSE for licensing information
 
 AC_PREREQ([2.63])
-AC_INIT([tor],[0.2.9.8])
+AC_INIT([tor],[0.3.0.1-alpha])
 AC_CONFIG_SRCDIR([src/or/main.c])
 AC_CONFIG_MACRO_DIR([m4])
 
@@ -195,7 +195,9 @@ AC_PROG_CPP
 AC_PROG_MAKE_SET
 AC_PROG_RANLIB
 
-AC_PATH_PROG([PERL], [perl])
+AC_ARG_VAR([PERL], [path to Perl binary])
+AC_CHECK_PROGS([PERL], [perl])
+AM_CONDITIONAL(USE_PERL, [test "x$ac_cv_prog_PERL" != "x"])
 
 dnl autoconf 2.59 appears not to support AC_PROG_SED
 AC_CHECK_PROG([SED],[sed],[sed],[/bin/false])
@@ -1434,6 +1436,14 @@ AC_CHECK_FUNCS(mlockall)
 AC_CHECK_DECLS([mlockall], , , [
 #ifdef HAVE_SYS_MMAN_H
 #include <sys/mman.h>
+#endif])
+
+# Some MinGW environments don't have getpagesize in unistd.h. We don't use
+# AC_CHECK_FUNCS(getpagesize), because other environments rename getpagesize
+# using macros
+AC_CHECK_DECLS([getpagesize], , , [
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
 #endif])
 
 # Allow user to specify an alternate syslog facility

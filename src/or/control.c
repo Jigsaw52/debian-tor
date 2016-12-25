@@ -36,6 +36,7 @@
 
 #include "or.h"
 #include "addressmap.h"
+#include "bridges.h"
 #include "buffers.h"
 #include "channel.h"
 #include "channeltls.h"
@@ -57,6 +58,7 @@
 #include "entrynodes.h"
 #include "geoip.h"
 #include "hibernate.h"
+#include "hs_common.h"
 #include "main.h"
 #include "networkstatus.h"
 #include "nodelist.h"
@@ -942,7 +944,7 @@ control_setconf_helper(control_connection_t *conn, uint32_t len, char *body,
       ++body;
   }
 
-  smartlist_add(entries, tor_strdup(""));
+  smartlist_add_strdup(entries, "");
   config = smartlist_join_strings(entries, "\n", 0, NULL);
   SMARTLIST_FOREACH(entries, char *, cp, tor_free(cp));
   smartlist_free(entries);
@@ -2028,7 +2030,7 @@ getinfo_helper_dir(control_connection_t *control_conn,
   } else if (!strcmpstart(question, "dir/status/")) {
     *answer = tor_strdup("");
   } else if (!strcmp(question, "dir/status-vote/current/consensus")) { /* v3 */
-    if (directory_caches_dir_info(get_options())) {
+    if (we_want_to_fetch_flavor(get_options(), FLAV_NS)) {
       const cached_dir_t *consensus = dirserv_get_consensus("ns");
       if (consensus)
         *answer = tor_strdup(consensus->dir);
@@ -2539,7 +2541,7 @@ circuit_describe_status_for_controller(origin_circuit_t *circ)
 
   if (circ->rend_data != NULL) {
     smartlist_add_asprintf(descparts, "REND_QUERY=%s",
-                 circ->rend_data->onion_address);
+                           rend_data_get_address(circ->rend_data));
   }
 
   {
@@ -2594,6 +2596,8 @@ getinfo_helper_events(control_connection_t *control_conn,
 
       if (circ->base_.state == CIRCUIT_STATE_OPEN)
         state = "BUILT";
+      else if (circ->base_.state == CIRCUIT_STATE_GUARD_WAIT)
+        state = "GUARD_WAIT"; // XXXX prop271 spec deviation-- specify this.
       else if (circ->cpath)
         state = "EXTENDED";
       else
@@ -3139,7 +3143,7 @@ handle_control_getinfo(control_connection_t *conn, uint32_t len,
     if (!ans) {
       smartlist_add(unrecognized, (char*)q);
     } else {
-      smartlist_add(answers, tor_strdup(q));
+      smartlist_add_strdup(answers, q);
       smartlist_add(answers, ans);
     }
   } SMARTLIST_FOREACH_END(q);
@@ -3377,7 +3381,8 @@ handle_control_extendcircuit(control_connection_t *conn, uint32_t len,
       goto done;
     }
   } else {
-    if (circ->base_.state == CIRCUIT_STATE_OPEN) {
+    if (circ->base_.state == CIRCUIT_STATE_OPEN ||
+        circ->base_.state == CIRCUIT_STATE_GUARD_WAIT) {
       int err_reason = 0;
       circuit_set_state(TO_CIRCUIT(circ), CIRCUIT_STATE_BUILDING);
       if ((err_reason = circuit_send_next_onion_skin(circ)) < 0) {
@@ -4036,12 +4041,17 @@ handle_control_dropguards(control_connection_t *conn,
   smartlist_split_string(args, body, " ",
                          SPLIT_SKIP_SPACE|SPLIT_IGNORE_BLANK, 0);
 
+#ifdef ENABLE_LEGACY_GUARD_ALGORITHM
   if (smartlist_len(args)) {
     connection_printf_to_buf(conn, "512 Too many arguments to DROPGUARDS\r\n");
   } else {
     remove_all_entry_guards();
     send_control_done(conn);
   }
+#else
+  // XXXX
+  connection_printf_to_buf(conn, "512 not supported\r\n");
+#endif
 
   SMARTLIST_FOREACH(args, char *, cp, tor_free(cp));
   smartlist_free(args);
@@ -4081,7 +4091,7 @@ handle_control_hsfetch(control_connection_t *conn, uint32_t len,
      * of the id. */
     desc_id = digest;
   } else {
-    connection_printf_to_buf(conn, "513 Unrecognized \"%s\"\r\n",
+    connection_printf_to_buf(conn, "513 Invalid argument \"%s\"\r\n",
                              arg1);
     goto done;
   }
@@ -6045,9 +6055,9 @@ control_event_networkstatus_changed_helper(smartlist_t *statuses,
     return 0;
 
   strs = smartlist_new();
-  smartlist_add(strs, tor_strdup("650+"));
-  smartlist_add(strs, tor_strdup(event_string));
-  smartlist_add(strs, tor_strdup("\r\n"));
+  smartlist_add_strdup(strs, "650+");
+  smartlist_add_strdup(strs, event_string);
+  smartlist_add_strdup(strs, "\r\n");
   SMARTLIST_FOREACH(statuses, const routerstatus_t *, rs,
     {
       s = networkstatus_getinfo_helper_single(rs);
@@ -6856,8 +6866,10 @@ control_event_hs_descriptor_requested(const rend_data_t *rend_query,
 
   send_control_event(EVENT_HS_DESC,
                      "650 HS_DESC REQUESTED %s %s %s %s\r\n",
-                     rend_hsaddress_str_or_unknown(rend_query->onion_address),
-                     rend_auth_type_to_string(rend_query->auth_type),
+                     rend_hsaddress_str_or_unknown(
+                          rend_data_get_address(rend_query)),
+                     rend_auth_type_to_string(
+                          TO_REND_DATA_V2(rend_query)->auth_type),
                      node_describe_longname_by_id(id_digest),
                      desc_id_base32);
 }
@@ -6873,11 +6885,12 @@ get_desc_id_from_query(const rend_data_t *rend_data, const char *hsdir_fp)
 {
   int replica;
   const char *desc_id = NULL;
+  const rend_data_v2_t *rend_data_v2 = TO_REND_DATA_V2(rend_data);
 
   /* Possible if the fetch was done using a descriptor ID. This means that
    * the HSFETCH command was used. */
-  if (!tor_digest_is_zero(rend_data->desc_id_fetch)) {
-    desc_id = rend_data->desc_id_fetch;
+  if (!tor_digest_is_zero(rend_data_v2->desc_id_fetch)) {
+    desc_id = rend_data_v2->desc_id_fetch;
     goto end;
   }
 
@@ -6885,7 +6898,7 @@ get_desc_id_from_query(const rend_data_t *rend_data, const char *hsdir_fp)
    * is the one associated with the HSDir fingerprint. */
   for (replica = 0; replica < REND_NUMBER_OF_NON_CONSECUTIVE_REPLICAS;
        replica++) {
-    const char *digest = rend_data->descriptor_id[replica];
+    const char *digest = rend_data_get_desc_id(rend_data, replica, NULL);
 
     SMARTLIST_FOREACH_BEGIN(rend_data->hsdirs_fp, char *, fingerprint) {
       if (tor_memcmp(fingerprint, hsdir_fp, DIGEST_LEN) == 0) {
@@ -6994,7 +7007,8 @@ control_event_hs_descriptor_receive_end(const char *action,
                      "650 HS_DESC %s %s %s %s%s%s\r\n",
                      action,
                      rend_hsaddress_str_or_unknown(onion_address),
-                     rend_auth_type_to_string(rend_data->auth_type),
+                     rend_auth_type_to_string(
+                          TO_REND_DATA_V2(rend_data)->auth_type),
                      node_describe_longname_by_id(id_digest),
                      desc_id_field ? desc_id_field : "",
                      reason_field ? reason_field : "");
@@ -7091,7 +7105,7 @@ control_event_hs_descriptor_failed(const rend_data_t *rend_data,
     return;
   }
   control_event_hs_descriptor_receive_end("FAILED",
-                                          rend_data->onion_address,
+                                          rend_data_get_address(rend_data),
                                           rend_data, id_digest, reason);
 }
 

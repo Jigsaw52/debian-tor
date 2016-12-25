@@ -56,6 +56,7 @@
 
 #define CONNECTION_PRIVATE
 #include "or.h"
+#include "bridges.h"
 #include "buffers.h"
 /*
  * Define this so we get channel internal functions, since we're implementing
@@ -82,6 +83,7 @@
 #include "ext_orport.h"
 #include "geoip.h"
 #include "main.h"
+#include "hs_common.h"
 #include "nodelist.h"
 #include "policies.h"
 #include "reasons.h"
@@ -632,6 +634,11 @@ connection_free_(connection_t *conn)
 
     cached_dir_decref(dir_conn->cached_dir);
     rend_data_free(dir_conn->rend_data);
+    if (dir_conn->guard_state) {
+      /* Cancel before freeing, if it's still there. */
+      entry_guard_cancel(&dir_conn->guard_state);
+    }
+    circuit_guard_state_free(dir_conn->guard_state);
   }
 
   if (SOCKET_OK(conn->s)) {
@@ -643,7 +650,7 @@ connection_free_(connection_t *conn)
   if (conn->type == CONN_TYPE_OR &&
       !tor_digest_is_zero(TO_OR_CONN(conn)->identity_digest)) {
     log_warn(LD_BUG, "called on OR conn with non-zeroed identity_digest");
-    connection_or_remove_from_identity_map(TO_OR_CONN(conn));
+    connection_or_clear_identity(TO_OR_CONN(conn));
   }
   if (conn->type == CONN_TYPE_OR || conn->type == CONN_TYPE_EXT_OR) {
     connection_or_remove_from_ext_or_id_map(TO_OR_CONN(conn));
@@ -674,7 +681,7 @@ connection_free,(connection_t *conn))
   }
   if (connection_speaks_cells(conn)) {
     if (!tor_digest_is_zero(TO_OR_CONN(conn)->identity_digest)) {
-      connection_or_remove_from_identity_map(TO_OR_CONN(conn));
+      connection_or_clear_identity(TO_OR_CONN(conn));
     }
   }
   if (conn->type == CONN_TYPE_CONTROL) {
@@ -4129,12 +4136,12 @@ connection_get_by_type_state_rendquery(int type, int state,
          (type == CONN_TYPE_DIR &&
           TO_DIR_CONN(conn)->rend_data &&
           !rend_cmp_service_ids(rendquery,
-                                TO_DIR_CONN(conn)->rend_data->onion_address))
+                    rend_data_get_address(TO_DIR_CONN(conn)->rend_data)))
          ||
               (CONN_IS_EDGE(conn) &&
                TO_EDGE_CONN(conn)->rend_data &&
                !rend_cmp_service_ids(rendquery,
-                            TO_EDGE_CONN(conn)->rend_data->onion_address))
+                    rend_data_get_address(TO_EDGE_CONN(conn)->rend_data)))
          ));
 }
 

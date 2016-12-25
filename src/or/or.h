@@ -80,6 +80,7 @@
 #include "crypto_ed25519.h"
 #include "tor_queue.h"
 #include "util_format.h"
+#include "hs_circuitmap.h"
 
 /* These signals are defined to help handle_control_signal work.
  */
@@ -113,6 +114,9 @@
 #ifdef ENABLE_TOR2WEB_MODE
 #define NON_ANONYMOUS_MODE_ENABLED 1
 #endif
+
+/** Helper macro: Given a pointer to to.base_, of type from*, return &to. */
+#define DOWNCAST(to, ptr) ((to*)SUBTYPE_P(ptr, to, base_))
 
 /** Length of longest allowable configured nickname. */
 #define MAX_NICKNAME_LEN 19
@@ -435,8 +439,12 @@ typedef enum {
 /** Circuit state: I'd like to deliver a create, but my n_chan is still
  * connecting. */
 #define CIRCUIT_STATE_CHAN_WAIT 2
+/** Circuit state: the circuit is open but we don't want to actually use it
+ * until we find out if a better guard will be available.
+ */
+#define CIRCUIT_STATE_GUARD_WAIT 3
 /** Circuit state: onionskin(s) processed, ready to send/receive cells. */
-#define CIRCUIT_STATE_OPEN 3
+#define CIRCUIT_STATE_OPEN 4
 
 #define CIRCUIT_PURPOSE_MIN_ 1
 
@@ -779,6 +787,24 @@ typedef struct rend_service_authorization_t {
  * establishment. Not all fields contain data depending on where this struct
  * is used. */
 typedef struct rend_data_t {
+  /* Hidden service protocol version of this base object. */
+  uint32_t version;
+
+  /** List of HSDir fingerprints on which this request has been sent to. This
+   * contains binary identity digest of the directory of size DIGEST_LEN. */
+  smartlist_t *hsdirs_fp;
+
+  /** Rendezvous cookie used by both, client and service. */
+  char rend_cookie[REND_COOKIE_LEN];
+
+  /** Number of streams associated with this rendezvous circuit. */
+  int nr_streams;
+} rend_data_t;
+
+typedef struct rend_data_v2_t {
+  /* Rendezvous base data. */
+  rend_data_t base_;
+
   /** Onion address (without the .onion part) that a client requests. */
   char onion_address[REND_SERVICE_ID_LEN_BASE32+1];
 
@@ -800,17 +826,16 @@ typedef struct rend_data_t {
 
   /** Hash of the hidden service's PK used by a service. */
   char rend_pk_digest[DIGEST_LEN];
+} rend_data_v2_t;
 
-  /** Rendezvous cookie used by both, client and service. */
-  char rend_cookie[REND_COOKIE_LEN];
-
-  /** List of HSDir fingerprints on which this request has been sent to.
-   * This contains binary identity digest of the directory. */
-  smartlist_t *hsdirs_fp;
-
-  /** Number of streams associated with this rendezvous circuit. */
-  int nr_streams;
-} rend_data_t;
+/* From a base rend_data_t object <b>d</d>, return the v2 object. */
+static inline
+rend_data_v2_t *TO_REND_DATA_V2(const rend_data_t *d)
+{
+  tor_assert(d);
+  tor_assert(d->version == 2);
+  return DOWNCAST(rend_data_v2_t, d);
+}
 
 /** Time interval for tracking replays of DH public keys received in
  * INTRODUCE2 cells.  Used only to avoid launching multiple
@@ -1348,13 +1373,30 @@ typedef struct listener_connection_t {
 #define OR_CERT_TYPE_RSA_ED_CROSSCERT 7
 /**@}*/
 
-/** The one currently supported type of AUTHENTICATE cell.  It contains
+/** The first supported type of AUTHENTICATE cell.  It contains
  * a bunch of structures signed with an RSA1024 key.  The signed
  * structures include a HMAC using negotiated TLS secrets, and a digest
  * of all cells sent or received before the AUTHENTICATE cell (including
  * the random server-generated AUTH_CHALLENGE cell).
  */
 #define AUTHTYPE_RSA_SHA256_TLSSECRET 1
+/** As AUTHTYPE_RSA_SHA256_TLSSECRET, but instead of using the
+ * negotiated TLS secrets, uses exported keying material from the TLS
+ * session as described in RFC 5705.
+ *
+ * Not used by today's tors, since everything that supports this
+ * also supports ED25519_SHA3_5705, which is better.
+ **/
+#define AUTHTYPE_RSA_SHA256_RFC5705 2
+/** As AUTHTYPE_RSA_SHA256_RFC5705, but uses an Ed25519 identity key to
+ * authenticate.  */
+#define AUTHTYPE_ED25519_SHA256_RFC5705 3
+/*
+ * NOTE: authchallenge_type_is_better() relies on these AUTHTYPE codes
+ * being sorted in order of preference.  If we someday add one with
+ * a higher numerical value that we don't like as much, we should revise
+ * authchallenge_type_is_better().
+ */
 
 /** The length of the part of the AUTHENTICATE cell body that the client and
  * server can generate independently (when using RSA_SHA256_TLSSECRET). It
@@ -1364,6 +1406,34 @@ typedef struct listener_connection_t {
 /** The length of the part of the AUTHENTICATE cell body that the client
  * signs. */
 #define V3_AUTH_BODY_LEN (V3_AUTH_FIXED_PART_LEN + 8 + 16)
+
+/** Structure to hold all the certificates we've received on an OR connection
+ */
+typedef struct or_handshake_certs_t {
+  /** True iff we originated this connection. */
+  int started_here;
+  /** The cert for the 'auth' RSA key that's supposed to sign the AUTHENTICATE
+   * cell. Signed with the RSA identity key. */
+  tor_x509_cert_t *auth_cert;
+  /** The cert for the 'link' RSA key that was used to negotiate the TLS
+   *  connection.  Signed with the RSA identity key. */
+  tor_x509_cert_t *link_cert;
+  /** A self-signed identity certificate: the RSA identity key signed
+   * with itself.  */
+  tor_x509_cert_t *id_cert;
+  /** The Ed25519 signing key, signed with the Ed25519 identity key. */
+  struct tor_cert_st *ed_id_sign;
+  /** A digest of the X509 link certificate for the TLS connection, signed
+   * with the Ed25519 siging key. */
+  struct tor_cert_st *ed_sign_link;
+  /** The Ed25519 authentication key (that's supposed to sign an AUTHENTICATE
+   * cell) , signed with the Ed25519 siging key. */
+  struct tor_cert_st *ed_sign_auth;
+  /** The Ed25519 identity key, crosssigned with the RSA identity key. */
+  uint8_t *ed_rsa_crosscert;
+  /** The length of <b>ed_rsa_crosscert</b> in bytes */
+  size_t ed_rsa_crosscert_len;
+} or_handshake_certs_t;
 
 /** Stores flags and information related to the portion of a v2/v3 Tor OR
  * connection handshake that happens after the TLS handshake is finished.
@@ -1385,6 +1455,8 @@ typedef struct or_handshake_state_t {
 
   /* True iff we've received valid authentication to some identity. */
   unsigned int authenticated : 1;
+  unsigned int authenticated_rsa : 1;
+  unsigned int authenticated_ed25519 : 1;
 
   /* True iff we have sent a netinfo cell */
   unsigned int sent_netinfo : 1;
@@ -1402,9 +1474,12 @@ typedef struct or_handshake_state_t {
   unsigned int digest_received_data : 1;
   /**@}*/
 
-  /** Identity digest that we have received and authenticated for our peer
+  /** Identity RSA digest that we have received and authenticated for our peer
    * on this connection. */
-  uint8_t authenticated_peer_id[DIGEST_LEN];
+  uint8_t authenticated_rsa_peer_id[DIGEST_LEN];
+  /** Identity Ed25519 public key that we have received and authenticated for
+   * our peer on this connection. */
+  ed25519_public_key_t authenticated_ed25519_peer_id;
 
   /** Digests of the cells that we have sent or received as part of a V3
    * handshake.  Used for making and checking AUTHENTICATE cells.
@@ -1417,14 +1492,8 @@ typedef struct or_handshake_state_t {
 
   /** Certificates that a connection initiator sent us in a CERTS cell; we're
    * holding on to them until we get an AUTHENTICATE cell.
-   *
-   * @{
    */
-  /** The cert for the key that's supposed to sign the AUTHENTICATE cell */
-  tor_x509_cert_t *auth_cert;
-  /** A self-signed identity certificate */
-  tor_x509_cert_t *id_cert;
-  /**@}*/
+  or_handshake_certs_t *certs;
 } or_handshake_state_t;
 
 /** Length of Extended ORPort connection identifier. */
@@ -1517,8 +1586,6 @@ typedef struct or_connection_t {
                     * bandwidthburst. (OPEN ORs only) */
   int write_bucket; /**< When this hits 0, stop writing. Like read_bucket. */
 
-  struct or_connection_t *next_with_same_id; /**< Next connection with same
-                                              * identity digest as this one. */
   /** Last emptied read token bucket in msec since midnight; only used if
    * TB_EMPTY events are enabled. */
   uint32_t read_emptied_time;
@@ -1596,6 +1663,8 @@ typedef struct entry_connection_t {
   edge_connection_t edge_;
 
   /** Nickname of planned exit node -- used with .exit support. */
+  /* XXX prop220: we need to make chosen_exit_name able to encode Ed IDs too.
+   * That's logically part of the UI parts for prop220 though. */
   char *chosen_exit_name;
 
   socks_request_t *socks_request; /**< SOCKS structure describing request (AP
@@ -1718,6 +1787,10 @@ typedef struct dir_connection_t {
   /** What rendezvous service are we querying for? */
   rend_data_t *rend_data;
 
+  /** If this is a one-hop connection, tracks the state of the directory guard
+   * for this connection (if any). */
+  struct circuit_guard_state_t *guard_state;
+
   char identity_digest[DIGEST_LEN]; /**< Hash of the public RSA key for
                                      * the directory server's signing key. */
 
@@ -1761,8 +1834,6 @@ typedef struct control_connection_t {
 
 /** Cast a connection_t subtype pointer to a connection_t **/
 #define TO_CONN(c) (&(((c)->base_)))
-/** Helper macro: Given a pointer to to.base_, of type from*, return &to. */
-#define DOWNCAST(to, ptr) ((to*)SUBTYPE_P(ptr, to, base_))
 
 /** Cast a entry_connection_t subtype pointer to a edge_connection_t **/
 #define ENTRY_TO_EDGE_CONN(c) (&(((c))->edge_))
@@ -2203,6 +2274,10 @@ typedef struct routerstatus_t {
    * accept EXTEND2 cells */
   unsigned int supports_extend2_cells:1;
 
+  /** True iff this router has a protocol list that allows it to negotiate
+   * ed25519 identity keys on a link handshake. */
+  unsigned int supports_ed25519_link_handshake:1;
+
   unsigned int has_bandwidth:1; /**< The vote/consensus had bw info */
   unsigned int has_exitsummary:1; /**< The vote/consensus had exit summaries */
   unsigned int bw_is_unmeasured:1; /**< This is a consensus entry, with
@@ -2364,9 +2439,6 @@ typedef struct node_t {
 
   /** Local info: we treat this node as if it rejects everything */
   unsigned int rejects_all:1;
-
-  /** Local info: this node is in our list of guards */
-  unsigned int using_as_guard:1;
 
   /* Local info: derived. */
 
@@ -2647,7 +2719,10 @@ typedef struct {
 typedef struct extend_info_t {
   char nickname[MAX_HEX_NICKNAME_LEN+1]; /**< This router's nickname for
                                           * display. */
-  char identity_digest[DIGEST_LEN]; /**< Hash of this router's identity key. */
+  /** Hash of this router's RSA identity key. */
+  char identity_digest[DIGEST_LEN];
+  /** Ed25519 identity for this router, if any. */
+  ed25519_public_key_t ed_identity;
   uint16_t port; /**< OR port. */
   tor_addr_t addr; /**< IP address. */
   crypto_pk_t *onion_key; /**< Current onionskin key. */
@@ -3085,6 +3160,15 @@ typedef struct origin_circuit_t {
   /** Holds all rendezvous data on either client or service side. */
   rend_data_t *rend_data;
 
+  /** Holds the data that the entry guard system uses to track the
+   * status of the guard this circuit is using, and thereby to determine
+   * whether this circuit can be used. */
+  struct circuit_guard_state_t *guard_state;
+
+  /** Index into global_origin_circuit_list for this circuit. -1 if not
+   * present. */
+  int global_origin_circuit_list_idx;
+
   /** How many more relay_early cells can we send on this circuit, according
    * to the specification? */
   unsigned int remaining_relay_early_cells : 4;
@@ -3289,7 +3373,12 @@ typedef struct or_circuit_t {
    * is not marked for close. */
   struct or_circuit_t *rend_splice;
 
-  struct or_circuit_rendinfo_s *rendinfo;
+  /** If set, points to an HS token that this circuit might be carrying.
+   *  Used by the HS circuitmap.  */
+  hs_token_t *hs_token;
+  /** Hashtable node: used to look up the circuit by its HS token using the HS
+      circuitmap. */
+  HT_ENTRY(or_circuit_t) hs_circuitmap_node;
 
   /** Stores KH for the handshake. */
   char rend_circ_nonce[DIGEST_LEN];/* KH in tor-spec.txt */
@@ -3324,24 +3413,10 @@ typedef struct or_circuit_t {
   uint32_t max_middle_cells;
 } or_circuit_t;
 
-typedef struct or_circuit_rendinfo_s {
-
 #if REND_COOKIE_LEN != DIGEST_LEN
 #error "The REND_TOKEN_LEN macro assumes REND_COOKIE_LEN == DIGEST_LEN"
 #endif
 #define REND_TOKEN_LEN DIGEST_LEN
-
-  /** A hash of location-hidden service's PK if purpose is INTRO_POINT, or a
-   * rendezvous cookie if purpose is REND_POINT_WAITING. Filled with zeroes
-   * otherwise.
-   */
-  char rend_token[REND_TOKEN_LEN];
-
-  /** True if this is a rendezvous point circuit; false if this is an
-   * introduction point. */
-  unsigned is_rend_circ;
-
-} or_circuit_rendinfo_t;
 
 /** Convert a circuit subtype to a circuit_t. */
 #define TO_CIRCUIT(x)  (&((x)->base_))
@@ -3817,7 +3892,7 @@ typedef struct {
   uint64_t BandwidthBurst; /**< How much bandwidth, at maximum, are we willing
                             * to use in a second? */
   uint64_t MaxAdvertisedBandwidth; /**< How much bandwidth are we willing to
-                                    * tell people we have? */
+                                    * tell other nodes we have? */
   uint64_t RelayBandwidthRate; /**< How much bandwidth, on average, are we
                                  * willing to use for all relayed conns? */
   uint64_t RelayBandwidthBurst; /**< How much bandwidth, at maximum, will we
@@ -3903,9 +3978,6 @@ typedef struct {
                             * and vote for all other exits as good. */
   int AuthDirMaxServersPerAddr; /**< Do not permit more than this
                                  * number of servers per IP address. */
-  int AuthDirMaxServersPerAuthAddr; /**< Do not permit more than this
-                                     * number of servers per IP address shared
-                                     * with an authority. */
   int AuthDirHasIPv6Connectivity; /**< Boolean: are we on IPv6?  */
   int AuthDirPinKeys; /**< Boolean: Do we enforce key-pinning? */
 
@@ -3990,8 +4062,6 @@ typedef struct {
   int UseEntryGuards;
 
   int NumEntryGuards; /**< How many entry guards do we try to establish? */
-  int UseEntryGuardsAsDirGuards; /** Boolean: Do we try to get directory info
-                                  * from a smallish number of fixed nodes? */
 
   /** If 1, we use any guardfraction information we see in the
    * consensus.  If 0, we don't.  If -1, let the consensus parameter
@@ -4463,7 +4533,7 @@ typedef struct {
    * XXXX Eventually, the default will be 0. */
   int ExitRelay;
 
-  /** For how long (seconds) do we declare our singning keys to be valid? */
+  /** For how long (seconds) do we declare our signing keys to be valid? */
   int SigningKeyLifetime;
   /** For how long (seconds) do we declare our link keys to be valid? */
   int TestingLinkCertLifetime;
@@ -4507,6 +4577,23 @@ typedef struct {
 
   /** If 1, we skip all OOS checks. */
   int DisableOOSCheck;
+
+  /** Autobool: Should we include Ed25519 identities in extend2 cells?
+   * If -1, we should do whatever the consensus parameter says. */
+  int ExtendByEd25519ID;
+
+  /** Bool (default: 1): When testing routerinfos as a directory authority,
+   * do we enforce Ed25519 identity match? */
+  /* NOTE: remove this option someday. */
+  int AuthDirTestEd25519LinkKeys;
+
+  /** If 1, we use the old (pre-prop271) guard selection algorithm.
+   *
+   * XXXX prop271 This option is only here as a stopgap while we're
+   * XXXX tuning and debugging the new (post-prop271) algorithm.  Eventually
+   * we should remove it entirely.
+   */
+  int UseDeprecatedGuardAlgorithm;
 } or_options_t;
 
 /** Persistent state for an onion router, as saved to disk. */
@@ -4530,8 +4617,11 @@ typedef struct {
   uint64_t AccountingBytesAtSoftLimit;
   uint64_t AccountingExpectedUsage;
 
-  /** A list of Entry Guard-related configuration lines. */
+  /** A list of Entry Guard-related configuration lines. (pre-prop271) */
   config_line_t *EntryGuards;
+
+  /** A list of guard-related configuration lines. (post-prop271) */
+  config_line_t *Guard;
 
   config_line_t *TransportProxies;
 

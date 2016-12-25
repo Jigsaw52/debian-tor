@@ -34,7 +34,8 @@ EXTRA_DIST+= \
 	LICENSE						\
 	Makefile.nmake					\
 	README						\
-	ReleaseNotes
+	ReleaseNotes					\
+	scripts/maint/checkSpace.pl
 
 ## This tells etags how to find mockable function definitions.
 AM_ETAGSFLAGS=--regex='{c}/MOCK_IMPL([^,]+,\W*\([a-zA-Z0-9_]+\)\W*,/\1/s'
@@ -81,6 +82,8 @@ doxygen:
 
 test: all
 	$(top_builddir)/src/test/test
+
+check-local: check-spaces
 
 need-chutney-path:
 	@if test ! -d "$$CHUTNEY_PATH"; then \
@@ -181,11 +184,13 @@ coverage-html-full: all
 # Avoid strlcpy.c, strlcat.c, aes.c, OpenBSD_malloc_Linux.c, sha256.c,
 # tinytest*.[ch]
 check-spaces:
-	$(top_srcdir)/scripts/maint/checkSpace.pl -C \
+if USE_PERL
+	$(PERL) $(top_srcdir)/scripts/maint/checkSpace.pl -C \
 		$(top_srcdir)/src/common/*.[ch] \
 		$(top_srcdir)/src/or/*.[ch] \
 		$(top_srcdir)/src/test/*.[ch] \
 		$(top_srcdir)/src/tools/*.[ch]
+endif
 
 check-docs: all
 	$(PERL) $(top_builddir)/scripts/maint/checkOptionDocs.pl
