@@ -2100,7 +2100,8 @@ get_interface_address,(int severity, uint32_t *addr))
 }
 
 /** Return true if we can tell that <b>name</b> is a canonical name for the
- * loopback address. */
+ * loopback address.  Return true also for *.local hostnames, which are
+ * multicast DNS names for hosts on the local network. */
 int
 tor_addr_hostname_is_local(const char *name)
 {
@@ -2119,5 +2120,13 @@ tor_addr_port_new(const tor_addr_t *addr, uint16_t port)
     tor_addr_copy(&ap->addr, addr);
   ap->port = port;
   return ap;
+}
+
+/** Return true iff <a>a</b> and <b>b</b> are the same address and port */
+int
+tor_addr_port_eq(const tor_addr_port_t *a,
+                 const tor_addr_port_t *b)
+{
+  return tor_addr_eq(&a->addr, &b->addr) && a->port == b->port;
 }
 

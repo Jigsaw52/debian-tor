@@ -211,6 +211,14 @@ ed25519_keypair_generate(ed25519_keypair_t *keypair_out, int extra_strong)
   return 0;
 }
 
+/** Return true iff 'pubkey' is set to zero (eg to indicate that it is not
+ * set). */
+int
+ed25519_public_key_is_zero(const ed25519_public_key_t *pubkey)
+{
+  return tor_mem_is_zero((char*)pubkey->pubkey, ED25519_PUBKEY_LEN);
+}
+
 /* Return a heap-allocated array that contains <b>msg</b> prefixed by the
  * string <b>prefix_str</b>. Set <b>final_msg_len_out</b> to the size of the
  * final array. If an error occured, return NULL. It's the resonsibility of the
@@ -267,11 +275,11 @@ ed25519_sign(ed25519_signature_t *signature_out,
  * Like ed25519_sign(), but also prefix <b>msg</b> with <b>prefix_str</b>
  * before signing. <b>prefix_str</b> must be a NUL-terminated string.
  */
-int
-ed25519_sign_prefixed(ed25519_signature_t *signature_out,
-                      const uint8_t *msg, size_t msg_len,
-                      const char *prefix_str,
-                      const ed25519_keypair_t *keypair)
+MOCK_IMPL(int,
+ed25519_sign_prefixed,(ed25519_signature_t *signature_out,
+                       const uint8_t *msg, size_t msg_len,
+                       const char *prefix_str,
+                       const ed25519_keypair_t *keypair))
 {
   int retval;
   size_t prefixed_msg_len;
@@ -618,6 +626,18 @@ ed25519_pubkey_eq(const ed25519_public_key_t *key1,
   tor_assert(key1);
   tor_assert(key2);
   return tor_memeq(key1->pubkey, key2->pubkey, ED25519_PUBKEY_LEN);
+}
+
+/**
+ * Set <b>dest</b> to contain the same key as <b>src</b>.
+ */
+void
+ed25519_pubkey_copy(ed25519_public_key_t *dest,
+                    const ed25519_public_key_t *src)
+{
+  tor_assert(dest);
+  tor_assert(src);
+  memcpy(dest, src, sizeof(ed25519_public_key_t));
 }
 
 /** Check whether the given Ed25519 implementation seems to be working.

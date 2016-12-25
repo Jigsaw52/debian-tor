@@ -6,11 +6,61 @@
 
 /**
  * \file config.c
- * \brief Code to parse and interpret configuration files.
+ * \brief Code to interpret the user's configuration of Tor.
+ *
+ * This module handles torrc configuration file, including parsing it,
+ * combining it with torrc.defaults and the command line, allowing
+ * user changes to it (via editing and SIGHUP or via the control port),
+ * writing it back to disk (because of SAVECONF from the control port),
+ * and -- most importantly, acting on it.
+ *
+ * The module additionally has some tools for manipulating and
+ * inspecting values that are calculated as a result of the
+ * configured options.
+ *
+ * <h3>How to add  new options</h3>
+ *
+ * To add new items to the torrc, there are a minimum of three places to edit:
+ * <ul>
+ *   <li>The or_options_t structure in or.h, where the options are stored.
+ *   <li>The option_vars_ array below in this module, which configures
+ *       the names of the torrc options, their types, their multiplicities,
+ *       and their mappings to fields in or_options_t.
+ *   <li>The manual in doc/tor.1.txt, to document what the new option
+ *       is, and how it works.
+ * </ul>
+ *
+ * Additionally, you might need to edit these places too:
+ * <ul>
+ *   <li>options_validate() below, in case you want to reject some possible
+ *       values of the new configuration option.
+ *   <li>options_transition_allowed() below, in case you need to
+ *       forbid some or all changes in the option while Tor is
+ *       running.
+ *   <li>options_transition_affects_workers(), in case changes in the option
+ *       might require Tor to relaunch or reconfigure its worker threads.
+ *   <li>options_transition_affects_descriptor(), in case changes in the
+ *       option might require a Tor relay to build and publish a new server
+ *       descriptor.
+ *   <li>options_act() and/or options_act_reversible(), in case there's some
+ *       action that needs to be taken immediately based on the option's
+ *       value.
+ * </ul>
+ *
+ * <h3>Changing the value of an option</h3>
+ *
+ * Because of the SAVECONF command from the control port, it's a bad
+ * idea to change the value of any user-configured option in the
+ * or_options_t.  If you want to sometimes do this anyway, we recommend
+ * that you create a secondary field in or_options_t; that you have the
+ * user option linked only to the secondary field; that you use the
+ * secondary field to initialize the one that Tor actually looks at; and that
+ * you use the one Tor looks as the one that you modify.
  **/
 
 #define CONFIG_PRIVATE
 #include "or.h"
+#include "bridges.h"
 #include "compat.h"
 #include "addressmap.h"
 #include "channel.h"
@@ -169,7 +219,7 @@ static config_var_t option_vars_[] = {
   OBSOLETE("AuthDirListBadDirs"),
   V(AuthDirListBadExits,         BOOL,     "0"),
   V(AuthDirMaxServersPerAddr,    UINT,     "2"),
-  V(AuthDirMaxServersPerAuthAddr,UINT,     "5"),
+  OBSOLETE("AuthDirMaxServersPerAuthAddr"),
   V(AuthDirHasIPv6Connectivity,  BOOL,     "0"),
   VAR("AuthoritativeDirectory",  BOOL, AuthoritativeDir,    "0"),
   V(AutomapHostsOnResolve,       BOOL,     "0"),
@@ -256,7 +306,12 @@ static config_var_t option_vars_[] = {
   V(ExtORPortCookieAuthFile,     STRING,   NULL),
   V(ExtORPortCookieAuthFileGroupReadable, BOOL, "0"),
   V(ExtraInfoStatistics,         BOOL,     "1"),
+  V(ExtendByEd25519ID,           AUTOBOOL, "auto"),
   V(FallbackDir,                 LINELIST, NULL),
+  /* XXXX prop271 -- this has an ugly name to remind us to remove it. */
+  VAR("UseDeprecatedGuardAlgorithm_",        BOOL,
+      UseDeprecatedGuardAlgorithm, "0"),
+
   V(UseDefaultFallbackDirs,      BOOL,     "1"),
 
   OBSOLETE("FallbackNetworkstatusFile"),
@@ -441,13 +496,14 @@ static config_var_t option_vars_[] = {
   V(UpdateBridgesFromAuthority,  BOOL,     "0"),
   V(UseBridges,                  BOOL,     "0"),
   VAR("UseEntryGuards",          BOOL,     UseEntryGuards_option, "1"),
-  V(UseEntryGuardsAsDirGuards,   BOOL,     "1"),
+  OBSOLETE("UseEntryGuardsAsDirGuards"),
   V(UseGuardFraction,            AUTOBOOL, "auto"),
   V(UseMicrodescriptors,         AUTOBOOL, "auto"),
   OBSOLETE("UseNTorHandshake"),
   V(User,                        STRING,   NULL),
   OBSOLETE("UserspaceIOCPBuffers"),
   V(AuthDirSharedRandomness,     BOOL,     "1"),
+  V(AuthDirTestEd25519LinkKeys,  BOOL,     "1"),
   OBSOLETE("V1AuthoritativeDirectory"),
   OBSOLETE("V2AuthoritativeDirectory"),
   VAR("V3AuthoritativeDirectory",BOOL, V3AuthoritativeDir,   "0"),
@@ -543,7 +599,6 @@ static const config_var_t testing_tor_network_defaults[] = {
   V(EnforceDistinctSubnets,      BOOL,     "0"),
   V(AssumeReachable,             BOOL,     "1"),
   V(AuthDirMaxServersPerAddr,    UINT,     "0"),
-  V(AuthDirMaxServersPerAuthAddr,UINT,     "0"),
   V(ClientBootstrapConsensusAuthorityDownloadSchedule, CSV_INTERVAL,
     "0, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 8, 16, 32, 60"),
   V(ClientBootstrapConsensusFallbackDownloadSchedule, CSV_INTERVAL,
@@ -781,7 +836,7 @@ set_options(or_options_t *new_val, char **msg)
             tor_free(line);
           }
         } else {
-          smartlist_add(elements, tor_strdup(options_format.vars[i].name));
+          smartlist_add_strdup(elements, options_format.vars[i].name);
           smartlist_add(elements, NULL);
         }
       }
@@ -1507,6 +1562,36 @@ options_transition_requires_fresh_tls_context(const or_options_t *old_options,
   return 0;
 }
 
+/**
+ * Return true if changing the configuration from <b>old</b> to <b>new</b>
+ * affects the guard susbsystem.
+ */
+static int
+options_transition_affects_guards(const or_options_t *old,
+                                  const or_options_t *new)
+{
+  /* NOTE: Make sure this function stays in sync with
+   * entry_guards_set_filtered_flags */
+
+  tor_assert(old);
+  tor_assert(new);
+
+  return
+    (old->UseEntryGuards != new->UseEntryGuards ||
+     old->UseDeprecatedGuardAlgorithm != new->UseDeprecatedGuardAlgorithm ||
+     old->UseBridges != new->UseBridges ||
+     old->UseEntryGuards != new->UseEntryGuards ||
+     old->ClientUseIPv4 != new->ClientUseIPv4 ||
+     old->ClientUseIPv6 != new->ClientUseIPv6 ||
+     old->FascistFirewall != new->FascistFirewall ||
+     !routerset_equal(old->ExcludeNodes, new->ExcludeNodes) ||
+     !routerset_equal(old->EntryNodes, new->EntryNodes) ||
+     !smartlist_strings_eq(old->FirewallPorts, new->FirewallPorts) ||
+     !config_lines_eq(old->Bridges, new->Bridges) ||
+     !config_lines_eq(old->ReachableORAddresses, new->ReachableORAddresses) ||
+     !config_lines_eq(old->ReachableDirAddresses, new->ReachableDirAddresses));
+}
+
 /** Fetch the active option list, and take actions based on it. All of the
  * things we do should survive being done repeatedly.  If present,
  * <b>old_options</b> contains the previous value of the options.
@@ -1526,6 +1611,8 @@ options_act(const or_options_t *old_options)
   const int transition_affects_workers =
     old_options && options_transition_affects_workers(old_options, options);
   int old_ewma_enabled;
+  const int transition_affects_guards =
+    old_options && options_transition_affects_guards(old_options, options);
 
   /* disable ptrace and later, other basic debugging techniques */
   {
@@ -1802,6 +1889,7 @@ options_act(const or_options_t *old_options)
   if (old_options) {
     int revise_trackexithosts = 0;
     int revise_automap_entries = 0;
+    int abandon_circuits = 0;
     if ((options->UseEntryGuards && !old_options->UseEntryGuards) ||
         options->UseBridges != old_options->UseBridges ||
         (options->UseBridges &&
@@ -1818,6 +1906,16 @@ options_act(const or_options_t *old_options)
                "Changed to using entry guards or bridges, or changed "
                "preferred or excluded node lists. "
                "Abandoning previous circuits.");
+      abandon_circuits = 1;
+    }
+
+    if (transition_affects_guards) {
+      if (guards_update_all()) {
+        abandon_circuits = 1;
+      }
+    }
+
+    if (abandon_circuits) {
       circuit_mark_all_unused_circs();
       circuit_mark_all_dirty_circs_as_unusable();
       revise_trackexithosts = 1;
@@ -1848,7 +1946,7 @@ options_act(const or_options_t *old_options)
       addressmap_clear_invalid_automaps(options);
 
 /* How long should we delay counting bridge stats after becoming a bridge?
- * We use this so we don't count people who used our bridge thinking it is
+ * We use this so we don't count clients who used our bridge thinking it is
  * a relay. If you change this, don't forget to change the log message
  * below. It's 4 hours (the time it takes to stop being used by clients)
  * plus some extra time for clock skew. */
@@ -2000,11 +2098,13 @@ options_act(const or_options_t *old_options)
     rep_hist_desc_stats_term();
 
   /* Check if we need to parse and add the EntryNodes config option. */
+#ifdef ENABLE_LEGACY_GUARD_ALGORITHM
   if (options->EntryNodes &&
       (!old_options ||
        !routerset_equal(old_options->EntryNodes,options->EntryNodes) ||
        !routerset_equal(old_options->ExcludeNodes,options->ExcludeNodes)))
     entry_nodes_should_be_added();
+#endif
 
   /* Since our options changed, we might need to regenerate and upload our
    * server descriptor.
@@ -2330,8 +2430,8 @@ using_default_dir_authorities(const or_options_t *options)
  * Fail if one or more of the following is true:
  *   - DNS name in <b>options-\>Address</b> cannot be resolved.
  *   - <b>options-\>Address</b> is a local host address.
- *   - Attempt to getting local hostname fails.
- *   - Attempt to getting network interface address fails.
+ *   - Attempt at getting local hostname fails.
+ *   - Attempt at getting network interface address fails.
  *
  * Return 0 if all is well, or -1 if we can't find a suitable
  * public IP address.
@@ -2711,7 +2811,7 @@ compute_publishserverdescriptor(or_options_t *options)
 #define MIN_REND_POST_PERIOD (10*60)
 #define MIN_REND_POST_PERIOD_TESTING (5)
 
-/** Higest allowable value for PredictedPortsRelevanceTime; if this is
+/** Highest allowable value for PredictedPortsRelevanceTime; if this is
  * too high, our selection of exits will decrease for an extended
  * period of time to an uncomfortable level .*/
 #define MAX_PREDICTED_CIRCS_RELEVANCE (60*60)
@@ -2854,12 +2954,12 @@ options_validate_single_onion(or_options_t *options, char **msg)
     REJECT("Non-anonymous (Tor2web) mode is incompatible with using Tor as a "
            "hidden service. Please remove all HiddenServiceDir lines, or use "
            "a version of tor compiled without --enable-tor2web-mode, or use "
-           " HiddenServiceNonAnonymousMode.");
+           "HiddenServiceNonAnonymousMode.");
   }
 
   if (rend_service_allow_non_anonymous_connection(options)
       && options->UseEntryGuards) {
-    /* Single Onion services only use entry guards when uploading descriptors,
+    /* Single Onion services only use entry guards when uploading descriptors;
      * all other connections are one-hop. Further, Single Onions causes the
      * hidden service code to do things which break the path bias
      * detector, and it's far easier to turn off entry guards (and
@@ -2902,12 +3002,19 @@ options_validate(or_options_t *old_options, or_options_t *options,
   *msg = NULL;
 
   /* Set UseEntryGuards from the configured value, before we check it below.
-   * We change UseEntryGuards whenn it's incompatible with other options,
+   * We change UseEntryGuards when it's incompatible with other options,
    * but leave UseEntryGuards_option with the original value.
    * Always use the value of UseEntryGuards, not UseEntryGuards_option. */
   options->UseEntryGuards = options->UseEntryGuards_option;
 
   warn_about_relative_paths(options);
+
+#ifndef ENABLE_LEGACY_GUARD_ALGORITHM
+  if (options->UseDeprecatedGuardAlgorithm) {
+    log_warn(LD_CONFIG, "DeprecatedGuardAlgorithm not supported.");
+    return -1;
+  }
+#endif
 
   if (server_mode(options) &&
       (!strcmpstart(uname, "Windows 95") ||
@@ -5301,7 +5408,7 @@ options_init_logs(const or_options_t *old_options, or_options_t *options,
                            SPLIT_SKIP_SPACE|SPLIT_IGNORE_BLANK, 2);
 
     if (smartlist_len(elts) == 0)
-      smartlist_add(elts, tor_strdup("stdout"));
+      smartlist_add_strdup(elts, "stdout");
 
     if (smartlist_len(elts) == 1 &&
         (!strcasecmp(smartlist_get(elts,0), "stdout") ||
@@ -5836,7 +5943,7 @@ get_options_from_transport_options_line(const char *line,const char *transport)
     }
 
     /* add it to the options smartlist */
-    smartlist_add(options, tor_strdup(option));
+    smartlist_add_strdup(options, option);
     log_debug(LD_CONFIG, "Added %s to the list of options", escaped(option));
   } SMARTLIST_FOREACH_END(option);
 

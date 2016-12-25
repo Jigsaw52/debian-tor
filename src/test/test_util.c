@@ -1059,6 +1059,23 @@ test_util_time(void *arg)
   tt_int_op(-1,OP_EQ, parse_iso_time("2004-08-04 00:48:22.100", &t_res));
   tt_int_op(-1,OP_EQ, parse_iso_time("2004-08-04 00:48:22XYZ", &t_res));
 
+  /* but... that _is_ acceptable if we aren't being strict. */
+  t_res = 0;
+  i = parse_iso_time_("2004-08-04 00:48:22XYZ", &t_res, 0, 0);
+  tt_int_op(0,OP_EQ, i);
+  tt_int_op(t_res,OP_EQ, (time_t)1091580502UL);
+
+  /* try nospace variant. */
+  t_res = 0;
+  i = parse_iso_time_nospace("2004-08-04T00:48:22", &t_res);
+  tt_int_op(0,OP_EQ, i);
+  tt_int_op(t_res,OP_EQ, (time_t)1091580502UL);
+
+  tt_int_op(-1,OP_EQ, parse_iso_time("2004-08-04T00:48:22", &t_res));
+  tt_int_op(-1,OP_EQ, parse_iso_time_nospace("2004-08-04 00:48:22", &t_res));
+  tt_int_op(-1,OP_EQ, parse_iso_time("2004-08-04x00:48:22", &t_res));
+  tt_int_op(-1,OP_EQ, parse_iso_time_nospace("2004-08-04x00:48:22", &t_res));
+
   /* Test tor_gettimeofday */
 
   end.tv_sec = 4;
@@ -5612,6 +5629,33 @@ test_util_monotonic_time_ratchet(void *arg)
   ;
 }
 
+static void
+test_util_htonll(void *arg)
+{
+  (void)arg;
+#ifdef WORDS_BIGENDIAN
+  const uint64_t res_be = 0x8877665544332211;
+#else
+  const uint64_t res_le = 0x1122334455667788;
+#endif
+
+  tt_u64_op(0, OP_EQ, tor_htonll(0));
+  tt_u64_op(0, OP_EQ, tor_ntohll(0));
+  tt_u64_op(UINT64_MAX, OP_EQ, tor_htonll(UINT64_MAX));
+  tt_u64_op(UINT64_MAX, OP_EQ, tor_ntohll(UINT64_MAX));
+
+#ifdef WORDS_BIGENDIAN
+  tt_u64_op(res_be, OP_EQ, tor_htonll(0x8877665544332211));
+  tt_u64_op(res_be, OP_EQ, tor_ntohll(0x8877665544332211));
+#else
+  tt_u64_op(res_le, OP_EQ, tor_htonll(0x8877665544332211));
+  tt_u64_op(res_le, OP_EQ, tor_ntohll(0x8877665544332211));
+#endif
+
+ done:
+  ;
+}
+
 #define UTIL_LEGACY(name)                                               \
   { #name, test_util_ ## name , 0, NULL, NULL }
 
@@ -5705,6 +5749,7 @@ struct testcase_t util_tests[] = {
   UTIL_TEST(calloc_check, 0),
   UTIL_TEST(monotonic_time, 0),
   UTIL_TEST(monotonic_time_ratchet, TT_FORK),
+  UTIL_TEST(htonll, 0),
   END_OF_TESTCASES
 };
 

@@ -176,7 +176,7 @@ forward slash (/) in the configuration file and on the command line.
 GENERAL OPTIONS
 ---------------
 
-[[BandwidthRate]] **BandwidthRate** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
+[[BandwidthRate]] **BandwidthRate** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**TBytes**|**KBits**|**MBits**|**GBits**|**TBits**::
     A token bucket limits the average incoming bandwidth usage on this node
     to the specified number of bytes per second, and the average outgoing
     bandwidth usage to that same value.  If you want to run a relay in the
@@ -195,35 +195,35 @@ GENERAL OPTIONS
     To avoid confusion, we recommend writing "bytes" or "bits" explicitly,
     since it's easy to forget that "B" means bytes, not bits.
 
-[[BandwidthBurst]] **BandwidthBurst** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
+[[BandwidthBurst]] **BandwidthBurst** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**TBytes**|**KBits**|**MBits**|**GBits**|**TBits**::
     Limit the maximum token bucket size (also known as the burst) to the given
     number of bytes in each direction. (Default: 1 GByte)
 
-[[MaxAdvertisedBandwidth]] **MaxAdvertisedBandwidth** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
+[[MaxAdvertisedBandwidth]] **MaxAdvertisedBandwidth** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**TBytes**|**KBits**|**MBits**|**GBits**|**TBits**::
     If set, we will not advertise more than this amount of bandwidth for our
     BandwidthRate. Server operators who want to reduce the number of clients
     who ask to build circuits through them (since this is proportional to
     advertised bandwidth rate) can thus reduce the CPU demands on their server
     without impacting network performance.
 
-[[RelayBandwidthRate]] **RelayBandwidthRate** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
+[[RelayBandwidthRate]] **RelayBandwidthRate** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**TBytes**|**KBits**|**MBits**|**GBits**|**TBits**::
     If not 0, a separate token bucket limits the average incoming bandwidth
     usage for \_relayed traffic_ on this node to the specified number of bytes
     per second, and the average outgoing bandwidth usage to that same value.
     Relayed traffic currently is calculated to include answers to directory
     requests, but that may change in future versions. (Default: 0)
 
-[[RelayBandwidthBurst]] **RelayBandwidthBurst** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
+[[RelayBandwidthBurst]] **RelayBandwidthBurst** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**TBytes**|**KBits**|**MBits**|**GBits**|**TBits**::
     If not 0, limit the maximum token bucket size (also known as the burst) for
     \_relayed traffic_ to the given number of bytes in each direction.
     (Default: 0)
 
-[[PerConnBWRate]] **PerConnBWRate** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
+[[PerConnBWRate]] **PerConnBWRate** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**TBytes**|**KBits**|**MBits**|**GBits**|**TBits**::
     If set, do separate rate limiting for each connection from a non-relay.
     You should never need to change this value, since a network-wide value is
     published in the consensus and your relay will use that value. (Default: 0)
 
-[[PerConnBWBurst]] **PerConnBWBurst** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
+[[PerConnBWBurst]] **PerConnBWBurst** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**TBytes**|**KBits**|**MBits**|**GBits**|**TBits**::
     If set, do separate rate limiting for each connection from a non-relay.
     You should never need to change this value, since a network-wide value is
     published in the consensus and your relay will use that value. (Default: 0)
@@ -504,11 +504,13 @@ GENERAL OPTIONS
     (Default: 1)
 
 [[FetchUselessDescriptors]] **FetchUselessDescriptors** **0**|**1**::
-    If set to 1, Tor will fetch every non-obsolete descriptor from the
-    authorities that it hears about. Otherwise, it will avoid fetching useless
-    descriptors, for example for routers that are not running. This option is
-    useful if you're using the contributed "exitlist" script to enumerate Tor
-    nodes that exit to certain addresses. (Default: 0)
+    If set to 1, Tor will fetch every consensus flavor, descriptor, and
+    certificate that it hears about. Otherwise, it will avoid fetching useless
+    descriptors: flavors that it is not using to build circuits, and authority
+    certificates it does not trust. This option is useful if you're using a
+    tor client with an external parser that uses a full consensus.
+    This option fetches all documents, **DirCache** fetches and serves
+    all documents. (Default: 0)
 
 [[HTTPProxy]] **HTTPProxy** __host__[:__port__]::
     Tor will make all its directory requests through this host:port (or host:80
@@ -608,7 +610,7 @@ GENERAL OPTIONS
     message currently has at least one domain; most currently have exactly
     one.  This doesn't affect controller log messages. (Default: 0)
 
-[[MaxUnparseableDescSizeToLog]] **MaxUnparseableDescSizeToLog** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**::
+[[MaxUnparseableDescSizeToLog]] **MaxUnparseableDescSizeToLog** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**TBytes**::
     Unparseable descriptors (e.g. for votes, consensuses, routers) are logged
     in separate files by hash, up to the specified size in total.  Note that
     only files logged during the lifetime of this Tor process count toward the
@@ -716,6 +718,13 @@ GENERAL OPTIONS
     remote connections, but also to connections to private addresses like
     127.0.0.1 or 10.0.0.1.  This is mostly useful for debugging
     rate-limiting.  (Default: 0)
+
+[[ExtendByEd25519ID]] **ExtendByEd25519ID** **0**|**1**|**auto**::
+    If this option is set to 1, we always try to include a relay's Ed25519 ID
+    when telling the proceeding relay in a circuit to extend to it.
+    If this option is set to 0, we never include Ed25519 IDs when extending
+    circuits.  If the option is set to "default", we obey a
+    parameter in the consensus document. (Default: auto)
 
 CLIENT OPTIONS
 --------------
@@ -1208,15 +1217,6 @@ The following options are useful only for clients (that is, if
     Authorities, Single Onion Services, and Tor2web clients. In these cases,
     the this option is ignored. (Default: 1)
 
-[[UseEntryGuardsAsDirGuards]] **UseEntryGuardsAsDirGuards** **0**|**1**::
-    If this option is set to 1, and UseEntryGuards is also set to 1,
-    we try to use our entry guards as directory
-    guards, and failing that, pick more nodes to act as our directory guards.
-    This helps prevent an adversary from enumerating clients. It's only
-    available for clients (non-relay, non-bridge) that aren't configured to
-    download any non-default directory material.  It doesn't currently
-    do anything when we lack a live consensus. (Default: 1)
-
 [[GuardfractionFile]] **GuardfractionFile** __FILENAME__::
     V3 authoritative directories only. Configures the location of the
     guardfraction file which contains information about how long relays
@@ -1412,7 +1412,8 @@ The following options are useful only for clients (that is, if
     If true, Tor does not try to fulfill requests to connect to an internal
     address (like 127.0.0.1 or 192.168.0.1) __unless a exit node is
     specifically requested__ (for example, via a .exit hostname, or a
-    controller request).  (Default: 1)
+    controller request).  If true, multicast DNS hostnames for machines on the
+    local network (of the form *.local) are also rejected.  (Default: 1)
 
 [[DownloadExtraInfo]] **DownloadExtraInfo** **0**|**1**::
     If true, Tor downloads and caches "extra-info" documents. These documents
@@ -1867,7 +1868,7 @@ is non-zero):
     to 0 will disable the heartbeat. Otherwise, it must be at least 30
     minutes. (Default: 6 hours)
 
-[[AccountingMax]] **AccountingMax** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**|**TBytes**::
+[[AccountingMax]] **AccountingMax** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**TBytes**|**KBits**|**MBits**|**GBits**|**TBits**::
     Limits the max number of bytes sent and received within a set time period
     using a given calculation rule (see: AccountingStart, AccountingRule).
     Useful if you need to stay under a specific bandwidth. By default, the
@@ -2236,19 +2237,15 @@ on the public Tor network.
     list as acceptable on a single IP address. Set this to "0" for "no limit".
     (Default: 2)
 
-[[AuthDirMaxServersPerAuthAddr]] **AuthDirMaxServersPerAuthAddr** __NUM__::
-    Authoritative directories only. Like AuthDirMaxServersPerAddr, but applies
-    to addresses shared with directory authorities. (Default: 5)
-
-[[AuthDirFastGuarantee]] **AuthDirFastGuarantee** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
+[[AuthDirFastGuarantee]] **AuthDirFastGuarantee** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**TBytes**|**KBits**|**MBits**|**GBits**|**TBits**::
     Authoritative directories only. If non-zero, always vote the
     Fast flag for any relay advertising this amount of capacity or
     more. (Default: 100 KBytes)
 
-[[AuthDirGuardBWGuarantee]] **AuthDirGuardBWGuarantee** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
+[[AuthDirGuardBWGuarantee]] **AuthDirGuardBWGuarantee** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**TBytes**|**KBits**|**MBits**|**GBits**|**TBits**::
     Authoritative directories only. If non-zero, this advertised capacity
     or more is always sufficient to satisfy the bandwidth requirement
-    for the Guard flag. (Default: 250 KBytes)
+    for the Guard flag. (Default: 2 MBytes)
 
 [[AuthDirPinKeys]] **AuthDirPinKeys** **0**|**1**::
     Authoritative directories only. If non-zero, do not allow any relay to
@@ -2262,6 +2259,13 @@ on the public Tor network.
     If zero, the authority won't participate in the protocol. If non-zero
     (default), the flag "shared-rand-participate" is added to the authority
     vote indicating participation in the protocol. (Default: 1)
+
+[[AuthDirTestEd25519LinkKeys]] **AuthDirTestEd25519LinkKeys**  **0**|**1**::
+    Authoritative directories only. If this option is set to 0, then we treat
+    relays as "Running" if their RSA key is correct when we probe them,
+    regardless of their Ed25519 key. We should only ever set this option to 0
+    if there is some major bug in Ed25519 link authentication that causes us
+    to label all the relays as not Running.  (Default: 1)
 
 [[BridgePassword]] **BridgePassword** __Password__::
     If set, contains an HTTP authenticator that tells a bridge authority to
@@ -2334,9 +2338,9 @@ The following options are used to configure a hidden service.
 [[HiddenServiceDir]] **HiddenServiceDir** __DIRECTORY__::
     Store data files for a hidden service in DIRECTORY. Every hidden service
     must have a separate directory. You may use this option  multiple times to
-    specify multiple services. DIRECTORY must be an existing directory.
+    specify multiple services. If DIRECTORY does not exist, Tor will create it.
     (Note: in current versions of Tor, if DIRECTORY is a relative path,
-    it will be relative to current
+    it will be relative to the current
     working directory of Tor instance, not to its DataDirectory.  Do not
     rely on this behavior; it is not guaranteed to remain the same in future
     versions.)
@@ -2524,7 +2528,7 @@ The following options are used for running a testing Tor network.
     time. Changing this requires that **TestingTorNetwork** is set. (Default:
     10 minutes)
 
-[[TestingMinFastFlagThreshold]] **TestingMinFastFlagThreshold** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
+[[TestingMinFastFlagThreshold]] **TestingMinFastFlagThreshold** __N__ **bytes**|**KBytes**|**MBytes**|**GBytes**|**TBytes**|**KBits**|**MBits**|**GBits**|**TBits**::
     Minimum value for the Fast flag.  Overrides the ordinary minimum taken
     from the consensus when TestingTorNetwork is set. (Default: 0.)
 
@@ -2644,7 +2648,7 @@ The following options are used for running a testing Tor network.
     events.  Changing this requires that **TestingTorNetwork** is set.
     (Default: 0)
 
-[[TestingMinExitFlagThreshold]] **TestingMinExitFlagThreshold**  __N__ **KBytes**|**MBytes**|**GBytes**|**KBits**|**MBits**|**GBits**::
+[[TestingMinExitFlagThreshold]] **TestingMinExitFlagThreshold**  __N__ **KBytes**|**MBytes**|**GBytes**|**TBytes**|**KBits**|**MBits**|**GBits**|**TBits**::
     Sets a lower-bound for assigning an exit flag when running as an
     authority on a testing network. Overrides the usual default lower bound
     of 4 KB. (Default: 0)

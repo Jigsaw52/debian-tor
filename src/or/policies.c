@@ -6,6 +6,13 @@
 /**
  * \file policies.c
  * \brief Code to parse and use address policies and exit policies.
+ *
+ * We have two key kinds of address policy: full and compressed.  A full
+ * policy is an array of accept/reject patterns, to be applied in order.
+ * A short policy is simply a list of ports.  This module handles both
+ * kinds, including generic functions to apply them to addresses, and
+ * also including code to manage the global policies that we apply to
+ * incoming and outgoing connections.
  **/
 
 #define POLICIES_PRIVATE
@@ -2460,9 +2467,9 @@ policy_summarize(smartlist_t *policy, sa_family_t family)
         tor_snprintf(buf, sizeof(buf), "%d-%d", start_prt, AT(i)->prt_max);
 
       if (AT(i)->accepted)
-        smartlist_add(accepts, tor_strdup(buf));
+        smartlist_add_strdup(accepts, buf);
       else
-        smartlist_add(rejects, tor_strdup(buf));
+        smartlist_add_strdup(rejects, buf);
 
       if (last)
         break;
@@ -2643,7 +2650,7 @@ write_short_policy(const short_policy_t *policy)
       smartlist_add_asprintf(sl, "%d-%d", e->min_port, e->max_port);
     }
     if (i < policy->n_entries-1)
-      smartlist_add(sl, tor_strdup(","));
+      smartlist_add_strdup(sl, ",");
   }
   answer = smartlist_join_strings(sl, "", 0, NULL);
   SMARTLIST_FOREACH(sl, char *, a, tor_free(a));

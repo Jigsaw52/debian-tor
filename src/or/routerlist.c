@@ -93,6 +93,7 @@
 #define ROUTERLIST_PRIVATE
 #include "or.h"
 #include "backtrace.h"
+#include "bridges.h"
 #include "crypto_ed25519.h"
 #include "circuitstats.h"
 #include "config.h"
@@ -586,7 +587,7 @@ trusted_dirs_load_certs_from_string(const char *contents, int source,
                "signing key %s", from_store ? "cached" : "downloaded",
                ds->nickname, hex_str(cert->signing_key_digest,DIGEST_LEN));
     } else {
-      int adding = directory_caches_unknown_auth_certs(get_options());
+      int adding = we_want_to_fetch_unknown_auth_certs(get_options());
       log_info(LD_DIR, "%s %s certificate for unrecognized directory "
                "authority with signing key %s",
                adding ? "Adding" : "Not adding",
@@ -929,7 +930,8 @@ authority_certs_fetch_resource_impl(const char *resource,
                                     const routerstatus_t *rs)
 {
   const or_options_t *options = get_options();
-  int get_via_tor = purpose_needs_anonymity(DIR_PURPOSE_FETCH_CERTIFICATE, 0);
+  int get_via_tor = purpose_needs_anonymity(DIR_PURPOSE_FETCH_CERTIFICATE, 0,
+                                            resource);
 
   /* Make sure bridge clients never connect to anything but a bridge */
   if (options->UseBridges) {
@@ -969,7 +971,7 @@ authority_certs_fetch_resource_impl(const char *resource,
     directory_initiate_command_routerstatus(rs,
                                             DIR_PURPOSE_FETCH_CERTIFICATE,
                                             0, indirection, resource, NULL,
-                                            0, 0);
+                                            0, 0, NULL);
     return;
   }
 
@@ -1011,7 +1013,7 @@ authority_certs_fetch_missing(networkstatus_t *status, time_t now,
   char *resource = NULL;
   cert_list_t *cl;
   const or_options_t *options = get_options();
-  const int cache = directory_caches_unknown_auth_certs(options);
+  const int keep_unknown = we_want_to_fetch_unknown_auth_certs(options);
   fp_pair_t *fp_tmp = NULL;
   char id_digest_str[2*DIGEST_LEN+1];
   char sk_digest_str[2*DIGEST_LEN+1];
@@ -1083,9 +1085,10 @@ authority_certs_fetch_missing(networkstatus_t *status, time_t now,
       if (!smartlist_len(voter->sigs))
         continue; /* This authority never signed this consensus, so don't
                    * go looking for a cert with key digest 0000000000. */
-      if (!cache &&
+      if (!keep_unknown &&
           !trusteddirserver_get_by_v3_auth_digest(voter->identity_digest))
-        continue; /* We are not a cache, and we don't know this authority.*/
+        continue; /* We don't want unknown certs, and we don't know this
+                   * authority.*/
 
       /*
        * If we don't know *any* cert for this authority, and a download by ID
@@ -1202,7 +1205,7 @@ authority_certs_fetch_missing(networkstatus_t *status, time_t now,
     int need_plus = 0;
     smartlist_t *fps = smartlist_new();
 
-    smartlist_add(fps, tor_strdup("fp/"));
+    smartlist_add_strdup(fps, "fp/");
 
     SMARTLIST_FOREACH_BEGIN(missing_id_digests, const char *, d) {
       char *fp = NULL;
@@ -1242,7 +1245,7 @@ authority_certs_fetch_missing(networkstatus_t *status, time_t now,
     int need_plus = 0;
     smartlist_t *fp_pairs = smartlist_new();
 
-    smartlist_add(fp_pairs, tor_strdup("fp-sk/"));
+    smartlist_add_strdup(fp_pairs, "fp-sk/");
 
     SMARTLIST_FOREACH_BEGIN(missing_cert_digests, const fp_pair_t *, d) {
       char *fp_pair = NULL;
@@ -2001,6 +2004,10 @@ router_pick_directory_server_impl(dirinfo_type_t type, int flags,
   int try_excluding = 1, n_excluded = 0, n_busy = 0;
   int try_ip_pref = 1;
 
+#ifndef ENABLE_LEGACY_GUARD_ALGORITHM
+  tor_assert_nonfatal(! for_guard);
+#endif
+
   if (!consensus)
     return NULL;
 
@@ -2036,10 +2043,12 @@ router_pick_directory_server_impl(dirinfo_type_t type, int flags,
     if ((type & EXTRAINFO_DIRINFO) &&
         !router_supports_extrainfo(node->identity, is_trusted_extrainfo))
       continue;
+#ifdef ENABLE_LEGACY_GUARD_ALGORITHM
     /* Don't make the same node a guard twice */
-    if (for_guard && node->using_as_guard) {
-      continue;
-    }
+     if (for_guard && is_node_used_as_guard(node)) {
+       continue;
+     }
+#endif
     /* Ensure that a directory guard is actually a guard node. */
     if (for_guard && !node->is_possible_guard) {
       continue;
@@ -2989,20 +2998,6 @@ router_digest_is_trusted_dir_type(const char *digest, dirinfo_type_t type)
   return 0;
 }
 
-/** Return true iff <b>addr</b> is the address of one of our trusted
- * directory authorities. */
-int
-router_addr_is_trusted_dir(uint32_t addr)
-{
-  if (!trusted_dir_servers)
-    return 0;
-  SMARTLIST_FOREACH(trusted_dir_servers, dir_server_t *, ent,
-    if (ent->addr == addr)
-      return 1;
-    );
-  return 0;
-}
-
 /** If hexdigest is correctly formed, base16_decode it into
  * digest, which must have DIGEST_LEN space in it.
  * Return 0 on success, -1 on failure.
@@ -3907,7 +3902,7 @@ router_add_to_routerlist(routerinfo_t *router, const char **msg,
                router_describe(router));
       *msg = "Router descriptor is not referenced by any network-status.";
 
-      /* Only journal this desc if we'll be serving it. */
+      /* Only journal this desc if we want to keep old descriptors */
       if (!from_cache && should_cache_old_descriptors())
         signed_desc_append_to_journal(&router->cache_info,
                                       &routerlist->desc_store);
@@ -4494,7 +4489,7 @@ router_load_extrainfo_from_string(const char *s, const char *eos,
                         ei->cache_info.identity_digest,
                       DIGEST_LEN);
         smartlist_string_remove(requested_fingerprints, fp);
-        /* We silently let people stuff us with extrainfos we didn't ask for,
+        /* We silently let relays stuff us with extrainfos we didn't ask for,
          * so long as we would have wanted them anyway.  Since we always fetch
          * all the extrainfos we want, and we never actually act on them
          * inside Tor, this should be harmless. */
@@ -4537,13 +4532,14 @@ router_load_extrainfo_from_string(const char *s, const char *eos,
   smartlist_free(extrainfo_list);
 }
 
-/** Return true iff any networkstatus includes a descriptor whose digest
- * is that of <b>desc</b>. */
+/** Return true iff the latest ns-flavored consensus includes a descriptor
+ * whose digest is that of <b>desc</b>. */
 static int
 signed_desc_digest_is_recognized(signed_descriptor_t *desc)
 {
   const routerstatus_t *rs;
-  networkstatus_t *consensus = networkstatus_get_latest_consensus();
+  networkstatus_t *consensus = networkstatus_get_latest_consensus_by_flavor(
+                                                                      FLAV_NS);
 
   if (consensus) {
     rs = networkstatus_vote_find_entry(consensus, desc->identity_digest);
@@ -4589,7 +4585,7 @@ router_exit_policy_rejects_all(const routerinfo_t *router)
   return router->policy_is_reject_star;
 }
 
-/** Create an directory server at <b>address</b>:<b>port</b>, with OR identity
+/** Create a directory server at <b>address</b>:<b>port</b>, with OR identity
  * key <b>digest</b> which has DIGEST_LEN bytes.  If <b>address</b> is NULL,
  * add ourself.  If <b>is_authority</b>, this is a directory authority.  Return
  * the new directory server entry on success or NULL on failure. */
@@ -4957,7 +4953,7 @@ MOCK_IMPL(STATIC void, initiate_descriptor_downloads,
     directory_initiate_command_routerstatus(source, purpose,
                                             ROUTER_PURPOSE_GENERAL,
                                             DIRIND_ONEHOP,
-                                            resource, NULL, 0, 0);
+                                            resource, NULL, 0, 0, NULL);
   } else {
     directory_get_from_dirserver(purpose, ROUTER_PURPOSE_GENERAL, resource,
                                  pds_flags, DL_WANT_ANY_DIRSERVER);
@@ -5166,7 +5162,7 @@ update_consensus_router_descriptor_downloads(time_t now, int is_vote,
         ++n_would_reject;
         continue; /* We would throw it out immediately. */
       }
-      if (!directory_caches_dir_info(options) &&
+      if (!we_want_to_fetch_flavor(options, consensus->flavor) &&
           !client_would_use_router(rs, now, options)) {
         ++n_wouldnt_use;
         continue; /* We would never use it ourself. */
