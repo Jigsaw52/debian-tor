@@ -509,6 +509,39 @@ circuit_count_pending_on_channel(channel_t *chan)
   return cnt;
 }
 
+/** Remove <b>origin_circ</b> from the global list of origin circuits.
+ * Called when we are freeing a circuit.
+ */
+static void
+circuit_remove_from_origin_circuit_list(origin_circuit_t *origin_circ)
+{
+  int origin_idx = origin_circ->global_origin_circuit_list_idx;
+  if (origin_idx < 0)
+    return;
+  origin_circuit_t *c2;
+  tor_assert(origin_idx <= smartlist_len(global_origin_circuit_list));
+  c2 = smartlist_get(global_origin_circuit_list, origin_idx);
+  tor_assert(origin_circ == c2);
+  smartlist_del(global_origin_circuit_list, origin_idx);
+  if (origin_idx < smartlist_len(global_origin_circuit_list)) {
+    origin_circuit_t *replacement =
+      smartlist_get(global_origin_circuit_list, origin_idx);
+    replacement->global_origin_circuit_list_idx = origin_idx;
+  }
+  origin_circ->global_origin_circuit_list_idx = -1;
+}
+
+/** Add <b>origin_circ</b> to the global list of origin circuits. Called
+ * when creating the circuit. */
+static void
+circuit_add_to_origin_circuit_list(origin_circuit_t *origin_circ)
+{
+  tor_assert(origin_circ->global_origin_circuit_list_idx == -1);
+  smartlist_t *lst = circuit_get_global_origin_circuit_list();
+  smartlist_add(lst, origin_circ);
+  origin_circ->global_origin_circuit_list_idx = smartlist_len(lst) - 1;
+}
+
 /** Detach from the global circuit list, and deallocate, all
  * circuits that have been marked for close.
  */
@@ -533,15 +566,7 @@ circuit_close_all_marked(void)
 
     /* Remove it from the origin circuit list, if appropriate. */
     if (CIRCUIT_IS_ORIGIN(circ)) {
-      origin_circuit_t *origin_circ = TO_ORIGIN_CIRCUIT(circ);
-      int origin_idx = origin_circ->global_origin_circuit_list_idx;
-      smartlist_del(global_origin_circuit_list, origin_idx);
-      if (origin_idx < smartlist_len(global_origin_circuit_list)) {
-        origin_circuit_t *replacement =
-          smartlist_get(global_origin_circuit_list, origin_idx);
-        replacement->global_origin_circuit_list_idx = origin_idx;
-      }
-      origin_circ->global_origin_circuit_list_idx = -1;
+      circuit_remove_from_origin_circuit_list(TO_ORIGIN_CIRCUIT(circ));
     }
 
     circuit_about_to_free(circ);
@@ -566,7 +591,7 @@ circuit_get_global_origin_circuit_list(void)
 {
   if (NULL == global_origin_circuit_list)
     global_origin_circuit_list = smartlist_new();
-  return global_circuitlist;
+  return global_origin_circuit_list;
 }
 
 /** Function to make circ-\>state human-readable */
@@ -811,11 +836,8 @@ origin_circuit_new(void)
   init_circuit_base(TO_CIRCUIT(circ));
 
   /* Add to origin-list. */
-  if (!global_origin_circuit_list)
-    global_origin_circuit_list = smartlist_new();
-  smartlist_add(global_origin_circuit_list, circ);
-  circ->global_origin_circuit_list_idx =
-    smartlist_len(global_origin_circuit_list) - 1;
+  circ->global_origin_circuit_list_idx = -1;
+  circuit_add_to_origin_circuit_list(circ);
 
   circuit_build_times_update_last_circ(get_circuit_build_times_mutable());
 
@@ -875,16 +897,7 @@ circuit_free(circuit_t *circ)
     memlen = sizeof(origin_circuit_t);
     tor_assert(circ->magic == ORIGIN_CIRCUIT_MAGIC);
 
-    if (ocirc->global_origin_circuit_list_idx != -1) {
-      int idx = ocirc->global_origin_circuit_list_idx;
-      origin_circuit_t *c2 = smartlist_get(global_origin_circuit_list, idx);
-      tor_assert(c2 == ocirc);
-      smartlist_del(global_origin_circuit_list, idx);
-      if (idx < smartlist_len(global_origin_circuit_list)) {
-        c2 = smartlist_get(global_origin_circuit_list, idx);
-        c2->global_origin_circuit_list_idx = idx;
-      }
-    }
+    circuit_remove_from_origin_circuit_list(ocirc);
 
     if (ocirc->build_state) {
         extend_info_free(ocirc->build_state->chosen_exit);
@@ -1440,6 +1453,41 @@ circuit_get_ready_rend_circ_by_rend_data(const rend_data_t *rend_data)
   return NULL;
 }
 
+/** Return the first service introduction circuit originating from the global
+ * circuit list after <b>start</b> or at the start of the list if <b>start</b>
+ * is NULL. Return NULL if no circuit is found.
+ *
+ * A service introduction point circuit has a purpose of either
+ * CIRCUIT_PURPOSE_S_ESTABLISH_INTRO or CIRCUIT_PURPOSE_S_INTRO. This does not
+ * return a circuit marked for close and its state must be open. */
+origin_circuit_t *
+circuit_get_next_service_intro_circ(origin_circuit_t *start)
+{
+  int idx = 0;
+  smartlist_t *lst = circuit_get_global_list();
+
+  if (start) {
+    idx = TO_CIRCUIT(start)->global_circuitlist_idx + 1;
+  }
+
+  for ( ; idx < smartlist_len(lst); ++idx) {
+    circuit_t *circ = smartlist_get(lst, idx);
+
+    /* Ignore a marked for close circuit or purpose not matching a service
+     * intro point or if the state is not open. */
+    if (circ->marked_for_close || circ->state != CIRCUIT_STATE_OPEN ||
+        (circ->purpose != CIRCUIT_PURPOSE_S_ESTABLISH_INTRO &&
+         circ->purpose != CIRCUIT_PURPOSE_S_INTRO)) {
+      continue;
+    }
+    /* The purposes we are looking for are only for origin circuits so the
+     * following is valid. */
+    return TO_ORIGIN_CIRCUIT(circ);
+  }
+  /* Not found. */
+  return NULL;
+}
+
 /** Return the first circuit originating here in global_circuitlist after
  * <b>start</b> whose purpose is <b>purpose</b>, and where <b>digest</b> (if
  * set) matches the private key digest of the rend data associated with the
@@ -1809,6 +1857,9 @@ circuit_about_to_free(circuit_t *circ)
   if (circ->state == CIRCUIT_STATE_CHAN_WAIT) {
     if (circuits_pending_chans)
       smartlist_remove(circuits_pending_chans, circ);
+  }
+  if (circuits_pending_other_guards) {
+    smartlist_remove(circuits_pending_other_guards, circ);
   }
   if (CIRCUIT_IS_ORIGIN(circ)) {
     control_event_circuit_status(TO_ORIGIN_CIRCUIT(circ),

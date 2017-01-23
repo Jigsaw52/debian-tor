@@ -159,6 +159,8 @@ tor_addr_from_sockaddr(tor_addr_t *a, const struct sockaddr *sa,
   tor_assert(a);
   tor_assert(sa);
 
+  /* This memset is redundant; leaving it in to avoid any future accidents,
+     however. */
   memset(a, 0, sizeof(*a));
 
   if (sa->sa_family == AF_INET) {
@@ -235,8 +237,8 @@ tor_addr_make_null(tor_addr_t *a, sa_family_t family)
  *
  * Return 0 on success, -1 on failure; 1 on transient failure.
  */
-int
-tor_addr_lookup(const char *name, uint16_t family, tor_addr_t *addr)
+MOCK_IMPL(int,
+tor_addr_lookup,(const char *name, uint16_t family, tor_addr_t *addr))
 {
   /* Perhaps eventually this should be replaced by a tor_getaddrinfo or
    * something.

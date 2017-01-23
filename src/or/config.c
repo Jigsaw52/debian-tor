@@ -212,7 +212,7 @@ static config_var_t option_vars_[] = {
   V(AuthDirInvalidCCs,           CSV,      ""),
   V(AuthDirFastGuarantee,        MEMUNIT,  "100 KB"),
   V(AuthDirGuardBWGuarantee,     MEMUNIT,  "2 MB"),
-  V(AuthDirPinKeys,              BOOL,     "0"),
+  V(AuthDirPinKeys,              BOOL,     "1"),
   V(AuthDirReject,               LINELIST, NULL),
   V(AuthDirRejectCCs,            CSV,      ""),
   OBSOLETE("AuthDirRejectUnlisted"),
@@ -3361,23 +3361,6 @@ options_validate(or_options_t *old_options, or_options_t *options,
            "of the Internet, so they must not set Reachable*Addresses "
            "or FascistFirewall or FirewallPorts or ClientUseIPv4 0.");
 
-  /* We check if Reachable*Addresses blocks all addresses in
-   * parse_reachable_addresses(). */
-
-#define WARN_PLEASE_USE_IPV6_LOG_MSG \
-        "ClientPreferIPv6%sPort 1 is ignored unless tor is using IPv6. " \
-        "Please set ClientUseIPv6 1, ClientUseIPv4 0, or configure bridges."
-
-  if (!fascist_firewall_use_ipv6(options)
-      && options->ClientPreferIPv6ORPort == 1)
-    log_warn(LD_CONFIG, WARN_PLEASE_USE_IPV6_LOG_MSG, "OR");
-
-  if (!fascist_firewall_use_ipv6(options)
-      && options->ClientPreferIPv6DirPort == 1)
-    log_warn(LD_CONFIG, WARN_PLEASE_USE_IPV6_LOG_MSG, "Dir");
-
-#undef WARN_PLEASE_USE_IPV6_LOG_MSG
-
   if (options->UseBridges &&
       server_mode(options))
     REJECT("Servers must be able to freely connect to the rest "
@@ -3388,6 +3371,11 @@ options_validate(or_options_t *old_options, or_options_t *options,
    * circuits, yet we never actually use them. */
   if (options->UseBridges && options->EntryNodes)
     REJECT("You cannot set both UseBridges and EntryNodes.");
+
+  /* If we have UseBridges as 1 and UseEntryGuards as 0, we end up bypassing
+   * the use of bridges */
+  if (options->UseBridges && !options->UseEntryGuards)
+    REJECT("Setting UseBridges requires also setting UseEntryGuards.");
 
   options->MaxMemInQueues =
     compute_real_max_mem_in_queues(options->MaxMemInQueues_raw,
@@ -3557,7 +3545,7 @@ options_validate(or_options_t *old_options, or_options_t *options,
     int severity = LOG_NOTICE;
     /* Be a little quieter if we've deliberately disabled
      * LearnCircuitBuildTimeout. */
-    if (circuit_build_times_disabled()) {
+    if (circuit_build_times_disabled(options)) {
       severity = LOG_INFO;
     }
     log_fn(severity, LD_CONFIG, "You disabled LearnCircuitBuildTimeout, but "
@@ -4362,8 +4350,8 @@ compute_real_max_mem_in_queues(const uint64_t val, int log_guess)
 }
 
 /* If we have less than 300 MB suggest disabling dircache */
-#define DIRCACHE_MIN_MB_BANDWIDTH 300
-#define DIRCACHE_MIN_BANDWIDTH (DIRCACHE_MIN_MB_BANDWIDTH*ONE_MEGABYTE)
+#define DIRCACHE_MIN_MEM_MB 300
+#define DIRCACHE_MIN_MEM_BYTES (DIRCACHE_MIN_MEM_MB*ONE_MEGABYTE)
 #define STRINGIFY(val) #val
 
 /** Create a warning message for emitting if we are a dircache but may not have
@@ -4383,21 +4371,21 @@ have_enough_mem_for_dircache(const or_options_t *options, size_t total_mem,
     }
   }
   if (options->DirCache) {
-    if (total_mem < DIRCACHE_MIN_BANDWIDTH) {
+    if (total_mem < DIRCACHE_MIN_MEM_BYTES) {
       if (options->BridgeRelay) {
         *msg = tor_strdup("Running a Bridge with less than "
-                      STRINGIFY(DIRCACHE_MIN_MB_BANDWIDTH) " MB of memory is "
-                      "not recommended.");
+                      STRINGIFY(DIRCACHE_MIN_MEM_MB) " MB of memory is not "
+                      "recommended.");
       } else {
         *msg = tor_strdup("Being a directory cache (default) with less than "
-                      STRINGIFY(DIRCACHE_MIN_MB_BANDWIDTH) " MB of memory is "
-                      "not recommended and may consume most of the available "
+                      STRINGIFY(DIRCACHE_MIN_MEM_MB) " MB of memory is not "
+                      "recommended and may consume most of the available "
                       "resources, consider disabling this functionality by "
                       "setting the DirCache option to 0.");
       }
     }
   } else {
-    if (total_mem >= DIRCACHE_MIN_BANDWIDTH) {
+    if (total_mem >= DIRCACHE_MIN_MEM_BYTES) {
       *msg = tor_strdup("DirCache is disabled and we are configured as a "
                "relay. This may disqualify us from becoming a guard in the "
                "future.");
@@ -4522,7 +4510,6 @@ options_transition_allowed(const or_options_t *old,
     } while (0)
 
     SB_NOCHANGE_STR(Address);
-    SB_NOCHANGE_STR(PidFile);
     SB_NOCHANGE_STR(ServerDNSResolvConfFile);
     SB_NOCHANGE_STR(DirPortFrontPage);
     SB_NOCHANGE_STR(CookieAuthFile);
@@ -5313,35 +5300,35 @@ addressmap_register_auto(const char *from, const char *to,
   int from_wildcard = 0, to_wildcard = 0;
 
   *msg = "whoops, forgot the error message";
-  if (1) {
-    if (!strcmp(to, "*") || !strcmp(from, "*")) {
-      *msg = "can't remap from or to *";
-      return -1;
-    }
-    /* Detect asterisks in expressions of type: '*.example.com' */
-    if (!strncmp(from,"*.",2)) {
-      from += 2;
-      from_wildcard = 1;
-    }
-    if (!strncmp(to,"*.",2)) {
-      to += 2;
-      to_wildcard = 1;
-    }
 
-    if (to_wildcard && !from_wildcard) {
-      *msg =  "can only use wildcard (i.e. '*.') if 'from' address "
-        "uses wildcard also";
-      return -1;
-    }
-
-    if (address_is_invalid_destination(to, 1)) {
-      *msg = "destination is invalid";
-      return -1;
-    }
-
-    addressmap_register(from, tor_strdup(to), expires, addrmap_source,
-                        from_wildcard, to_wildcard);
+  if (!strcmp(to, "*") || !strcmp(from, "*")) {
+    *msg = "can't remap from or to *";
+    return -1;
   }
+  /* Detect asterisks in expressions of type: '*.example.com' */
+  if (!strncmp(from,"*.",2)) {
+    from += 2;
+    from_wildcard = 1;
+  }
+  if (!strncmp(to,"*.",2)) {
+    to += 2;
+    to_wildcard = 1;
+  }
+
+  if (to_wildcard && !from_wildcard) {
+    *msg =  "can only use wildcard (i.e. '*.') if 'from' address "
+      "uses wildcard also";
+    return -1;
+  }
+
+  if (address_is_invalid_destination(to, 1)) {
+    *msg = "destination is invalid";
+    return -1;
+  }
+
+  addressmap_register(from, tor_strdup(to), expires, addrmap_source,
+                      from_wildcard, to_wildcard);
+
   return 0;
 }
 
@@ -7859,7 +7846,7 @@ getinfo_helper_config(control_connection_t *conn,
         case CONFIG_TYPE_CSV: type = "CommaList"; break;
         case CONFIG_TYPE_CSV_INTERVAL: type = "TimeIntervalCommaList"; break;
         case CONFIG_TYPE_LINELIST: type = "LineList"; break;
-        case CONFIG_TYPE_LINELIST_S: type = "Dependant"; break;
+        case CONFIG_TYPE_LINELIST_S: type = "Dependent"; break;
         case CONFIG_TYPE_LINELIST_V: type = "Virtual"; break;
         default:
         case CONFIG_TYPE_OBSOLETE:

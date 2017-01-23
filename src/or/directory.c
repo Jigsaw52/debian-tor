@@ -1857,15 +1857,15 @@ body_is_plausible(const char *body, size_t len, int purpose)
   if (purpose == DIR_PURPOSE_FETCH_MICRODESC) {
     return (!strcmpstart(body,"onion-key"));
   }
-  if (1) {
-    if (!strcmpstart(body,"router") ||
-        !strcmpstart(body,"network-status"))
-      return 1;
-    for (i=0;i<32;++i) {
-      if (!TOR_ISPRINT(body[i]) && !TOR_ISSPACE(body[i]))
-        return 0;
-    }
+
+  if (!strcmpstart(body,"router") ||
+      !strcmpstart(body,"network-status"))
+    return 1;
+  for (i=0;i<32;++i) {
+    if (!TOR_ISPRINT(body[i]) && !TOR_ISSPACE(body[i]))
+      return 0;
   }
+
   return 1;
 }
 
@@ -1966,6 +1966,21 @@ connection_dir_client_reached_eof(dir_connection_t *conn)
             conn->base_.address, conn->base_.port, status_code,
             escaped(reason),
             conn->base_.purpose);
+
+  if (conn->guard_state) {
+    /* we count the connection as successful once we can read from it.  We do
+     * not, however, delay use of the circuit here, since it's just for a
+     * one-hop directory request. */
+    /* XXXXprop271 note that this will not do the right thing for other
+     * waiting circuits that would be triggered by this circuit becoming
+     * complete/usable. But that's ok, I think.
+     */
+    /* XXXXprop271 should we count this as only a partial success somehow?
+    */
+    entry_guard_succeeded(&conn->guard_state);
+    circuit_guard_state_free(conn->guard_state);
+    conn->guard_state = NULL;
+  }
 
   /* now check if it's got any hints for us about our IP address. */
   if (conn->dirconn_direct) {
@@ -2578,21 +2593,6 @@ connection_dir_process_inbuf(dir_connection_t *conn)
   tor_assert(conn);
   tor_assert(conn->base_.type == CONN_TYPE_DIR);
 
-  if (conn->guard_state) {
-    /* we count the connection as successful once we can read from it.  We do
-     * not, however, delay use of the circuit here, since it's just for a
-     * one-hop directory request. */
-    /* XXXXprop271 note that this will not do the right thing for other
-     * waiting circuits that would be triggered by this circuit becoming
-     * complete/usable. But that's ok, I think.
-     */
-    /* XXXXprop271 should we count this as only a partial success somehow?
-    */
-    entry_guard_succeeded(&conn->guard_state);
-    circuit_guard_state_free(conn->guard_state);
-    conn->guard_state = NULL;
-  }
-
   /* Directory clients write, then read data until they receive EOF;
    * directory servers read data until they get an HTTP command, then
    * write their response (when it's finished flushing, they mark for
@@ -3030,63 +3030,61 @@ handle_get_current_consensus(dir_connection_t *conn,
     smartlist_t *dir_fps = smartlist_new();
     long lifetime = NETWORKSTATUS_CACHE_LIFETIME;
 
-    if (1) {
-      networkstatus_t *v;
-      time_t now = time(NULL);
-      const char *want_fps = NULL;
-      char *flavor = NULL;
-      int flav = FLAV_NS;
-      #define CONSENSUS_URL_PREFIX "/tor/status-vote/current/consensus/"
-      #define CONSENSUS_FLAVORED_PREFIX "/tor/status-vote/current/consensus-"
-      /* figure out the flavor if any, and who we wanted to sign the thing */
-      if (!strcmpstart(url, CONSENSUS_FLAVORED_PREFIX)) {
-        const char *f, *cp;
-        f = url + strlen(CONSENSUS_FLAVORED_PREFIX);
-        cp = strchr(f, '/');
-        if (cp) {
-          want_fps = cp+1;
-          flavor = tor_strndup(f, cp-f);
-        } else {
-          flavor = tor_strdup(f);
-        }
-        flav = networkstatus_parse_flavor_name(flavor);
-        if (flav < 0)
-          flav = FLAV_NS;
+    networkstatus_t *v;
+    time_t now = time(NULL);
+    const char *want_fps = NULL;
+    char *flavor = NULL;
+    int flav = FLAV_NS;
+#define CONSENSUS_URL_PREFIX "/tor/status-vote/current/consensus/"
+#define CONSENSUS_FLAVORED_PREFIX "/tor/status-vote/current/consensus-"
+    /* figure out the flavor if any, and who we wanted to sign the thing */
+    if (!strcmpstart(url, CONSENSUS_FLAVORED_PREFIX)) {
+      const char *f, *cp;
+      f = url + strlen(CONSENSUS_FLAVORED_PREFIX);
+      cp = strchr(f, '/');
+      if (cp) {
+        want_fps = cp+1;
+        flavor = tor_strndup(f, cp-f);
       } else {
-        if (!strcmpstart(url, CONSENSUS_URL_PREFIX))
-          want_fps = url+strlen(CONSENSUS_URL_PREFIX);
+        flavor = tor_strdup(f);
       }
-
-      v = networkstatus_get_latest_consensus_by_flavor(flav);
-
-      if (v && !networkstatus_consensus_reasonably_live(v, now)) {
-        write_http_status_line(conn, 404, "Consensus is too old");
-        warn_consensus_is_too_old(v, flavor, now);
-        smartlist_free(dir_fps);
-        geoip_note_ns_response(GEOIP_REJECT_NOT_FOUND);
-        tor_free(flavor);
-        goto done;
-      }
-
-      if (v && want_fps &&
-          !client_likes_consensus(v, want_fps)) {
-        write_http_status_line(conn, 404, "Consensus not signed by sufficient "
-                                          "number of requested authorities");
-        smartlist_free(dir_fps);
-        geoip_note_ns_response(GEOIP_REJECT_NOT_ENOUGH_SIGS);
-        tor_free(flavor);
-        goto done;
-      }
-
-      {
-        char *fp = tor_malloc_zero(DIGEST_LEN);
-        if (flavor)
-          strlcpy(fp, flavor, DIGEST_LEN);
-        tor_free(flavor);
-        smartlist_add(dir_fps, fp);
-      }
-      lifetime = (v && v->fresh_until > now) ? v->fresh_until - now : 0;
+      flav = networkstatus_parse_flavor_name(flavor);
+      if (flav < 0)
+        flav = FLAV_NS;
+    } else {
+      if (!strcmpstart(url, CONSENSUS_URL_PREFIX))
+        want_fps = url+strlen(CONSENSUS_URL_PREFIX);
     }
+
+    v = networkstatus_get_latest_consensus_by_flavor(flav);
+
+    if (v && !networkstatus_consensus_reasonably_live(v, now)) {
+      write_http_status_line(conn, 404, "Consensus is too old");
+      warn_consensus_is_too_old(v, flavor, now);
+      smartlist_free(dir_fps);
+      geoip_note_ns_response(GEOIP_REJECT_NOT_FOUND);
+      tor_free(flavor);
+      goto done;
+    }
+
+    if (v && want_fps &&
+        !client_likes_consensus(v, want_fps)) {
+      write_http_status_line(conn, 404, "Consensus not signed by sufficient "
+                             "number of requested authorities");
+      smartlist_free(dir_fps);
+      geoip_note_ns_response(GEOIP_REJECT_NOT_ENOUGH_SIGS);
+      tor_free(flavor);
+      goto done;
+    }
+
+    {
+      char *fp = tor_malloc_zero(DIGEST_LEN);
+      if (flavor)
+        strlcpy(fp, flavor, DIGEST_LEN);
+      tor_free(flavor);
+      smartlist_add(dir_fps, fp);
+    }
+    lifetime = (v && v->fresh_until > now) ? v->fresh_until - now : 0;
 
     if (!smartlist_len(dir_fps)) { /* we failed to create/cache cp */
       write_http_status_line(conn, 503, "Network status object unavailable");
@@ -3122,21 +3120,19 @@ handle_get_current_consensus(dir_connection_t *conn,
       goto done;
     }
 
-    if (1) {
-      tor_addr_t addr;
-      if (tor_addr_parse(&addr, (TO_CONN(conn))->address) >= 0) {
-        geoip_note_client_seen(GEOIP_CLIENT_NETWORKSTATUS,
-                               &addr, NULL,
-                               time(NULL));
-        geoip_note_ns_response(GEOIP_SUCCESS);
-        /* Note that a request for a network status has started, so that we
-         * can measure the download time later on. */
-        if (conn->dirreq_id)
-          geoip_start_dirreq(conn->dirreq_id, dlen, DIRREQ_TUNNELED);
-        else
-          geoip_start_dirreq(TO_CONN(conn)->global_identifier, dlen,
-                             DIRREQ_DIRECT);
-      }
+    tor_addr_t addr;
+    if (tor_addr_parse(&addr, (TO_CONN(conn))->address) >= 0) {
+      geoip_note_client_seen(GEOIP_CLIENT_NETWORKSTATUS,
+                             &addr, NULL,
+                             time(NULL));
+      geoip_note_ns_response(GEOIP_SUCCESS);
+      /* Note that a request for a network status has started, so that we
+       * can measure the download time later on. */
+      if (conn->dirreq_id)
+        geoip_start_dirreq(conn->dirreq_id, dlen, DIRREQ_TUNNELED);
+      else
+        geoip_start_dirreq(TO_CONN(conn)->global_identifier, dlen,
+                           DIRREQ_DIRECT);
     }
 
     write_http_response_header(conn, -1, compressed,
@@ -3528,13 +3524,6 @@ handle_get_hs_descriptor_v3(dir_connection_t *conn,
   const char *pubkey_str = NULL;
   const char *url = args->url;
 
-  /* Don't serve v3 descriptors if next gen onion service is disabled. */
-  if (!hs_v3_protocol_is_enabled()) {
-    /* 404 is used for an unrecognized URL so send back the same. */
-    write_http_status_line(conn, 404, "Not found");
-    goto done;
-  }
-
   /* Reject unencrypted dir connections */
   if (!connection_dir_is_encrypted(conn)) {
     write_http_status_line(conn, 404, "Not found");
@@ -3749,13 +3738,6 @@ directory_handle_command_post(dir_connection_t *conn, const char *headers,
    * the prop224 be deployed and thus use. */
   if (connection_dir_is_encrypted(conn) && !strcmpstart(url, "/tor/hs/")) {
     const char *msg = "HS descriptor stored successfully.";
-    /* Don't accept v3 and onward publish request if next gen onion service is
-     * disabled. */
-    if (!hs_v3_protocol_is_enabled()) {
-      /* 404 is used for an unrecognized URL so send back the same. */
-      write_http_status_line(conn, 404, "Not found");
-      goto done;
-    }
 
     /* We most probably have a publish request for an HS descriptor. */
     int code = handle_post_hs_descriptor(url, body);

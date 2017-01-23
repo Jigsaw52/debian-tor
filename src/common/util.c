@@ -187,8 +187,9 @@ tor_malloc_zero_(size_t size DMALLOC_PARAMS)
  * 0xfffe0001. */
 #define SQRT_SIZE_MAX_P1 (((size_t)1) << (sizeof(size_t)*4))
 
-/** Return non-zero if and only if the product of the arguments is exact. */
-static inline int
+/** Return non-zero if and only if the product of the arguments is exact,
+ * and cannot overflow. */
+int
 size_mul_check(const size_t x, const size_t y)
 {
   /* This first check is equivalent to
@@ -201,15 +202,6 @@ size_mul_check(const size_t x, const size_t y)
           y == 0 ||
           x <= SIZE_MAX / y);
 }
-
-#ifdef TOR_UNIT_TESTS
-/** Exposed for unit tests only */
-int
-size_mul_check__(const size_t x, const size_t y)
-{
-  return size_mul_check(x,y);
-}
-#endif
 
 /** Allocate a chunk of <b>nmemb</b>*<b>size</b> bytes of memory, fill
  * the memory with zero bytes, and return a pointer to the result.
