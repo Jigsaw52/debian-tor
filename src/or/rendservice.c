@@ -542,6 +542,95 @@ rend_service_check_dir_and_add(smartlist_t *service_list,
   return rend_add_service(s_list, service);
 }
 
+/* If this is a reload and there were hidden services configured before,
+ * keep the introduction points that are still needed and close the
+ * other ones. */
+STATIC void
+prune_services_on_reload(smartlist_t *old_service_list,
+                         smartlist_t *new_service_list)
+{
+  origin_circuit_t *ocirc = NULL;
+  smartlist_t *surviving_services = NULL;
+
+  tor_assert(old_service_list);
+  tor_assert(new_service_list);
+
+  /* This contains all _existing_ services that survives the relaod that is
+   * that haven't been removed from the configuration. The difference between
+   * this list and the new service list is that the new list can possibly
+   * contain newly configured service that have no introduction points opened
+   * yet nor key material loaded or generated. */
+  surviving_services = smartlist_new();
+
+  /* Preserve the existing ephemeral services.
+   *
+   * This is the ephemeral service equivalent of the "Copy introduction
+   * points to new services" block, except there's no copy required since
+   * the service structure isn't regenerated.
+   *
+   * After this is done, all ephemeral services will be:
+   *  * Removed from old_service_list, so the equivalent non-ephemeral code
+   *    will not attempt to preserve them.
+   *  * Added to the new_service_list (that previously only had the
+   *    services listed in the configuration).
+   *  * Added to surviving_services, which is the list of services that
+   *    will NOT have their intro point closed.
+   */
+  SMARTLIST_FOREACH_BEGIN(old_service_list, rend_service_t *, old) {
+    if (rend_service_is_ephemeral(old)) {
+      SMARTLIST_DEL_CURRENT(old_service_list, old);
+      smartlist_add(surviving_services, old);
+      smartlist_add(new_service_list, old);
+    }
+  } SMARTLIST_FOREACH_END(old);
+
+  /* Copy introduction points to new services. This is O(n^2), but it's only
+   * called on reconfigure, so it's ok performance wise. */
+  SMARTLIST_FOREACH_BEGIN(new_service_list, rend_service_t *, new) {
+    SMARTLIST_FOREACH_BEGIN(old_service_list, rend_service_t *, old) {
+      /* Skip ephemeral services as we only want to copy introduction points
+       * from current services to newly configured one that already exists.
+       * The same directory means it's the same service. */
+      if (rend_service_is_ephemeral(new) || rend_service_is_ephemeral(old) ||
+          strcmp(old->directory, new->directory)) {
+        continue;
+      }
+      smartlist_add_all(new->intro_nodes, old->intro_nodes);
+      smartlist_clear(old->intro_nodes);
+      smartlist_add_all(new->expiring_nodes, old->expiring_nodes);
+      smartlist_clear(old->expiring_nodes);
+      /* This regular service will survive the closing IPs step after. */
+      smartlist_add(surviving_services, old);
+      break;
+    } SMARTLIST_FOREACH_END(old);
+  } SMARTLIST_FOREACH_END(new);
+
+  /* For every service introduction circuit we can find, see if we have a
+   * matching surviving configured service. If not, close the circuit. */
+  while ((ocirc = circuit_get_next_service_intro_circ(ocirc))) {
+    int keep_it = 0;
+    tor_assert(ocirc->rend_data);
+    SMARTLIST_FOREACH_BEGIN(surviving_services, const rend_service_t *, s) {
+      if (rend_circuit_pk_digest_eq(ocirc, (uint8_t *) s->pk_digest)) {
+        /* Keep this circuit as we have a matching configured service. */
+        keep_it = 1;
+        break;
+      }
+    } SMARTLIST_FOREACH_END(s);
+    if (keep_it) {
+      continue;
+    }
+    log_info(LD_REND, "Closing intro point %s for service %s.",
+             safe_str_client(extend_info_describe(
+                                        ocirc->build_state->chosen_exit)),
+             safe_str_client(rend_data_get_address(ocirc->rend_data)));
+    /* Reason is FINISHED because service has been removed and thus the
+     * circuit is considered old/uneeded. */
+    circuit_mark_for_close(TO_CIRCUIT(ocirc), END_CIRC_REASON_FINISHED);
+  }
+  smartlist_free(surviving_services);
+}
+
 /** Set up rend_service_list, based on the values of HiddenServiceDir and
  * HiddenServicePort in <b>options</b>.  Return 0 on success and -1 on
  * failure.  (If <b>validate_only</b> is set, parse, warn and return as
@@ -556,6 +645,7 @@ rend_config_services(const or_options_t *options, int validate_only)
   smartlist_t *old_service_list = NULL;
   smartlist_t *temp_service_list = NULL;
   int ok = 0;
+  int rv = -1;
 
   /* Use a temporary service list, so that we can check the new services'
    * consistency with each other */
@@ -568,7 +658,8 @@ rend_config_services(const or_options_t *options, int validate_only)
        * which is registered below the loop */
       if (rend_service_check_dir_and_add(temp_service_list, options, service,
                                          validate_only) < 0) {
-          return -1;
+        service = NULL;
+        goto free_and_return;
       }
       service = tor_malloc_zero(sizeof(rend_service_t));
       service->directory = tor_strdup(line->value);
@@ -580,8 +671,7 @@ rend_config_services(const or_options_t *options, int validate_only)
     if (!service) {
       log_warn(LD_CONFIG, "%s with no preceding HiddenServiceDir directive",
                line->key);
-      rend_service_free(service);
-      return -1;
+      goto free_and_return;
     }
     if (!strcasecmp(line->key, "HiddenServicePort")) {
       char *err_msg = NULL;
@@ -590,8 +680,7 @@ rend_config_services(const or_options_t *options, int validate_only)
         if (err_msg)
           log_warn(LD_CONFIG, "%s", err_msg);
         tor_free(err_msg);
-        rend_service_free(service);
-        return -1;
+        goto free_and_return;
       }
       tor_assert(!err_msg);
       smartlist_add(service->ports, portcfg);
@@ -602,8 +691,7 @@ rend_config_services(const or_options_t *options, int validate_only)
         log_warn(LD_CONFIG,
                  "HiddenServiceAllowUnknownPorts should be 0 or 1, not %s",
                  line->value);
-        rend_service_free(service);
-        return -1;
+        goto free_and_return;
       }
       log_info(LD_CONFIG,
                "HiddenServiceAllowUnknownPorts=%d for %s",
@@ -617,8 +705,7 @@ rend_config_services(const or_options_t *options, int validate_only)
             log_warn(LD_CONFIG,
                      "HiddenServiceDirGroupReadable should be 0 or 1, not %s",
                      line->value);
-            rend_service_free(service);
-            return -1;
+            goto free_and_return;
         }
         log_info(LD_CONFIG,
                  "HiddenServiceDirGroupReadable=%d for %s",
@@ -631,8 +718,7 @@ rend_config_services(const or_options_t *options, int validate_only)
         log_warn(LD_CONFIG,
                  "HiddenServiceMaxStreams should be between 0 and %d, not %s",
                  65535, line->value);
-        rend_service_free(service);
-        return -1;
+        goto free_and_return;
       }
       log_info(LD_CONFIG,
                "HiddenServiceMaxStreams=%d for %s",
@@ -646,8 +732,7 @@ rend_config_services(const or_options_t *options, int validate_only)
                  "HiddenServiceMaxStreamsCloseCircuit should be 0 or 1, "
                  "not %s",
                  line->value);
-        rend_service_free(service);
-        return -1;
+        goto free_and_return;
       }
       log_info(LD_CONFIG,
                "HiddenServiceMaxStreamsCloseCircuit=%d for %s",
@@ -656,16 +741,13 @@ rend_config_services(const or_options_t *options, int validate_only)
     } else if (!strcasecmp(line->key, "HiddenServiceNumIntroductionPoints")) {
       service->n_intro_points_wanted =
         (unsigned int) tor_parse_long(line->value, 10,
-                                      NUM_INTRO_POINTS_DEFAULT,
-                                      NUM_INTRO_POINTS_MAX, &ok, NULL);
+                                      0, NUM_INTRO_POINTS_MAX, &ok, NULL);
       if (!ok) {
         log_warn(LD_CONFIG,
                  "HiddenServiceNumIntroductionPoints "
                  "should be between %d and %d, not %s",
-                 NUM_INTRO_POINTS_DEFAULT, NUM_INTRO_POINTS_MAX,
-                 line->value);
-        rend_service_free(service);
-        return -1;
+                 0, NUM_INTRO_POINTS_MAX, line->value);
+        goto free_and_return;
       }
       log_info(LD_CONFIG, "HiddenServiceNumIntroductionPoints=%d for %s",
                service->n_intro_points_wanted,
@@ -680,8 +762,7 @@ rend_config_services(const or_options_t *options, int validate_only)
       if (service->auth_type != REND_NO_AUTH) {
         log_warn(LD_CONFIG, "Got multiple HiddenServiceAuthorizeClient "
                  "lines for a single service.");
-        rend_service_free(service);
-        return -1;
+        goto free_and_return;
       }
       type_names_split = smartlist_new();
       smartlist_split_string(type_names_split, line->value, " ", 0, 2);
@@ -689,9 +770,7 @@ rend_config_services(const or_options_t *options, int validate_only)
         log_warn(LD_BUG, "HiddenServiceAuthorizeClient has no value. This "
                          "should have been prevented when parsing the "
                          "configuration.");
-        smartlist_free(type_names_split);
-        rend_service_free(service);
-        return -1;
+        goto free_and_return;
       }
       authname = smartlist_get(type_names_split, 0);
       if (!strcasecmp(authname, "basic")) {
@@ -705,8 +784,7 @@ rend_config_services(const or_options_t *options, int validate_only)
                  (char *) smartlist_get(type_names_split, 0));
         SMARTLIST_FOREACH(type_names_split, char *, cp, tor_free(cp));
         smartlist_free(type_names_split);
-        rend_service_free(service);
-        return -1;
+        goto free_and_return;
       }
       service->clients = smartlist_new();
       if (smartlist_len(type_names_split) < 2) {
@@ -743,8 +821,7 @@ rend_config_services(const or_options_t *options, int validate_only)
                    client_name, REND_CLIENTNAME_MAX_LEN);
           SMARTLIST_FOREACH(clients, char *, cp, tor_free(cp));
           smartlist_free(clients);
-          rend_service_free(service);
-          return -1;
+          goto free_and_return;
         }
         client = tor_malloc_zero(sizeof(rend_authorized_client_t));
         client->client_name = tor_strdup(client_name);
@@ -766,16 +843,14 @@ rend_config_services(const or_options_t *options, int validate_only)
                  smartlist_len(service->clients),
                  service->auth_type == REND_BASIC_AUTH ? 512 : 16,
                  service->auth_type == REND_BASIC_AUTH ? "basic" : "stealth");
-        rend_service_free(service);
-        return -1;
+        goto free_and_return;
       }
     } else {
       tor_assert(!strcasecmp(line->key, "HiddenServiceVersion"));
       if (strcmp(line->value, "2")) {
         log_warn(LD_CONFIG,
                  "The only supported HiddenServiceVersion is 2.");
-        rend_service_free(service);
-        return -1;
+        goto free_and_return;
       }
     }
   }
@@ -784,16 +859,15 @@ rend_config_services(const or_options_t *options, int validate_only)
    * within the loop. It is ok for this service to be NULL, it is ignored. */
   if (rend_service_check_dir_and_add(temp_service_list, options, service,
                                      validate_only) < 0) {
-    return -1;
+    service = NULL;
+    goto free_and_return;
   }
+  service = NULL;
 
   /* Free the newly added services if validating */
   if (validate_only) {
-    SMARTLIST_FOREACH(temp_service_list, rend_service_t *, ptr,
-                      rend_service_free(ptr));
-    smartlist_free(temp_service_list);
-    temp_service_list = NULL;
-    return 0;
+    rv = 0;
+    goto free_and_return;
   }
 
   /* Otherwise, use the newly added services as the new service list
@@ -807,88 +881,21 @@ rend_config_services(const or_options_t *options, int validate_only)
    * keep the introduction points that are still needed and close the
    * other ones. */
   if (old_service_list && !validate_only) {
-    smartlist_t *surviving_services = smartlist_new();
-
-    /* Preserve the existing ephemeral services.
-     *
-     * This is the ephemeral service equivalent of the "Copy introduction
-     * points to new services" block, except there's no copy required since
-     * the service structure isn't regenerated.
-     *
-     * After this is done, all ephemeral services will be:
-     *  * Removed from old_service_list, so the equivalent non-ephemeral code
-     *    will not attempt to preserve them.
-     *  * Added to the new rend_service_list (that previously only had the
-     *    services listed in the configuration).
-     *  * Added to surviving_services, which is the list of services that
-     *    will NOT have their intro point closed.
-     */
-    SMARTLIST_FOREACH(old_service_list, rend_service_t *, old, {
-      if (rend_service_is_ephemeral(old)) {
-        SMARTLIST_DEL_CURRENT(old_service_list, old);
-        smartlist_add(surviving_services, old);
-        smartlist_add(rend_service_list, old);
-      }
-    });
-
-    /* Copy introduction points to new services. */
-    /* XXXX This is O(n^2), but it's only called on reconfigure, so it's
-     * probably ok? */
-    SMARTLIST_FOREACH_BEGIN(rend_service_list, rend_service_t *, new) {
-      SMARTLIST_FOREACH_BEGIN(old_service_list, rend_service_t *, old) {
-        if (BUG(rend_service_is_ephemeral(new)) ||
-            BUG(rend_service_is_ephemeral(old))) {
-          continue;
-        }
-        if (BUG(!new->directory) || BUG(!old->directory) ||
-            strcmp(old->directory, new->directory)) {
-          continue;
-        }
-        smartlist_add_all(new->intro_nodes, old->intro_nodes);
-        smartlist_clear(old->intro_nodes);
-        smartlist_add_all(new->expiring_nodes, old->expiring_nodes);
-        smartlist_clear(old->expiring_nodes);
-        smartlist_add(surviving_services, old);
-        break;
-      } SMARTLIST_FOREACH_END(old);
-    } SMARTLIST_FOREACH_END(new);
-
-    /* Close introduction circuits of services we don't serve anymore. */
-    /* XXXX it would be nicer if we had a nicer abstraction to use here,
-     * so we could just iterate over the list of services to close, but
-     * once again, this isn't critical-path code. */
-    SMARTLIST_FOREACH_BEGIN(circuit_get_global_list(), circuit_t *, circ) {
-      if (!circ->marked_for_close &&
-          circ->state == CIRCUIT_STATE_OPEN &&
-          (circ->purpose == CIRCUIT_PURPOSE_S_ESTABLISH_INTRO ||
-           circ->purpose == CIRCUIT_PURPOSE_S_INTRO)) {
-        origin_circuit_t *oc = TO_ORIGIN_CIRCUIT(circ);
-        int keep_it = 0;
-        tor_assert(oc->rend_data);
-        SMARTLIST_FOREACH(surviving_services, rend_service_t *, ptr, {
-          if (rend_circuit_pk_digest_eq(oc, (uint8_t *) ptr->pk_digest)) {
-            keep_it = 1;
-            break;
-          }
-        });
-        if (keep_it)
-          continue;
-        log_info(LD_REND, "Closing intro point %s for service %s.",
-                 safe_str_client(extend_info_describe(
-                                            oc->build_state->chosen_exit)),
-                 rend_data_get_address(oc->rend_data));
-        circuit_mark_for_close(circ, END_CIRC_REASON_FINISHED);
-        /* XXXX Is there another reason we should use here? */
-      }
-    }
-    SMARTLIST_FOREACH_END(circ);
-    smartlist_free(surviving_services);
-    SMARTLIST_FOREACH(old_service_list, rend_service_t *, ptr,
-                      rend_service_free(ptr));
+    prune_services_on_reload(old_service_list, rend_service_list);
+    /* Every remaining service in the old list have been removed from the
+     * configuration so clean them up safely. */
+    SMARTLIST_FOREACH(old_service_list, rend_service_t *, s,
+                      rend_service_free(s));
     smartlist_free(old_service_list);
   }
 
   return 0;
+ free_and_return:
+  rend_service_free(service);
+  SMARTLIST_FOREACH(temp_service_list, rend_service_t *, ptr,
+                    rend_service_free(ptr));
+  smartlist_free(temp_service_list);
+  return rv;
 }
 
 /** Add the ephemeral service <b>pk</b>/<b>ports</b> if possible, using

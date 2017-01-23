@@ -147,18 +147,6 @@
 /** Maximum size of a single extrainfo document, as above. */
 #define MAX_EXTRAINFO_UPLOAD_SIZE 50000
 
-/** How long do we keep DNS cache entries before purging them (regardless of
- * their TTL)? */
-#define MAX_DNS_ENTRY_AGE (30*60)
-/** How long do we cache/tell clients to cache DNS records when no TTL is
- * known? */
-#define DEFAULT_DNS_TTL (30*60)
-/** How long can a TTL be before we stop believing it? */
-#define MAX_DNS_TTL (3*60*60)
-/** How small can a TTL be before we stop believing it?  Provides rudimentary
- * pinning. */
-#define MIN_DNS_TTL 60
-
 /** How often do we rotate onion keys? */
 #define MIN_ONION_KEY_LIFETIME (7*24*60*60)
 /** How often do we rotate TLS contexts? */
@@ -1760,7 +1748,7 @@ typedef struct dir_connection_t {
  /** Which 'resource' did we ask the directory for? This is typically the part
   * of the URL string that defines, relative to the directory conn purpose,
   * what thing we want.  For example, in router descriptor downloads by
-  * descriptor digest, it contains "d/", then one ore more +-separated
+  * descriptor digest, it contains "d/", then one or more +-separated
   * fingerprints.
   **/
   char *requested_resource;
@@ -3039,11 +3027,11 @@ typedef struct circuit_t {
   /** For what reason (See END_CIRC_REASON...) is this circuit being closed?
    * This field is set in circuit_mark_for_close and used later in
    * circuit_about_to_free. */
-  uint16_t marked_for_close_reason;
+  int marked_for_close_reason;
   /** As marked_for_close_reason, but reflects the underlying reason for
    * closing this circuit.
    */
-  uint16_t marked_for_close_orig_reason;
+  int marked_for_close_orig_reason;
 
   /** Unique ID for measuring tunneled network status requests. */
   uint64_t dirreq_id;

@@ -40,7 +40,7 @@
 /* Length of the KDF output value which is the length of the secret key,
  * the secret IV and MAC key length which is the length of H() output. */
 #define HS_DESC_ENCRYPTED_KDF_OUTPUT_LEN \
-  CIPHER_KEY_LEN + CIPHER_IV_LEN + DIGEST256_LEN
+  CIPHER256_KEY_LEN + CIPHER_IV_LEN + DIGEST256_LEN
 /* We need to pad the plaintext version of the encrypted data section before
  * encryption and it has to be a multiple of this value. */
 #define HS_DESC_PLAINTEXT_PADDING_MULTIPLE 128
@@ -54,11 +54,17 @@
   HS_DESC_ENCRYPTED_SALT_LEN + \
   HS_DESC_PLAINTEXT_PADDING_MULTIPLE + DIGEST256_LEN
 /* Maximum length in bytes of a full hidden service descriptor. */
-#define HS_DESC_MAX_LEN 32768 // XXX justify
+#define HS_DESC_MAX_LEN 50000 /* 50kb max size */
 /* The minimum amount of fields a descriptor should contain. The parsing of
  * the fields are version specific so the only required field, as a generic
  * view of a descriptor, is 1 that is the version field. */
 #define HS_DESC_PLAINTEXT_MIN_FIELDS 1
+
+/* Key length for the descriptor symmetric encryption. As specified in the
+ * protocol, we use AES-256 for the encrypted section of the descriptor. The
+ * following is the length in bytes and the bit size. */
+#define HS_DESC_ENCRYPTED_KEY_LEN CIPHER256_KEY_LEN
+#define HS_DESC_ENCRYPTED_BIT_SIZE (HS_DESC_ENCRYPTED_KEY_LEN * 8)
 
 /* Type of authentication in the descriptor. */
 typedef enum {
@@ -148,13 +154,13 @@ typedef struct hs_desc_plaintext_data_t {
    * replica which is signed by the blinded public key for that replica. */
   tor_cert_t *signing_key_cert;
 
-  /* Signing keypair which is used to sign the descriptor. Same public key
+  /* Signing public key which is used to sign the descriptor. Same public key
    * as in the signing key certificate. */
-  ed25519_keypair_t signing_kp;
+  ed25519_public_key_t signing_pubkey;
 
-  /* Blinded keypair used for this descriptor derived from the master
+  /* Blinded public key used for this descriptor derived from the master
    * identity key and generated for a specific replica number. */
-  ed25519_keypair_t blinded_kp;
+  ed25519_public_key_t blinded_pubkey;
 
   /* Revision counter is incremented at each upload, regardless of whether
    * the descriptor has changed. This avoids leaking whether the descriptor
@@ -201,6 +207,7 @@ void hs_desc_plaintext_data_free(hs_desc_plaintext_data_t *desc);
 void hs_desc_encrypted_data_free(hs_desc_encrypted_data_t *desc);
 
 int hs_desc_encode_descriptor(const hs_descriptor_t *desc,
+                              const ed25519_keypair_t *signing_kp,
                               char **encoded_out);
 
 int hs_desc_decode_descriptor(const char *encoded,
@@ -232,7 +239,7 @@ STATIC int encrypted_data_length_is_valid(size_t len);
 STATIC int cert_is_valid(tor_cert_t *cert, uint8_t type,
                          const char *log_obj_type);
 STATIC int desc_sig_is_valid(const char *b64_sig,
-                             const ed25519_keypair_t *signing_kp,
+                             const ed25519_public_key_t *signing_pubkey,
                              const char *encoded_desc, size_t encoded_len);
 STATIC void desc_intro_point_free(hs_desc_intro_point_t *ip);
 #endif /* HS_DESCRIPTOR_PRIVATE */
