@@ -1,3 +1,11 @@
+tor (0.2.9.9-1) unstable; urgency=medium
+
+  * New upstream version.
+    + Downgrade the "-ftrapv" option from "always on" to "only on when
+      --enable-expensive-hardening is provided." (re: TROVE-2017-001).
+
+ -- Peter Palfrader <weasel@debian.org>  Mon, 23 Jan 2017 16:44:32 +0100
+
 tor (0.2.9.8-2) unstable; urgency=medium
 
   * Actually target unstable.
