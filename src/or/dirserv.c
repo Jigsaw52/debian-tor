@@ -2232,13 +2232,17 @@ dirserv_set_routerstatus_testing(routerstatus_t *rs)
 /** Routerstatus <b>rs</b> is part of a group of routers that are on
  * too narrow an IP-space. Clear out its flags since we don't want it be used
  * because of its Sybil-like appearance.
+ *
+ * Leave its BadExit flag alone though, since if we think it's a bad exit,
+ * we want to vote that way in case all the other authorities are voting
+ * Running and Exit.
  */
 static void
 clear_status_flags_on_sybil(routerstatus_t *rs)
 {
   rs->is_authority = rs->is_exit = rs->is_stable = rs->is_fast =
     rs->is_flagged_running = rs->is_named = rs->is_valid =
-    rs->is_hs_dir = rs->is_possible_guard = rs->is_bad_exit = 0;
+    rs->is_hs_dir = rs->is_v2_dir = rs->is_possible_guard = 0;
   /* FFFF we might want some mechanism to check later on if we
    * missed zeroing any flags: it's easy to add a new flag but
    * forget to add it to this clause. */
@@ -3187,6 +3191,7 @@ dirserv_orconn_tls_done(const tor_addr_t *addr,
   ri = node->ri;
 
   if (get_options()->AuthDirTestEd25519LinkKeys &&
+      node_supports_ed25519_link_authentication(node) &&
       ri->cache_info.signing_key_cert) {
     /* We allow the node to have an ed25519 key if we haven't been told one in
      * the routerinfo, but if we *HAVE* been told one in the routerinfo, it
@@ -3259,13 +3264,13 @@ dirserv_single_reachability_test(time_t now, routerinfo_t *router)
 {
   const or_options_t *options = get_options();
   channel_t *chan = NULL;
-  node_t *node = NULL;
+  const node_t *node = NULL;
   tor_addr_t router_addr;
   const ed25519_public_key_t *ed_id_key;
   (void) now;
 
   tor_assert(router);
-  node = node_get_mutable_by_id(router->cache_info.identity_digest);
+  node = node_get_by_id(router->cache_info.identity_digest);
   tor_assert(node);
 
   if (options->AuthDirTestEd25519LinkKeys &&

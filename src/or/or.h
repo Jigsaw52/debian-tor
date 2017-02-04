@@ -3545,6 +3545,12 @@ typedef struct routerset_t routerset_t;
  * to pick its own port. */
 #define CFG_AUTO_PORT 0xc4005e
 
+/** Enumeration of outbound address configuration types:
+ * Exit-only, OR-only, or both */
+typedef enum {OUTBOUND_ADDR_EXIT, OUTBOUND_ADDR_OR,
+              OUTBOUND_ADDR_EXIT_AND_OR,
+              OUTBOUND_ADDR_MAX} outbound_addr_t;
+
 /** Configuration options for a Tor process. */
 typedef struct {
   uint32_t magic_;
@@ -3628,10 +3634,14 @@ typedef struct {
   config_line_t *ControlListenAddress;
   /** Local address to bind outbound sockets */
   config_line_t *OutboundBindAddress;
-  /** IPv4 address derived from OutboundBindAddress. */
-  tor_addr_t OutboundBindAddressIPv4_;
-  /** IPv6 address derived from OutboundBindAddress. */
-  tor_addr_t OutboundBindAddressIPv6_;
+  /** Local address to bind outbound relay sockets */
+  config_line_t *OutboundBindAddressOR;
+  /** Local address to bind outbound exit sockets */
+  config_line_t *OutboundBindAddressExit;
+  /** Addresses derived from the various OutboundBindAddress lines.
+   * [][0] is IPv4, [][1] is IPv6
+   */
+  tor_addr_t OutboundBindAddresses[OUTBOUND_ADDR_MAX][2];
   /** Directory server only: which versions of
    * Tor should we tell users to run? */
   config_line_t *RecommendedVersions;
@@ -4158,6 +4168,10 @@ typedef struct {
 
   /** If true, the user wants us to collect statistics as hidden service
    * directory, introduction point, or rendezvous point. */
+  int HiddenServiceStatistics_option;
+  /** Internal variable to remember whether we're actually acting on
+   * HiddenServiceStatistics_option -- yes if it's set and we're a server,
+   * else no. */
   int HiddenServiceStatistics;
 
   /** If true, include statistics file contents in extra-info documents. */
@@ -4574,14 +4588,6 @@ typedef struct {
    * do we enforce Ed25519 identity match? */
   /* NOTE: remove this option someday. */
   int AuthDirTestEd25519LinkKeys;
-
-  /** If 1, we use the old (pre-prop271) guard selection algorithm.
-   *
-   * XXXX prop271 This option is only here as a stopgap while we're
-   * XXXX tuning and debugging the new (post-prop271) algorithm.  Eventually
-   * we should remove it entirely.
-   */
-  int UseDeprecatedGuardAlgorithm;
 } or_options_t;
 
 /** Persistent state for an onion router, as saved to disk. */
@@ -5335,10 +5341,6 @@ typedef struct dir_server_t {
  * Passed to router_pick_directory_server (et al)
  */
 #define PDS_NO_EXISTING_MICRODESC_FETCH (1<<4)
-
-/** This node is to be chosen as a directory guard, so don't choose any
- * node that's currently a guard. */
-#define PDS_FOR_GUARD (1<<5)
 
 /** Possible ways to weight routers when choosing one randomly.  See
  * routerlist_sl_choose_by_bandwidth() for more information.*/

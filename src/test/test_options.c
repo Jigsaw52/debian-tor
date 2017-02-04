@@ -1022,7 +1022,7 @@ test_options_validate__transproxy(void *ignored)
   ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
   tt_int_op(ret, OP_EQ, -1);
 
-#if !defined(__OpenBSD__) && !defined( DARWIN )
+#if !defined(OpenBSD) && !defined( DARWIN )
   tt_str_op(msg, OP_EQ,
           "pf-divert is a OpenBSD-specific and OS X/Darwin-specific feature.");
 #else
@@ -1091,7 +1091,7 @@ test_options_validate__transproxy(void *ignored)
   if (msg) {
     TT_DIE(("Expected NULL but got '%s'", msg));
   }
-#elif defined(__OpenBSD__)
+#elif defined(OpenBSD)
   tdata = get_options_test_data("TransProxyType pf-divert\n"
                                 "TransPort 127.0.0.1:123\n");
   ret = options_validate(tdata->old_opt, tdata->opt, tdata->def_opt, 0, &msg);
@@ -2826,8 +2826,8 @@ test_options_validate__single_onion(void *ignored)
   tt_int_op(ret, OP_EQ, -1);
   tt_str_op(msg, OP_EQ, "HiddenServiceNonAnonymousMode is incompatible with "
             "using Tor as an anonymous client. Please set "
-            "Socks/Trans/NATD/DNSPort to 0, or HiddenServiceNonAnonymousMode "
-            "to 0, or use the non-anonymous Tor2webMode.");
+            "Socks/Trans/NATD/DNSPort to 0, or revert "
+            "HiddenServiceNonAnonymousMode to 0.");
   tor_free(msg);
   free_options_test_data(tdata);
 

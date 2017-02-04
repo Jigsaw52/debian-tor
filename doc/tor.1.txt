@@ -640,6 +640,20 @@ GENERAL OPTIONS
     This setting will be ignored for connections to the loopback addresses
     (127.0.0.0/8 and ::1).
 
+[[OutboundBindAddressOR]] **OutboundBindAddressOR** __IP__::
+    Make all outbound non-exit (=relay and other) connections originate from the IP 
+    address specified. This option overrides **OutboundBindAddress** for the same
+    IP version. This option may be used twice, once with an IPv4 address and once
+    with an IPv6 address. This setting will be ignored for connections to the
+    loopback addresses (127.0.0.0/8 and ::1).
+
+[[OutboundBindAddressExit]] **OutboundBindAddressExit** __IP__::
+    Make all outbound exit connections originate from the IP address specified. This
+    option overrides **OutboundBindAddress** for the same IP version. This option
+    may be used twice, once with an IPv4 address and once with an IPv6 address. This
+    setting will be ignored for connections to the loopback addresses (127.0.0.0/8
+    and ::1).
+
 [[PidFile]] **PidFile** __FILE__::
     On startup, write our PID to FILE. On clean shutdown, remove
     FILE. Can not be changed while tor is running.
@@ -2697,6 +2711,19 @@ The following options are used for running a testing Tor network.
     How early before the official expiration of a an Ed25519 signing key do
     we replace it and issue a new key?
     (Default: 3 hours for link and auth; 1 day for signing.)
+
+NON-PERSISTENT OPTIONS
+----------------------
+
+These options are not saved to the torrc file by the "SAVECONF" controller
+command.  Other options of this type are documented in control-spec.txt,
+section 5.4. End-users should mostly ignore them.
+
+[[UnderscorePorts]] **\_\_ControlPort**, **\_\_DirPort**, **\_\_DNSPort**, **\_\_ExtORPort**, **\_\_NATDPort**, **\_\_ORPort**, **\_\_SocksPort**, **\_\_TransPort**::
+    These underscore-prefixed options are variants of the regular Port
+    options.  They behave the same, except they are not saved to the
+    torrc file by the controller's SAVECONF command.
+
 
 SIGNALS
 -------
