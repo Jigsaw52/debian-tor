@@ -183,8 +183,17 @@ static config_abbrev_t option_abbrevs_[] = {
 /** An entry for config_vars: "The option <b>name</b> is obsolete." */
 #define OBSOLETE(name) { name, CONFIG_TYPE_OBSOLETE, 0, NULL }
 
-#define VPORT(member,conftype,initvalue)                                    \
-  VAR(#member, conftype, member ## _lines, initvalue)
+/**
+ * Macro to declare *Port options.  Each one comes in three entries.
+ * For example, most users should use "SocksPort" to configure the
+ * socks port, but TorBrowser wants to use __SocksPort so that it
+ * isn't stored by SAVECONF.  The SocksPortLines virtual option is
+ * used to query both options from the controller.
+ */
+#define VPORT(member)                                           \
+  VAR(#member "Lines", LINELIST_V, member ## _lines, NULL),     \
+  VAR(#member, LINELIST_S, member ## _lines, NULL),             \
+  VAR("__" #member, LINELIST_S, member ## _lines, NULL)
 
 /** Array of configuration options.  Until we disallow nonstandard
  * abbreviations, order is significant, since the first matching option will
@@ -253,7 +262,7 @@ static config_var_t option_vars_[] = {
   V(ConstrainedSockSize,         MEMUNIT,  "8192"),
   V(ContactInfo,                 STRING,   NULL),
   V(ControlListenAddress,        LINELIST, NULL),
-  VPORT(ControlPort,                 LINELIST, NULL),
+  VPORT(ControlPort),
   V(ControlPortFileGroupReadable,BOOL,     "0"),
   V(ControlPortWriteToFile,      FILENAME, NULL),
   V(ControlSocket,               LINELIST, NULL),
@@ -271,7 +280,7 @@ static config_var_t option_vars_[] = {
   V(TestingAuthDirTimeToLearnReachability, INTERVAL, "30 minutes"),
   V(DirListenAddress,            LINELIST, NULL),
   V(DirPolicy,                   LINELIST, NULL),
-  VPORT(DirPort,                     LINELIST, NULL),
+  VPORT(DirPort),
   V(DirPortFrontPage,            FILENAME, NULL),
   VAR("DirReqStatistics",        BOOL,     DirReqStatistics_option, "1"),
   VAR("DirAuthority",            LINELIST, DirAuthorities, NULL),
@@ -282,7 +291,7 @@ static config_var_t option_vars_[] = {
   OBSOLETE("DisableIOCP"),
   OBSOLETE("DisableV2DirectoryInfo_"),
   OBSOLETE("DynamicDHGroups"),
-  VPORT(DNSPort,                     LINELIST, NULL),
+  VPORT(DNSPort),
   V(DNSListenAddress,            LINELIST, NULL),
   V(DownloadExtraInfo,           BOOL,     "0"),
   V(TestingEnableConnBwEvent,    BOOL,     "0"),
@@ -302,15 +311,12 @@ static config_var_t option_vars_[] = {
   V(ExitPortStatistics,          BOOL,     "0"),
   V(ExtendAllowPrivateAddresses, BOOL,     "0"),
   V(ExitRelay,                   AUTOBOOL, "auto"),
-  VPORT(ExtORPort,               LINELIST, NULL),
+  VPORT(ExtORPort),
   V(ExtORPortCookieAuthFile,     STRING,   NULL),
   V(ExtORPortCookieAuthFileGroupReadable, BOOL, "0"),
   V(ExtraInfoStatistics,         BOOL,     "1"),
   V(ExtendByEd25519ID,           AUTOBOOL, "auto"),
   V(FallbackDir,                 LINELIST, NULL),
-  /* XXXX prop271 -- this has an ugly name to remind us to remove it. */
-  VAR("UseDeprecatedGuardAlgorithm_",        BOOL,
-      UseDeprecatedGuardAlgorithm, "0"),
 
   V(UseDefaultFallbackDirs,      BOOL,     "1"),
 
@@ -352,7 +358,7 @@ static config_var_t option_vars_[] = {
   VAR("HiddenServiceMaxStreams",LINELIST_S, RendConfigLines, NULL),
   VAR("HiddenServiceMaxStreamsCloseCircuit",LINELIST_S, RendConfigLines, NULL),
   VAR("HiddenServiceNumIntroductionPoints", LINELIST_S, RendConfigLines, NULL),
-  V(HiddenServiceStatistics,     BOOL,     "1"),
+  VAR("HiddenServiceStatistics", BOOL, HiddenServiceStatistics_option, "1"),
   V(HidServAuth,                 LINELIST, NULL),
   V(CloseHSClientCircuitsImmediatelyOnTimeout, BOOL, "0"),
   V(CloseHSServiceRendCircuitsImmediatelyOnTimeout, BOOL, "0"),
@@ -393,7 +399,7 @@ static config_var_t option_vars_[] = {
   V(NewCircuitPeriod,            INTERVAL, "30 seconds"),
   OBSOLETE("NamingAuthoritativeDirectory"),
   V(NATDListenAddress,           LINELIST, NULL),
-  VPORT(NATDPort,                    LINELIST, NULL),
+  VPORT(NATDPort),
   V(Nickname,                    STRING,   NULL),
   V(PredictedPortsRelevanceTime,  INTERVAL, "1 hour"),
   V(WarnUnsafeSocks,              BOOL,     "1"),
@@ -403,8 +409,10 @@ static config_var_t option_vars_[] = {
   V(NumEntryGuards,              UINT,     "0"),
   V(OfflineMasterKey,            BOOL,     "0"),
   V(ORListenAddress,             LINELIST, NULL),
-  VPORT(ORPort,                      LINELIST, NULL),
+  VPORT(ORPort),
   V(OutboundBindAddress,         LINELIST,   NULL),
+  V(OutboundBindAddressOR,       LINELIST,   NULL),
+  V(OutboundBindAddressExit,     LINELIST,   NULL),
 
   OBSOLETE("PathBiasDisableRate"),
   V(PathBiasCircThreshold,       INT,      "-1"),
@@ -475,7 +483,7 @@ static config_var_t option_vars_[] = {
   V(ShutdownWaitLength,          INTERVAL, "30 seconds"),
   V(SocksListenAddress,          LINELIST, NULL),
   V(SocksPolicy,                 LINELIST, NULL),
-  VPORT(SocksPort,                   LINELIST, NULL),
+  VPORT(SocksPort),
   V(SocksTimeout,                INTERVAL, "2 minutes"),
   V(SSLKeyLifetime,              INTERVAL, "0"),
   OBSOLETE("StrictEntryNodes"),
@@ -490,7 +498,7 @@ static config_var_t option_vars_[] = {
   V(TrackHostExits,              CSV,      NULL),
   V(TrackHostExitsExpire,        INTERVAL, "30 minutes"),
   V(TransListenAddress,          LINELIST, NULL),
-  VPORT(TransPort,                   LINELIST, NULL),
+  VPORT(TransPort),
   V(TransProxyType,              STRING,   "default"),
   OBSOLETE("TunnelDirConns"),
   V(UpdateBridgesFromAuthority,  BOOL,     "0"),
@@ -1578,7 +1586,6 @@ options_transition_affects_guards(const or_options_t *old,
 
   return
     (old->UseEntryGuards != new->UseEntryGuards ||
-     old->UseDeprecatedGuardAlgorithm != new->UseDeprecatedGuardAlgorithm ||
      old->UseBridges != new->UseBridges ||
      old->UseEntryGuards != new->UseEntryGuards ||
      old->ClientUseIPv4 != new->ClientUseIPv4 ||
@@ -1997,6 +2004,8 @@ options_act(const or_options_t *old_options)
   /* Only collect directory-request statistics on relays and bridges. */
   options->DirReqStatistics = options->DirReqStatistics_option &&
     server_mode(options);
+  options->HiddenServiceStatistics =
+    options->HiddenServiceStatistics_option && server_mode(options);
 
   if (options->CellStatistics || options->DirReqStatistics ||
       options->EntryStatistics || options->ExitPortStatistics ||
@@ -2011,7 +2020,6 @@ options_act(const or_options_t *old_options)
       options->CellStatistics = 0;
       options->EntryStatistics = 0;
       options->ConnDirectionStatistics = 0;
-      options->HiddenServiceStatistics = 0;
       options->ExitPortStatistics = 0;
     }
 
@@ -2096,15 +2104,6 @@ options_act(const or_options_t *old_options)
   if (old_options && old_options->BridgeAuthoritativeDir &&
       !options->BridgeAuthoritativeDir)
     rep_hist_desc_stats_term();
-
-  /* Check if we need to parse and add the EntryNodes config option. */
-#ifdef ENABLE_LEGACY_GUARD_ALGORITHM
-  if (options->EntryNodes &&
-      (!old_options ||
-       !routerset_equal(old_options->EntryNodes,options->EntryNodes) ||
-       !routerset_equal(old_options->ExcludeNodes,options->ExcludeNodes)))
-    entry_nodes_should_be_added();
-#endif
 
   /* Since our options changed, we might need to regenerate and upload our
    * server descriptor.
@@ -2943,8 +2942,7 @@ options_validate_single_onion(or_options_t *options, char **msg)
       !options->Tor2webMode) {
     REJECT("HiddenServiceNonAnonymousMode is incompatible with using Tor as "
            "an anonymous client. Please set Socks/Trans/NATD/DNSPort to 0, or "
-           "HiddenServiceNonAnonymousMode to 0, or use the non-anonymous "
-           "Tor2webMode.");
+           "revert HiddenServiceNonAnonymousMode to 0.");
   }
 
   /* If you run a hidden service in non-anonymous mode, the hidden service
@@ -3008,13 +3006,6 @@ options_validate(or_options_t *old_options, or_options_t *options,
   options->UseEntryGuards = options->UseEntryGuards_option;
 
   warn_about_relative_paths(options);
-
-#ifndef ENABLE_LEGACY_GUARD_ALGORITHM
-  if (options->UseDeprecatedGuardAlgorithm) {
-    log_warn(LD_CONFIG, "DeprecatedGuardAlgorithm not supported.");
-    return -1;
-  }
-#endif
 
   if (server_mode(options) &&
       (!strcmpstart(uname, "Windows 95") ||
@@ -3095,7 +3086,7 @@ options_validate(or_options_t *old_options, or_options_t *options,
     if (!strcasecmp(options->TransProxyType, "default")) {
       options->TransProxyType_parsed = TPT_DEFAULT;
     } else if (!strcasecmp(options->TransProxyType, "pf-divert")) {
-#if !defined(__OpenBSD__) && !defined( DARWIN )
+#if !defined(OpenBSD) && !defined( DARWIN )
       /* Later versions of OS X have pf */
       REJECT("pf-divert is a OpenBSD-specific "
              "and OS X/Darwin-specific feature.");
@@ -6255,6 +6246,7 @@ port_cfg_new(size_t namelen)
   tor_assert(namelen <= SIZE_T_CEILING - sizeof(port_cfg_t) - 1);
   port_cfg_t *cfg = tor_malloc_zero(sizeof(port_cfg_t) + namelen + 1);
   cfg->entry_cfg.ipv4_traffic = 1;
+  cfg->entry_cfg.ipv6_traffic = 1;
   cfg->entry_cfg.dns_request = 1;
   cfg->entry_cfg.onion_traffic = 1;
   cfg->entry_cfg.cache_ipv4_answers = 1;
@@ -6608,7 +6600,7 @@ parse_port_config(smartlist_t *out,
     /* This must be kept in sync with port_cfg_new's defaults */
     int no_listen = 0, no_advertise = 0, all_addrs = 0,
       bind_ipv4_only = 0, bind_ipv6_only = 0,
-      ipv4_traffic = 1, ipv6_traffic = 0, prefer_ipv6 = 0, dns_request = 1,
+      ipv4_traffic = 1, ipv6_traffic = 1, prefer_ipv6 = 0, dns_request = 1,
       onion_traffic = 1,
       cache_ipv4 = 1, use_cached_ipv4 = 0,
       cache_ipv6 = 0, use_cached_ipv6 = 0,
@@ -7928,57 +7920,80 @@ getinfo_helper_config(control_connection_t *conn,
   return 0;
 }
 
+/* Check whether an address has already been set against the options
+ * depending on address family and destination type. Any exsting
+ * value will lead to a fail, even if it is the same value. If not
+ * set and not only validating, copy it into this location too.
+ * Returns 0 on success or -1 if this address is already set.
+ */
+static int
+verify_and_store_outbound_address(sa_family_t family, tor_addr_t *addr,
+       outbound_addr_t type, or_options_t *options, int validate_only)
+{
+  if (type>=OUTBOUND_ADDR_MAX || (family!=AF_INET && family!=AF_INET6)) {
+    return -1;
+  }
+  int fam_index=0;
+  if (family==AF_INET6) {
+    fam_index=1;
+  }
+  tor_addr_t *dest=&options->OutboundBindAddresses[type][fam_index];
+  if (!tor_addr_is_null(dest)) {
+    return -1;
+  }
+  if (!validate_only) {
+    tor_addr_copy(dest, addr);
+  }
+  return 0;
+}
+
+/* Parse a list of address lines for a specific destination type.
+ * Will store them into the options if not validate_only. If a
+ * problem occurs, a suitable error message is store in msg.
+ * Returns 0 on success or -1 if any address is already set.
+ */
+static int
+parse_outbound_address_lines(const config_line_t *lines, outbound_addr_t type,
+           or_options_t *options, int validate_only, char **msg)
+{
+  tor_addr_t addr;
+  sa_family_t family;
+  while (lines) {
+    family = tor_addr_parse(&addr, lines->value);
+    if (verify_and_store_outbound_address(family, &addr, type,
+                                 options, validate_only)) {
+      if (msg)
+        tor_asprintf(msg, "Multiple%s%s outbound bind addresses "
+                     "configured: %s",
+                     family==AF_INET?" IPv4":(family==AF_INET6?" IPv6":""),
+                     type==OUTBOUND_ADDR_OR?" OR":
+                     (type==OUTBOUND_ADDR_EXIT?" exit":""), lines->value);
+      return -1;
+    }
+    lines = lines->next;
+  }
+  return 0;
+}
+
 /** Parse outbound bind address option lines. If <b>validate_only</b>
- * is not 0 update OutboundBindAddressIPv4_ and
- * OutboundBindAddressIPv6_ in <b>options</b>. On failure, set
- * <b>msg</b> (if provided) to a newly allocated string containing a
- * description of the problem and return -1. */
+ * is not 0 update OutboundBindAddresses in <b>options</b>.
+ * Only one address can be set for any of these values.
+ * On failure, set <b>msg</b> (if provided) to a newly allocated string
+ * containing a description of the problem and return -1.
+ */
 static int
 parse_outbound_addresses(or_options_t *options, int validate_only, char **msg)
 {
-  const config_line_t *lines = options->OutboundBindAddress;
-  int found_v4 = 0, found_v6 = 0;
-
   if (!validate_only) {
-    memset(&options->OutboundBindAddressIPv4_, 0,
-           sizeof(options->OutboundBindAddressIPv4_));
-    memset(&options->OutboundBindAddressIPv6_, 0,
-           sizeof(options->OutboundBindAddressIPv6_));
+    memset(&options->OutboundBindAddresses, 0,
+           sizeof(options->OutboundBindAddresses));
   }
-  while (lines) {
-    tor_addr_t addr, *dst_addr = NULL;
-    int af = tor_addr_parse(&addr, lines->value);
-    switch (af) {
-    case AF_INET:
-      if (found_v4) {
-        if (msg)
-          tor_asprintf(msg, "Multiple IPv4 outbound bind addresses "
-                       "configured: %s", lines->value);
-        return -1;
-      }
-      found_v4 = 1;
-      dst_addr = &options->OutboundBindAddressIPv4_;
-      break;
-    case AF_INET6:
-      if (found_v6) {
-        if (msg)
-          tor_asprintf(msg, "Multiple IPv6 outbound bind addresses "
-                       "configured: %s", lines->value);
-        return -1;
-      }
-      found_v6 = 1;
-      dst_addr = &options->OutboundBindAddressIPv6_;
-      break;
-    default:
-      if (msg)
-        tor_asprintf(msg, "Outbound bind address '%s' didn't parse.",
-                     lines->value);
-      return -1;
-    }
-    if (!validate_only)
-      tor_addr_copy(dst_addr, &addr);
-    lines = lines->next;
-  }
+  parse_outbound_address_lines(options->OutboundBindAddress,
+                      OUTBOUND_ADDR_EXIT_AND_OR, options, validate_only, msg);
+  parse_outbound_address_lines(options->OutboundBindAddressOR,
+                      OUTBOUND_ADDR_OR, options, validate_only, msg);
+  parse_outbound_address_lines(options->OutboundBindAddressExit,
+                      OUTBOUND_ADDR_EXIT, options, validate_only, msg);
   return 0;
 }
 

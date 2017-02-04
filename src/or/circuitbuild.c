@@ -967,10 +967,7 @@ circuit_send_next_onion_skin(origin_circuit_t *circ)
     if (!hop) {
       /* done building the circuit. whew. */
       guard_usable_t r;
-      if (get_options()->UseDeprecatedGuardAlgorithm) {
-        // The circuit is usable; we already marked the guard as okay.
-        r = GUARD_USABLE_NOW;
-      } else if (! circ->guard_state) {
+      if (! circ->guard_state) {
         if (circuit_get_cpath_len(circ) != 1 &&
             circ->base_.purpose != CIRCUIT_PURPOSE_TESTING &&
             get_options()->UseEntryGuards) {
@@ -2113,7 +2110,8 @@ onion_pick_cpath_exit(origin_circuit_t *circ, extend_info_t *exit_ei)
       return -1;
     }
     exit_ei = extend_info_from_node(node, 0);
-    tor_assert(exit_ei);
+    if (BUG(exit_ei == NULL))
+      return -1;
   }
   state->chosen_exit = exit_ei;
   return 0;
@@ -2308,26 +2306,6 @@ choose_good_entry_server(uint8_t purpose, cpath_build_state_t *state,
      * family. */
     nodelist_add_node_and_family(excluded, node);
   }
-#ifdef ENABLE_LEGACY_GUARD_ALGORITHM
-  /* and exclude current entry guards and their families,
-   * unless we're in a test network, and excluding guards
-   * would exclude all nodes (i.e. we're in an incredibly small tor network,
-   * or we're using TestingAuthVoteGuard *).
-   * This is an incomplete fix, but is no worse than the previous behaviour,
-   * and only applies to minimal, testing tor networks
-   * (so it's no less secure) */
-  if (options->UseEntryGuards
-      && (!options->TestingTorNetwork ||
-         smartlist_len(nodelist_get_list()) > smartlist_len(get_entry_guards())
-     )) {
-    SMARTLIST_FOREACH(get_entry_guards(), const entry_guard_t *, entry,
-      {
-        if ((node = entry_guard_find_node(entry))) {
-          nodelist_add_node_and_family(excluded, node);
-        }
-      });
-  }
-#endif
 
   if (state) {
     if (state->need_uptime)
@@ -2392,14 +2370,14 @@ onion_extend_cpath(origin_circuit_t *circ)
       int client = (server_mode(get_options()) == 0);
       info = extend_info_from_node(r, client);
       /* Clients can fail to find an allowed address */
-      tor_assert(info || client);
+      tor_assert_nonfatal(info || client);
     }
   } else {
     const node_t *r =
       choose_good_middle_server(purpose, state, circ->cpath, cur_len);
     if (r) {
       info = extend_info_from_node(r, 0);
-      tor_assert(info);
+      tor_assert_nonfatal(info);
     }
   }
 

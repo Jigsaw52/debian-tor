@@ -2598,7 +2598,7 @@ getinfo_helper_events(control_connection_t *control_conn,
       if (circ->base_.state == CIRCUIT_STATE_OPEN)
         state = "BUILT";
       else if (circ->base_.state == CIRCUIT_STATE_GUARD_WAIT)
-        state = "GUARD_WAIT"; // XXXX prop271 spec deviation-- specify this.
+        state = "GUARD_WAIT";
       else if (circ->cpath)
         state = "EXTENDED";
       else
@@ -3377,7 +3377,8 @@ handle_control_extendcircuit(control_connection_t *conn, uint32_t len,
   SMARTLIST_FOREACH(nodes, const node_t *, node,
   {
     extend_info_t *info = extend_info_from_node(node, first_node);
-    if (first_node && !info) {
+    if (!info) {
+      tor_assert_nonfatal(first_node);
       log_warn(LD_CONTROL,
                "controller tried to connect to a node that doesn't have any "
                "addresses that are allowed by the firewall configuration; "
@@ -3385,10 +3386,6 @@ handle_control_extendcircuit(control_connection_t *conn, uint32_t len,
       circuit_mark_for_close(TO_CIRCUIT(circ), -END_CIRC_REASON_CONNECTFAILED);
       connection_write_str_to_buf("551 Couldn't start circuit\r\n", conn);
       goto done;
-    } else {
-      /* True, since node_has_descriptor(node) == true and we are extending
-       * to the node's primary address */
-      tor_assert(info);
     }
     circuit_append_new_exit(circ, info);
     extend_info_free(info);
@@ -4064,17 +4061,20 @@ handle_control_dropguards(control_connection_t *conn,
   smartlist_split_string(args, body, " ",
                          SPLIT_SKIP_SPACE|SPLIT_IGNORE_BLANK, 0);
 
-#ifdef ENABLE_LEGACY_GUARD_ALGORITHM
+  static int have_warned = 0;
+  if (! have_warned) {
+    log_warn(LD_CONTROL, "DROPGUARDS is dangerous; make sure you understand "
+             "the risks before using it. It may be removed in a future "
+             "version of Tor.");
+    have_warned = 1;
+  }
+
   if (smartlist_len(args)) {
     connection_printf_to_buf(conn, "512 Too many arguments to DROPGUARDS\r\n");
   } else {
     remove_all_entry_guards();
     send_control_done(conn);
   }
-#else
-  // XXXX
-  connection_printf_to_buf(conn, "512 not supported\r\n");
-#endif
 
   SMARTLIST_FOREACH(args, char *, cp, tor_free(cp));
   smartlist_free(args);

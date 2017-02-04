@@ -28,11 +28,6 @@ typedef struct circuit_guard_state_t circuit_guard_state_t;
    private. */
 typedef struct entry_guard_restriction_t entry_guard_restriction_t;
 
-/*
-  XXXX Prop271 undefine this in order to disable all legacy guard functions.
-*/
-// #define ENABLE_LEGACY_GUARD_ALGORITHM
-
 /* Information about a guard's pathbias status.
  * These fields are used in circpathbias.c to try to detect entry
  * nodes that are failing circuits at a suspicious frequency.
@@ -175,40 +170,10 @@ struct entry_guard_t {
    * we saw them in the state, even if we don't understand them. */
   char *extra_state_fields;
 
-  /** Backpointer to the guard selection that this guard belongs to. */
+  /** Backpointer to the guard selection that this guard belongs to.
+   * The entry_guard_t must never outlive its guard_selection. */
   guard_selection_t *in_selection;
   /**@}*/
-
-#ifdef ENABLE_LEGACY_GUARD_ALGORITHM
-  /**
-   * @name legacy guard selection algorithm fields
-   *
-   * These are used and maintained by the legacy (pre-prop271) entry guard
-   * algorithm.  Most of them we will remove as prop271 gets implemented.
-   * The rest we'll migrate over, if they are 100% semantically identical to
-   * their prop271 equivalents. XXXXprop271
-   */
-  /**@{*/
-  time_t chosen_on_date; /**< Approximately when was this guard added?
-                          * "0" if we don't know. */
-  char *chosen_by_version; /**< What tor version added this guard? NULL
-                            * if we don't know. */
-  unsigned int made_contact : 1; /**< 0 if we have never connected to this
-                                  * router, 1 if we have. */
-  unsigned int can_retry : 1; /**< Should we retry connecting to this entry,
-                               * in spite of having it marked as unreachable?*/
-  unsigned int is_dir_cache : 1; /**< Is this node a directory cache? */
-  time_t bad_since; /**< 0 if this guard is currently usable, or the time at
-                      * which it was observed to become (according to the
-                      * directory or the user configuration) unusable. */
-  time_t unreachable_since; /**< 0 if we can connect to this guard, or the
-                             * time at which we first noticed we couldn't
-                             * connect to it. */
-  time_t last_attempted; /**< 0 if we can connect to this guard, or the time
-                          * at which we last failed to connect to it. */
-
-  /**}@*/
-#endif
 
   /** Path bias information for this guard. */
   guard_pathbias_t pb;
@@ -230,8 +195,6 @@ typedef enum guard_selection_type_t {
   /** Use the normal guard selection algorithm, taking our sample from the
    * set of filtered nodes. */
   GS_TYPE_RESTRICTED,
-  /** Use the legacy (pre-prop271) guard selection algorithm and fields */
-  GS_TYPE_LEGACY,
 } guard_selection_type_t;
 
 /**
@@ -305,20 +268,6 @@ struct guard_selection_s {
    * confirmed_entry_guards receive? */
   int next_confirmed_idx;
 
-#ifdef ENABLE_LEGACY_GUARD_ALGORITHM
-  /**
-   * A list of our chosen entry guards, as entry_guard_t structures; this
-   * preserves the pre-Prop271 behavior.
-   */
-  smartlist_t *chosen_entry_guards;
-
-  /**
-   * When we try to choose an entry guard, should we parse and add
-   * config's EntryNodes first?  This was formerly a global.  This
-   * preserves the pre-Prop271 behavior.
-   */
-  int should_add_entry_nodes;
-#endif
 };
 
 struct entry_guard_handle_t;
@@ -366,8 +315,7 @@ struct circuit_guard_state_t {
 int guards_update_all(void);
 const node_t *guards_choose_guard(cpath_build_state_t *state,
                                   circuit_guard_state_t **guard_state_out);
-const node_t *guards_choose_dirguard(dirinfo_type_t info,
-                                     circuit_guard_state_t **guard_state_out);
+const node_t *guards_choose_dirguard(circuit_guard_state_t **guard_state_out);
 
 #if 1
 /* XXXX NM I would prefer that all of this stuff be private to
@@ -378,11 +326,6 @@ entry_guard_t *entry_guard_get_by_id_digest(const char *digest);
 void entry_guards_changed_for_guard_selection(guard_selection_t *gs);
 void entry_guards_changed(void);
 guard_selection_t * get_guard_selection_info(void);
-#ifdef ENABLE_LEGACY_GUARD_ALGORITHM
-const smartlist_t *get_entry_guards_for_guard_selection(
-    guard_selection_t *gs);
-const smartlist_t *get_entry_guards(void);
-#endif
 int num_live_entry_guards_for_guard_selection(
     guard_selection_t *gs,
     int for_directory);
@@ -390,9 +333,6 @@ int num_live_entry_guards(int for_directory);
 #endif
 
 const node_t *entry_guard_find_node(const entry_guard_t *guard);
-#ifdef ENABLE_LEGACY_GUARD_ALGORITHM
-void entry_guard_mark_bad(entry_guard_t *guard);
-#endif
 const char *entry_guard_get_rsa_id_digest(const entry_guard_t *guard);
 const char *entry_guard_describe(const entry_guard_t *guard);
 guard_pathbias_t *entry_guard_get_pathbias_state(entry_guard_t *guard);
@@ -432,10 +372,6 @@ void entry_guards_note_internet_connectivity(guard_selection_t *gs);
 int update_guard_selection_choice(const or_options_t *options);
 
 /* Used by bridges.c only. */
-#ifdef ENABLE_LEGACY_GUARD_ALGORITHM
-void add_bridge_as_entry_guard(guard_selection_t *gs,
-                               const node_t *chosen);
-#endif
 int num_bridges_usable(void);
 
 #ifdef ENTRYNODES_PRIVATE
@@ -456,9 +392,6 @@ int num_bridges_usable(void);
 #define DFLT_MAX_SAMPLE_SIZE 60
 /**
  * We always try to make our sample contain at least this many guards.
- *
- * XXXX prop271 There was a MIN_SAMPLE_THRESHOLD in the proposal, but I
- * removed it in favor of MIN_FILTERED_SAMPLE_SIZE. -NM
  */
 #define DFLT_MIN_FILTERED_SAMPLE_SIZE 20
 /**
@@ -530,7 +463,6 @@ STATIC int get_nonprimary_guard_idle_timeout(void);
 STATIC double get_meaningful_restriction_threshold(void);
 STATIC double get_extreme_restriction_threshold(void);
 
-// ---------- XXXX these functions and definitions are post-prop271.
 HANDLE_DECL(entry_guard, entry_guard_t, STATIC)
 STATIC guard_selection_type_t guard_selection_infer_type(
                            guard_selection_type_t type_in,
@@ -550,6 +482,7 @@ STATIC entry_guard_t *get_sampled_guard_with_id(guard_selection_t *gs,
                                                 const uint8_t *rsa_id);
 
 MOCK_DECL(STATIC time_t, randomize_time, (time_t now, time_t max_backdate));
+
 STATIC entry_guard_t *entry_guard_add_to_sample(guard_selection_t *gs,
                                                 const node_t *node);
 STATIC entry_guard_t *entry_guards_expand_sample(guard_selection_t *gs);
@@ -566,6 +499,7 @@ STATIC int entry_guards_all_primary_guards_are_down(guard_selection_t *gs);
 #define SAMPLE_EXCLUDE_PRIMARY     (1u<<1)
 #define SAMPLE_EXCLUDE_PENDING     (1u<<2)
 #define SAMPLE_NO_UPDATE_PRIMARY   (1u<<3)
+#define SAMPLE_EXCLUDE_NO_DESCRIPTOR (1u<<4)
 /**@}*/
 STATIC entry_guard_t *sample_reachable_filtered_entry_guards(
                                     guard_selection_t *gs,
@@ -610,70 +544,17 @@ STATIC unsigned entry_guards_note_guard_success(guard_selection_t *gs,
                                                 entry_guard_t *guard,
                                                 unsigned old_state);
 STATIC int entry_guard_has_higher_priority(entry_guard_t *a, entry_guard_t *b);
-STATIC char *getinfo_helper_format_single_entry_guard(const entry_guard_t *e,
-                                                      int is_legacy);
-#ifdef ENABLE_LEGACY_GUARD_ALGORITHM
-// ---------- XXXX this stuff is pre-prop271.
-
-STATIC const node_t *add_an_entry_guard(guard_selection_t *gs,
-                                        const node_t *chosen,
-                                        int reset_status, int prepend,
-                                        int for_discovery, int for_directory);
-STATIC int populate_live_entry_guards(smartlist_t *live_entry_guards,
-                                      const smartlist_t *all_entry_guards,
-                                      const node_t *chosen_exit,
-                                      dirinfo_type_t dirinfo_type,
-                                      int for_directory,
-                                      int need_uptime, int need_capacity);
-STATIC int decide_num_guards(const or_options_t *options, int for_directory);
-
-STATIC void entry_guards_set_from_config(guard_selection_t *gs,
-                                         const or_options_t *options);
-
-/** Flags to be passed to entry_is_live() to indicate what kind of
- * entry nodes we are looking for. */
-typedef enum {
-  ENTRY_NEED_UPTIME = 1<<0,
-  ENTRY_NEED_CAPACITY = 1<<1,
-  ENTRY_ASSUME_REACHABLE = 1<<2,
-  ENTRY_NEED_DESCRIPTOR = 1<<3,
-} entry_is_live_flags_t;
-
-STATIC const node_t *entry_is_live(const entry_guard_t *e,
-                                   entry_is_live_flags_t flags,
-                                   const char **msg);
-
-STATIC int entry_is_time_to_retry(const entry_guard_t *e, time_t now);
+STATIC char *getinfo_helper_format_single_entry_guard(const entry_guard_t *e);
 #endif
 
-#endif
-
-#ifdef ENABLE_LEGACY_GUARD_ALGORITHM
 void remove_all_entry_guards_for_guard_selection(guard_selection_t *gs);
 void remove_all_entry_guards(void);
-#endif
 
 struct bridge_info_t;
 void entry_guard_learned_bridge_identity(const tor_addr_port_t *addrport,
                                          const uint8_t *rsa_id_digest);
 
-#ifdef ENABLE_LEGACY_GUARD_ALGORITHM
-void entry_guards_compute_status_for_guard_selection(
-    guard_selection_t *gs, const or_options_t *options, time_t now);
-void entry_guards_compute_status(const or_options_t *options, time_t now);
-int entry_guard_register_connect_status_for_guard_selection(
-    guard_selection_t *gs, const char *digest, int succeeded,
-    int mark_relay_status, time_t now);
-int entry_guard_register_connect_status(const char *digest, int succeeded,
-                                        int mark_relay_status, time_t now);
-void entry_nodes_should_be_added_for_guard_selection(guard_selection_t *gs);
-void entry_nodes_should_be_added(void);
-#endif
 int entry_list_is_constrained(const or_options_t *options);
-#ifdef ENABLE_LEGACY_GUARD_ALGORITHM
-const node_t *choose_random_entry(cpath_build_state_t *state);
-const node_t *choose_random_dirguard(dirinfo_type_t t);
-#endif
 int guards_retry_optimistic(const or_options_t *options);
 int entry_guards_parse_state_for_guard_selection(
     guard_selection_t *gs, or_state_t *state, int set, char **msg);
@@ -682,14 +563,13 @@ void entry_guards_update_state(or_state_t *state);
 int getinfo_helper_entry_guards(control_connection_t *conn,
                                 const char *question, char **answer,
                                 const char **errmsg);
-#ifdef ENABLE_LEGACY_GUARD_ALGORITHM
-int is_node_used_as_guard_for_guard_selection(guard_selection_t *gs,
-                                              const node_t *node);
-MOCK_DECL(int, is_node_used_as_guard, (const node_t *node));
-#endif
 
 int entries_known_but_down(const or_options_t *options);
 void entries_retry_all(const or_options_t *options);
+
+int guard_selection_have_enough_dir_info_to_build_circuits(
+                                                    guard_selection_t *gs);
+int entry_guards_have_enough_dir_info_to_build_circuits(void);
 
 void entry_guards_free_all(void);
 
