@@ -9,6 +9,7 @@
 #define CONTROL_PRIVATE
 #define UTIL_PRIVATE
 #include "or.h"
+#include "buffers.h"
 #include "config.h"
 #include "control.h"
 #include "test.h"
@@ -5091,7 +5092,8 @@ test_util_socket(void *arg)
 
   fd1 = tor_open_socket_with_extensions(domain, SOCK_STREAM, 0, 0, 0);
   int err = tor_socket_errno(fd1);
-  if (fd1 < 0 && err == SOCK_ERRNO(EPROTONOSUPPORT)) {
+  if (fd1 < 0 && (err == SOCK_ERRNO(EPROTONOSUPPORT) ||
+                  err == SOCK_ERRNO(EAFNOSUPPORT))) {
     /* Assume we're on an IPv4-only or IPv6-only system, and give up now. */
     goto done;
   }

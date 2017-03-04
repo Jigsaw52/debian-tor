@@ -892,6 +892,27 @@ circuit_pick_extend_handshake(uint8_t *cell_type_out,
   }
 }
 
+/**
+ * Return true iff <b>purpose</b> is a purpose for a circuit which is
+ * allowed to have no guard configured, even if the circuit is multihop
+ * and guards are enabled.
+ */
+static int
+circuit_purpose_may_omit_guard(int purpose)
+{
+  switch (purpose) {
+    case CIRCUIT_PURPOSE_TESTING:
+    case CIRCUIT_PURPOSE_C_MEASURE_TIMEOUT:
+      /* Testing circuits may omit guards because they're measuring
+       * liveness or performance, and don't want guards to interfere. */
+      return 1;
+    default:
+      /* All other multihop circuits should use guards if guards are
+       * enabled. */
+      return 0;
+  }
+}
+
 /** This is the backbone function for building circuits.
  *
  * If circ's first hop is closed, then we need to build a create
@@ -969,7 +990,7 @@ circuit_send_next_onion_skin(origin_circuit_t *circ)
       guard_usable_t r;
       if (! circ->guard_state) {
         if (circuit_get_cpath_len(circ) != 1 &&
-            circ->base_.purpose != CIRCUIT_PURPOSE_TESTING &&
+            ! circuit_purpose_may_omit_guard(circ->base_.purpose) &&
             get_options()->UseEntryGuards) {
           log_warn(LD_BUG, "%d-hop circuit %p with purpose %d has no "
                    "guard state",
@@ -983,15 +1004,15 @@ circuit_send_next_onion_skin(origin_circuit_t *circ)
       if (r == GUARD_USABLE_NOW) {
         circuit_set_state(TO_CIRCUIT(circ), CIRCUIT_STATE_OPEN);
       } else if (r == GUARD_MAYBE_USABLE_LATER) {
-        // XXXX prop271 we might want to probe for whether this
-        // XXXX one is ready even before the next second rolls over.
+        // Wait till either a better guard succeeds, or till
+        // all better guards fail.
         circuit_set_state(TO_CIRCUIT(circ), CIRCUIT_STATE_GUARD_WAIT);
       } else {
         tor_assert_nonfatal(r == GUARD_USABLE_NEVER);
         return - END_CIRC_REASON_INTERNAL;
       }
 
-      /* XXXX prop271 -- the rest of this branch needs careful thought!
+      /* XXXX #21422 -- the rest of this branch needs careful thought!
        * Some of the things here need to happen when a circuit becomes
        * mechanically open; some need to happen when it is actually usable.
        * I think I got them right, but more checking would be wise. -NM
@@ -2271,12 +2292,6 @@ choose_good_middle_server(uint8_t purpose,
  * Set *<b>guard_state_out</b> to information about the guard that
  * we're selecting, which we'll use later to remember whether the
  * guard worked or not.
- *
- * XXXX prop271 this function is used in four ways: picking out guards for
- *   the old (pre-prop271) guard algorithm; picking out guards for circuits;
- *   picking out guards for testing circuits on non-bridgees;
- *   picking out entries when entry guards are disabled.  These options
- *   should be disentangled.
  */
 const node_t *
 choose_good_entry_server(uint8_t purpose, cpath_build_state_t *state,
