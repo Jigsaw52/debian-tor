@@ -17,6 +17,14 @@ As of 0.2.7.4, the package supports running multiple instances of Tor
 under systemd.  Please consult the tor-instance-create(8) manpage
 for details.
 
+# Logging
+
+As of the 0.3.0.x tree, the Debian packages for Tor by
+default log to syslog.
+
+You can restore the previous behaviour by adding something
+like "Log notice file /var/log/tor/log" to your torrc.
+
 # Filesystem access by the Tor service
 
 Note that due to systemd and apparmor protections, the places on the
@@ -65,3 +73,4 @@ Peter Palfrader, Mon, 24 Jul 2006 05:20:30 +0200
                  Wed, 11 Jan 2012 21:31:44 +0100
                  Mon, 19 Oct 2015 18:21:24 +0200
                  Mon, 19 Dec 2016 09:56:05 +0100
+                 Sat, 04 Mar 2017 10:39:58 +0100

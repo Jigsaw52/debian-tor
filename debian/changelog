@@ -3,6 +3,9 @@ tor (0.3.0.3-alpha-2) UNRELEASED; urgency=medium
   * Replace CAP_DAC_OVERRIDE with CAP_DAC_READ_SEARCH in systemd's service
     capability bounding set.  Read access is sufficient for Tor (as root on
     startup) to check its onion service directories (see #847598).
+  * Change default log target to syslog.  We still keep /var/log/tor and
+    the logrotation configuration around in case the admin prefers normal
+    log files.  Also update README.Debian accordingly.  (closes: #852716).
 
  -- Peter Palfrader <weasel@debian.org>  Sat, 04 Mar 2017 10:29:57 +0100
 

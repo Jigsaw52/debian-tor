@@ -12,4 +12,4 @@ CookieAuthentication 1
 CookieAuthFileGroupReadable 1
 CookieAuthFile /var/run/tor/control.authcookie
 
-Log notice file /var/log/tor/log
+Log notice syslog
