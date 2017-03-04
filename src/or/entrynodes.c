@@ -768,11 +768,6 @@ get_sampled_guard_for_bridge(guard_selection_t *gs,
   const uint8_t *id = bridge_get_rsa_id_digest(bridge);
   const tor_addr_port_t *addrport = bridge_get_addr_port(bridge);
   entry_guard_t *guard;
-  if (id) {
-    guard = get_sampled_guard_with_id(gs, id);
-    if (guard)
-      return guard;
-  }
   if (BUG(!addrport))
     return NULL; // LCOV_EXCL_LINE
   guard = get_sampled_guard_by_bridge_addr(gs, addrport);
@@ -787,16 +782,17 @@ get_sampled_guard_for_bridge(guard_selection_t *gs,
 static bridge_info_t *
 get_bridge_info_for_guard(const entry_guard_t *guard)
 {
+  const uint8_t *identity = NULL;
   if (! tor_digest_is_zero(guard->identity)) {
-    bridge_info_t *bridge = find_bridge_by_digest(guard->identity);
-    if (bridge)
-      return bridge;
+    identity = (const uint8_t *)guard->identity;
   }
   if (BUG(guard->bridge_addr == NULL))
     return NULL;
-  return get_configured_bridge_by_addr_port_digest(&guard->bridge_addr->addr,
-                                                     guard->bridge_addr->port,
-                                                     NULL);
+
+  return get_configured_bridge_by_exact_addr_port_digest(
+                                                 &guard->bridge_addr->addr,
+                                                 guard->bridge_addr->port,
+                                                 (const char*)identity);
 }
 
 /**
@@ -820,6 +816,10 @@ entry_guard_add_to_sample(guard_selection_t *gs,
   log_info(LD_GUARD, "Adding %s as to the entry guard sample set.",
            node_describe(node));
 
+  /* make sure that the guard is not already sampled. */
+  if (BUG(have_sampled_guard_with_id(gs, (const uint8_t*)node->identity)))
+    return NULL; // LCOV_EXCL_LINE
+
   return entry_guard_add_to_sample_impl(gs,
                                         (const uint8_t*)node->identity,
                                         node_get_nickname(node),
@@ -841,11 +841,8 @@ entry_guard_add_to_sample_impl(guard_selection_t *gs,
   const int GUARD_LIFETIME = get_guard_lifetime();
   tor_assert(gs);
 
-  // XXXX prop271 take ed25519 identity here too.
+  // XXXX #20827 take ed25519 identity here too.
 
-  /* make sure that the guard is not already sampled. */
-  if (rsa_id_digest && BUG(have_sampled_guard_with_id(gs, rsa_id_digest)))
-    return NULL; // LCOV_EXCL_LINE
   /* Make sure we can actually identify the guard. */
   if (BUG(!rsa_id_digest && !bridge_addrport))
     return NULL; // LCOV_EXCL_LINE
@@ -889,6 +886,10 @@ entry_guard_add_bridge_to_sample(guard_selection_t *gs,
   const tor_addr_port_t *addrport = bridge_get_addr_port(bridge);
 
   tor_assert(addrport);
+
+  /* make sure that the guard is not already sampled. */
+  if (BUG(get_sampled_guard_for_bridge(gs, bridge)))
+    return NULL; // LCOV_EXCL_LINE
 
   return entry_guard_add_to_sample_impl(gs, id_digest, NULL, addrport);
 }
@@ -1226,7 +1227,7 @@ sampled_guards_update_from_consensus(guard_selection_t *gs)
 
   /* First: Update listed/unlisted. */
   SMARTLIST_FOREACH_BEGIN(gs->sampled_entry_guards, entry_guard_t *, guard) {
-    /* XXXX prop271 check ed ID too */
+    /* XXXX #20827 check ed ID too */
     const int is_listed = entry_guard_is_listed(gs, guard);
 
     if (is_listed && ! guard->currently_listed) {
@@ -1842,7 +1843,7 @@ select_entry_guard_for_circuit(guard_selection_t *gs,
     if (! entry_guard_obeys_restriction(guard, rst))
       continue;
     if (guard->is_reachable != GUARD_REACHABLE_NO) {
-      if (need_descriptor && BUG(!guard_has_descriptor(guard))) {
+      if (need_descriptor && !guard_has_descriptor(guard)) {
         continue;
       }
       *state_out = GUARD_CIRC_STATE_USABLE_ON_COMPLETION;
@@ -1981,7 +1982,7 @@ entry_guards_note_guard_success(guard_selection_t *gs,
       /* Fall through. */
     case GUARD_CIRC_STATE_USABLE_IF_NO_BETTER_GUARD:
       if (guard->is_primary) {
-        /* XXXX prop271 -- I don't actually like this logic. It seems to make
+        /* XXXX #20832 -- I don't actually like this logic. It seems to make
          * us a little more susceptible to evil-ISP attacks.  The mitigations
          * I'm thinking of, however, aren't local to this point, so I'll leave
          * it alone. */
@@ -2046,7 +2047,7 @@ entry_guard_has_higher_priority(entry_guard_t *a, entry_guard_t *b)
       return 0;
 
     /* Neither is pending: priorities are equal. */
-    return 0; // XXXX prop271 return a tristate instead?
+    return 0;
   }
 }
 
@@ -2101,7 +2102,7 @@ entry_guard_pick_for_circuit(guard_selection_t *gs,
   if (BUG(state == 0))
     goto fail;
   const node_t *node = node_get_by_id(guard->identity);
-  // XXXX prop271 check Ed ID.
+  // XXXX #20827 check Ed ID.
   if (! node)
     goto fail;
   if (BUG(usage != GUARD_USAGE_DIRGUARD && !node_has_descriptor(node)))
@@ -2901,13 +2902,7 @@ entry_guard_t *
 entry_guard_get_by_id_digest_for_guard_selection(guard_selection_t *gs,
                                                  const char *digest)
 {
-  tor_assert(gs != NULL);
-
-  SMARTLIST_FOREACH(gs->sampled_entry_guards, entry_guard_t *, entry,
-                    if (tor_memeq(digest, entry->identity, DIGEST_LEN))
-                      return entry;
-                   );
-  return NULL;
+  return get_sampled_guard_with_id(gs, (const uint8_t*)digest);
 }
 
 /** Return the node_t associated with a single entry_guard_t. May
@@ -2950,7 +2945,7 @@ entry_guard_free(entry_guard_t *e)
 int
 entry_list_is_constrained(const or_options_t *options)
 {
-  // XXXX prop271 look at the current selection.
+  // XXXX #21425 look at the current selection.
   if (options->EntryNodes)
     return 1;
   if (options->UseBridges)
@@ -2966,7 +2961,6 @@ num_bridges_usable(void)
 {
   int n_options = 0;
 
-  /* XXXX prop271 Is this quite right? */
   tor_assert(get_options()->UseBridges);
   guard_selection_t *gs  = get_guard_selection_info();
   tor_assert(gs->type == GS_TYPE_BRIDGE);
@@ -3045,7 +3039,7 @@ entry_guards_parse_state(or_state_t *state, int set, char **msg)
 
   if (r1 < 0) {
     if (msg && *msg == NULL) {
-      *msg = tor_strdup("parsing error"); //xxxx prop271 should we try harder?
+      *msg = tor_strdup("parsing error");
     }
     return -1;
   }
@@ -3312,12 +3306,14 @@ remove_all_entry_guards_for_guard_selection(guard_selection_t *gs)
   tor_free(old_name);
 }
 
-/** Remove all currently listed entry guards. So new ones will be chosen. */
+/** Remove all currently listed entry guards, so new ones will be chosen.
+ *
+ * XXXX This function shouldn't exist -- it's meant to support the DROPGUARDS
+ * command, which is deprecated.
+ */
 void
 remove_all_entry_guards(void)
 {
-  // XXXX prop271 this function shouldn't exist, in the new order.
-  // This function shouldn't exist.
   remove_all_entry_guards_for_guard_selection(get_guard_selection_info());
 }
 
@@ -3346,7 +3342,6 @@ guards_retry_optimistic(const or_options_t *options)
   if (! entry_list_is_constrained(options))
     return 0;
 
-  // XXXX prop271 -- is this correct?
   mark_primary_guards_maybe_reachable(get_guard_selection_info());
 
   return 1;
@@ -3362,9 +3357,22 @@ guard_selection_have_enough_dir_info_to_build_circuits(guard_selection_t *gs)
   if (!gs->primary_guards_up_to_date)
     entry_guards_update_primary(gs);
 
-  const int num_primary = get_n_primary_guards_to_use(GUARD_USAGE_TRAFFIC);
   int n_missing_descriptors = 0;
   int n_considered = 0;
+  int num_primary_to_check;
+
+  /* We want to check for the descriptor of at least the first two primary
+   * guards in our list, since these are the guards that we typically use for
+   * circuits. */
+  num_primary_to_check = get_n_primary_guards_to_use(GUARD_USAGE_TRAFFIC);
+  /*
+    We had added this to try to guarantee that we'd not normally try a guard
+    without a descriptor, even if we didn't use the first guard.  But it led
+    to problems with the chutney bridges+ipv6-min test.  A better solution is
+    needed.
+
+    num_primary_to_check++;
+  */
 
   SMARTLIST_FOREACH_BEGIN(gs->primary_entry_guards, entry_guard_t *, guard) {
     entry_guard_consider_retry(guard);
@@ -3373,7 +3381,7 @@ guard_selection_have_enough_dir_info_to_build_circuits(guard_selection_t *gs)
     n_considered++;
     if (!guard_has_descriptor(guard))
       n_missing_descriptors++;
-    if (n_considered >= num_primary)
+    if (n_considered >= num_primary_to_check)
       break;
   } SMARTLIST_FOREACH_END(guard);
 
