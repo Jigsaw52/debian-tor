@@ -1,3 +1,11 @@
+tor (0.3.0.5-rc-1) experimental; urgency=medium
+
+  * New upstream version.
+    - Run the entry_guard_parse_from_state_full() test with the time set
+      to a specific date. (closes: #858534).
+
+ -- Peter Palfrader <weasel@debian.org>  Sat, 08 Apr 2017 10:57:39 +0200
+
 tor (0.3.0.4-rc-1) experimental; urgency=medium
 
   * New upstream version.
