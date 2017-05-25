@@ -65,6 +65,7 @@ override_dh_install-arch:
 	dh_install --fail-missing
 
 	mv debian/tor/etc/tor/torrc.sample debian/tor/etc/tor/torrc
+	mkdir debian/tor/etc/tor/torrc.d/
 
 	cp debian/tor.apparmor-profile             debian/tor/etc/apparmor.d/system_tor
 	cp debian/tor.apparmor-profile.abstraction debian/tor/etc/apparmor.d/abstractions/tor

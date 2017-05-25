@@ -13,3 +13,5 @@ CookieAuthFileGroupReadable 1
 CookieAuthFile /var/run/tor/control.authcookie
 
 Log notice syslog
+
+%include /etc/tor/torrc.d/

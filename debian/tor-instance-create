@@ -68,6 +68,7 @@ fi
 
 etc="$BASEETC/$name"
 torrc="$etc/torrc"
+torrcd="$etc/torrc.d"
 home="$BASEDATA/$name"
 user="_tor-$name"
 
@@ -95,5 +96,6 @@ install -d "$etc"
 
 +SocksPort auto
 EOF
+[ -d "$torrcd" ] || mkdir "$torrcd"
 
 [ -x /bin/systemctl ] && systemctl daemon-reload || true

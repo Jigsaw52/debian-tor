@@ -21,6 +21,7 @@
   /sys/devices/system/cpu/** r,
 
   /etc/tor/* r,
+  /etc/tor/torrc.d/* r,
   /usr/share/tor/** r,
 
   /usr/bin/obfsproxy PUx,
